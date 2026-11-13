@@ -69,8 +69,6 @@ export function apply(ctx: Context): void {
     const { requestId, value } = (params ?? {}) as { requestId?: unknown; value?: unknown };
     if (typeof requestId !== "string") throw new RpcError(ErrorCode.InvalidParams, "ui.respond needs { requestId, value }");
     if (!ctx.ui.respond(requestId, value)) throw new RpcError(ErrorCode.InvalidParams, `No pending UI request ${requestId}`);
-    // Other clients showing the same question can close it.
-    ctx.rpc.broadcast("ui/cancel", { requestId });
     return {};
   }), "ui-rpc: ui.respond");
 

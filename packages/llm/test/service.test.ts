@@ -281,4 +281,40 @@ describe("Credentials", () => {
     expect(isSecretRef({ key: "x" })).toBe(false);
     expect(ctx.credentials.describe({ value: "sk-secret" })).not.toContain("sk-secret");
   });
+
+  it("supports get, set, and delete on a writable store and rejects writes on a read-only store", async () => {
+    const ctx = await setup();
+    expect(ctx.credentials.writable).toBe(false);
+    await expect(ctx.credentials.set("im/bot", "tok")).rejects.toThrow("No writable secret store");
+    await expect(ctx.credentials.delete("im/bot")).rejects.toThrow("No writable secret store");
+
+    const disposeReadOnly = ctx.credentials.registerStore(async () => "ro");
+    expect(ctx.credentials.writable).toBe(false);
+    expect(await ctx.credentials.get(" im/bot ")).toBe("ro");
+    await expect(ctx.credentials.set("im/bot", "tok")).rejects.toThrow("No writable secret store");
+    await expect(ctx.credentials.delete("im/bot")).rejects.toThrow("No writable secret store");
+    disposeReadOnly();
+
+    const backing = new Map<string, string>();
+    const disposeWritable = ctx.credentials.registerStore({
+      resolve: async (id) => backing.get(id),
+      set: async (id, value) => {
+        backing.set(id, value);
+      },
+      delete: async (id) => backing.delete(id),
+    });
+    expect(ctx.credentials.writable).toBe(true);
+    await expect(ctx.credentials.get("   ")).rejects.toThrow("Secret id must be non-empty");
+    await expect(ctx.credentials.set("   ", "v")).rejects.toThrow("Secret id must be non-empty");
+    await expect(ctx.credentials.set("im/bot", "")).rejects.toThrow("Secret value must be non-empty");
+    await expect(ctx.credentials.delete("   ")).rejects.toThrow("Secret id must be non-empty");
+
+    await ctx.credentials.set(" im/bot ", "secret-123");
+    expect(await ctx.credentials.get("im/bot")).toBe("secret-123");
+    expect(await ctx.credentials.resolve({ secret: "im/bot" })).toBe("secret-123");
+    expect(await ctx.credentials.delete("im/bot")).toBe(true);
+    expect(await ctx.credentials.delete("im/bot")).toBe(false);
+    expect(await ctx.credentials.get("im/bot")).toBeUndefined();
+    disposeWritable();
+  });
 });

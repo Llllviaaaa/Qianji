@@ -286,4 +286,30 @@ describe("sessions service", () => {
     expect((await ctx.sessions.search("PostCompactionPrompt5")).map((h) => h.session.id)).toEqual([session.id]);
     await ctx.fiber.dispose();
   });
+
+  it("sets initial and updated model and effort via Session and Sessions helpers", async () => {
+    const ctx = new Context();
+    await ctx.plugin(Sessions);
+    const session = ctx.sessions.create({
+      cwd: "/w",
+      model: { provider: "deepseek", model: "deepseek-chat" },
+      effort: "medium",
+    });
+    expect(session.state().model).toEqual({ provider: "deepseek", model: "deepseek-chat" });
+    expect(session.state().effort).toBe("medium");
+
+    session.setModel({ provider: "openai", model: "gpt-5" });
+    session.setEffort("high");
+    expect(session.state().model).toEqual({ provider: "openai", model: "gpt-5" });
+    expect(session.state().effort).toBe("high");
+
+    await ctx.sessions.setModel(session.id, { provider: "anthropic", model: "claude-sonnet-4-6" });
+    await ctx.sessions.setEffort(session.id, "low");
+    expect(session.state().model).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(session.state().effort).toBe("low");
+
+    await expect(ctx.sessions.setModel("missing-session", { provider: "p", model: "m" })).rejects.toThrow("No session missing-session");
+    await expect(ctx.sessions.setEffort("missing-session", "high")).rejects.toThrow("No session missing-session");
+    await ctx.fiber.dispose();
+  });
 });

@@ -116,3 +116,72 @@ export function apply(ctx: Context, config: RepoInsightsConfig = {}): void {
 - **`readOnly: true` vs Side-Effect Tools**: Mark pure inspection/query tools `readOnly: true`. Leave file-mutating, network-mutating, or process-spawning tools `readOnly: false` (default) so Qianji's permission engine enforces `read-only` / `ask` / `workspace-write` policies.
 - **`deferred: true` for Specialized Tool Suites**: If your plugin registers many niche tools, set `deferred: true, group: "<your-group>"` so they do not bloat default prompt tokens until activated via `activate_tools`.
 - **Automatic Disposal**: `ctx.tools.register`, `ctx.rpc.method`, `ctx.commands.register`, `ctx.systemPrompt.section`, and `ctx.webServer.register` automatically clean up when your plugin reloads or disables. Wrap custom intervals or watchers with `ctx.effect(() => { const timer = setInterval(...); return () => clearInterval(timer); })`.
+
+---
+
+## 3. Session, Agent Streaming, Remote UI & Secret Store APIs
+
+Host plugins are mounted on the live Cordis context (`@deepseek-ai/cordis`), so they can orchestrate sessions, stream live deltas, intercept tools, attach secondary IM/remote approval transports, and store secrets in DPAPI-encrypted `secrets.dat`:
+
+```ts
+import type { Context } from "@deepseek-ai/cordis";
+
+export async function registerImBridge(ctx: Context, cwd: string): Promise<void> {
+  // 1. Inspect available providers, models, and thinkingLevels
+  for (const provider of ctx.llm.listProviders()) {
+    const models = await ctx.llm.listModels(provider.id);
+    void models.map((m) => ({ id: m.id, thinkingLevels: m.thinkingLevels }));
+  }
+
+  // 2. Create or switch session model/effort and queue a run
+  const session = ctx.sessions.create({
+    cwd,
+    model: { provider: "deepseek", model: "deepseek-chat" },
+    effort: "medium",
+  });
+  session.setModel({ provider: "deepseek", model: "deepseek-reasoner" });
+  session.setEffort("high");
+
+  const userEvent = ctx.agents.prompt(session, [{ type: "text", text: "Summarize status" }]);
+  if (ctx.agents.status(session.id).running) {
+    ctx.agents.steer(session, [{ type: "text", text: "Focus on test failures first" }]);
+  }
+  void userEvent.seq;
+
+  // 3. Stream live deltas, persisted events, and run completion
+  ctx.on("session/delta", (target, _liveSeq, delta) => {
+    if (target.id === session.id && delta.type === "llm-chunk") {
+      void delta;
+    }
+  });
+  ctx.on("session/event", (target, event) => {
+    if (target.id === session.id && event.type === "user") {
+      void event.data.content;
+    }
+  });
+  ctx.on("agent/settled", async (target, outcome) => {
+    if (target.id === session.id) {
+      void outcome;
+    }
+  });
+
+  // 4. Attach a secondary UiTransport (fan-out alongside desktop ui-rpc; first respond wins)
+  ctx.ui.attach({
+    request: (pending) => {
+      if (pending.request.kind === "confirm") {
+        ctx.ui.respond(pending.requestId, true);
+      }
+    },
+    cancel: (_requestId) => {},
+    notify: (_sessionId, _message, _level) => {},
+  });
+
+  // 5. Store and read bot credentials in DPAPI-encrypted secrets.dat
+  if (ctx.credentials.writable) {
+    void ctx.credentials.set("im/feishu/app_secret", "secret-value").then(async () => {
+      const token = await ctx.credentials.get("im/feishu/app_secret");
+      void token;
+    });
+  }
+}
+```

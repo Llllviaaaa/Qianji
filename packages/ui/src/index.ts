@@ -39,7 +39,7 @@ interface Waiting extends PendingUiRequest {
 }
 
 export class Ui extends Service {
-  private transport: UiTransport | undefined;
+  private readonly transports = new Set<UiTransport>();
   private readonly waiting = new Map<string, Waiting>();
   /** Sessions nobody is watching (scheduled runs): questions get no answer. */
   private readonly unattendedSessions = new Set<string>();
@@ -52,12 +52,12 @@ export class Ui extends Service {
 
   /** Whether anyone can answer questions. */
   get available(): boolean {
-    return this.transport !== undefined;
+    return this.transports.size > 0;
   }
 
   /** Whether a question about `sessionId` can reach someone. */
   canAsk(sessionId: string | undefined): boolean {
-    return this.transport !== undefined && (sessionId === undefined || !this.unattendedSessions.has(sessionId));
+    return this.transports.size > 0 && (sessionId === undefined || !this.unattendedSessions.has(sessionId));
   }
 
   /** Answer every question about `sessionId` with nothing, as for a run nobody watches. Returns the disposer. */
@@ -66,25 +66,44 @@ export class Ui extends Service {
     return () => void this.unattendedSessions.delete(sessionId);
   }
 
-  /** Deliver requests through `transport`. Returns the disposer, which cancels what is pending. */
+  /** Deliver requests through `transport`. Multiple transports may attach; first response wins and cancels the rest. */
   attach(transport: UiTransport): () => void {
-    if (this.transport !== undefined) throw new Error("A UI transport is already attached");
-    this.transport = transport;
-    return () => {
-      if (this.transport !== transport) return;
-      this.cancelAll();
-      this.transport = undefined;
+    this.transports.add(transport);
+    let disposed = false;
+    const detach = (): void => {
+      if (disposed || !this.transports.has(transport)) return;
+      disposed = true;
+      if (this.transports.size === 1) {
+        this.cancelAll();
+        this.transports.delete(transport);
+        return;
+      }
+      this.transports.delete(transport);
+      for (const requestId of this.waiting.keys()) {
+        try {
+          transport.cancel(requestId);
+        } catch (error) {
+          this.ctx.logger("ui").warn("transport.cancel(%s) failed on detach: %s", requestId, error);
+        }
+      }
     };
+    if (this.ctx?.fiber?.uid != null && this.ctx.fiber.state !== 5) {
+      try {
+        return this.ctx.effect(() => detach, "ui.attach") as unknown as () => void;
+      } catch {
+        return detach;
+      }
+    }
+    return detach;
   }
 
   /** Ask, resolving to the answer, or undefined when nobody can answer or `signal` aborts. */
   ask(sessionId: string | undefined, request: UiRequest, signal?: AbortSignal): Promise<unknown> {
-    const transport = this.transport;
-    if (transport === undefined || !this.canAsk(sessionId) || signal?.aborted) return Promise.resolve(undefined);
+    if (this.transports.size === 0 || !this.canAsk(sessionId) || signal?.aborted) return Promise.resolve(undefined);
     this.nextId += 1;
     const requestId = `ui-${this.nextId}`;
     return new Promise((resolve) => {
-      const onAbort = () => this.settle(requestId, undefined, true);
+      const onAbort = () => this.settle(requestId, undefined);
       const entry: Waiting = {
         requestId,
         ...(sessionId === undefined ? {} : { sessionId }),
@@ -96,7 +115,14 @@ export class Ui extends Service {
       };
       this.waiting.set(requestId, entry);
       signal?.addEventListener("abort", onAbort, { once: true });
-      transport.request({ requestId, ...(sessionId === undefined ? {} : { sessionId }), request });
+      const pending: PendingUiRequest = { requestId, ...(sessionId === undefined ? {} : { sessionId }), request };
+      for (const transport of [...this.transports]) {
+        try {
+          transport.request(pending);
+        } catch (error) {
+          this.ctx.logger("ui").warn("transport.request(%s) failed: %s", requestId, error);
+        }
+      }
     });
   }
 
@@ -115,12 +141,18 @@ export class Ui extends Service {
   }
 
   notify(sessionId: string | undefined, message: string, level: NotifyLevel = "info"): void {
-    this.transport?.notify(sessionId, message, level);
+    for (const transport of [...this.transports]) {
+      try {
+        transport.notify(sessionId, message, level);
+      } catch (error) {
+        this.ctx.logger("ui").warn("transport.notify failed: %s", error);
+      }
+    }
   }
 
   /** Answer a pending request; false when it is unknown or already settled. */
   respond(requestId: string, value: unknown): boolean {
-    return this.settle(requestId, value, false);
+    return this.settle(requestId, value);
   }
 
   /** Questions still waiting, for a client that reconnects. */
@@ -128,16 +160,22 @@ export class Ui extends Service {
     return [...this.waiting.values()].map(({ requestId, sessionId, request }) => ({ requestId, ...(sessionId === undefined ? {} : { sessionId }), request }));
   }
 
-  private settle(requestId: string, value: unknown, cancelled: boolean): boolean {
+  private settle(requestId: string, value: unknown): boolean {
     const entry = this.waiting.get(requestId);
     if (entry === undefined) return false;
     this.waiting.delete(requestId);
-    if (cancelled) this.transport?.cancel(requestId);
+    for (const transport of [...this.transports]) {
+      try {
+        transport.cancel(requestId);
+      } catch (error) {
+        this.ctx.logger("ui").warn("transport.cancel(%s) failed: %s", requestId, error);
+      }
+    }
     entry.resolve(value);
     return true;
   }
 
   private cancelAll(): void {
-    for (const requestId of [...this.waiting.keys()]) this.settle(requestId, undefined, true);
+    for (const requestId of [...this.waiting.keys()]) this.settle(requestId, undefined);
   }
 }

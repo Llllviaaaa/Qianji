@@ -21,6 +21,11 @@ import "@qianji/permissions";
 import "@qianji/session";
 import "@qianji/ui";
 import { HOST_SHARED_MODULES } from "./plugin-bridge.ts";
+import {
+  CORDIS_EVENTS_CATALOG,
+  HOST_SERVICE_CATALOG,
+  THEME_TOKENS_CATALOG,
+} from "./plugin-dev-catalog.ts";
 import { canonicalPath } from "./plugin-manifest.ts";
 import type { PluginManager } from "./plugin-manager.ts";
 import { scaffoldPluginFiles, slugifyPluginFolder } from "./plugin-scaffold.ts";
@@ -44,79 +49,12 @@ export type InspectTopic =
 export type { PluginTemplateKind } from "./plugin-scaffold.ts";
 export { scaffoldPluginFiles } from "./plugin-scaffold.ts";
 export { verifyPluginDirectory, type PluginVerifyReport } from "./plugin-verify.ts";
+export { CORDIS_EVENTS_CATALOG, HOST_SERVICE_CATALOG, THEME_TOKENS_CATALOG };
 
 export interface PluginDevToolsConfig {
   manager: () => PluginManager | undefined;
   pluginTypesDir?: string | (() => string | undefined);
 }
-
-const HOST_SERVICE_CATALOG = [
-  { name: "tools", plane: "host", methods: ["register(def)", "get(name)", "listDefinitions()", "schemas(sessionId?)", "execute(call, env)"], autoDispose: true },
-  { name: "commands", plane: "host", methods: ["register(def)", "registerProvider(fn)", "list(cwd?)", "execute(name, args, env)"], autoDispose: true },
-  { name: "systemPrompt", plane: "host", methods: ["section(id, render, { order? })", "build(env)"], autoDispose: true },
-  { name: "rpc", plane: "host", methods: ["method(name, handler)", "methods()", "broadcast(method, params?)"], autoDispose: true },
-  { name: "webServer", plane: "host", methods: ["register({ kind, path, handler })", "registerUpgrade({ path, handler })"], autoDispose: true },
-  { name: "sessions", plane: "host", methods: ["get(id)", "list(cwd?)", "create(opts)"], autoDispose: false },
-  { name: "agents", plane: "host", methods: ["run(session, input)", "abort(sessionId)", "isRunning(sessionId)"], autoDispose: false },
-  { name: "llm", plane: "host", methods: ["registerProtocol(id, adapter)", "models()", "complete(req)"], autoDispose: true },
-  { name: "permissions", plane: "host", methods: ["modes(session)", "defaultModes()", "set(session, patch)"], autoDispose: false },
-  { name: "ui", plane: "host", methods: ["confirm(sessionId, title, message, signal?)", "notify(message, level?)"], autoDispose: false },
-  { name: "contributions", plane: "client", methods: CLIENT_SLOT_CATALOG.map((slot) => `${slot.method.replace("ctx.contributions.", "")}(def)`), autoDispose: true },
-  { name: "styles", plane: "client", methods: ["inject(css, key?)"], autoDispose: true },
-  { name: "betterSidebar", plane: "client", methods: ["registerTab(desc)", "registerFileViewer(desc)", "openFile(scope, path)", "openTab(seed, scope?)"], autoDispose: true },
-] as const;
-
-const CORDIS_EVENTS_CATALOG = [
-  { name: "tools/pre-execute", mode: "bail (async)", signature: "(call: ToolCall, env: ToolEnv) => ToolDecision | undefined", description: "Intercept, rewrite args, or deny a tool call before execution." },
-  { name: "tools/execute", mode: "waterfall", signature: "(call: ToolCall, env: ToolEnv, next: () => Promise<ToolOutput>) => Promise<ToolOutput>", description: "Wrap tool execution (e.g. timing, checkpoints, output post-processing)." },
-  { name: "tools/result", mode: "emit", signature: "(call: ToolCall, env: ToolEnv, output: ToolOutput) => void", description: "Observe completed tool outputs." },
-  { name: "session/deleted", mode: "emit", signature: "(sessionId: string) => void", description: "Clean up per-session state when a session is deleted." },
-] as const;
-
-export const THEME_TOKENS_CATALOG = {
-  cascadeLayers: "@layer theme, base, plugin-ui, legacy, skin, components, utilities;",
-  scopingRule: "Use `ctx.styles.inject(css, key?)` or `import './style.css'`; rules are automatically wrapped in `@layer plugin-ui { @scope ([data-qj-plugin=\"<id>\"]) { ... } }`.",
-  tokens: {
-    backgrounds: [
-      "--qj-bg-app",
-      "--qj-bg-canvas",
-      "--qj-bg-sidebar",
-      "--qj-bg-surface",
-      "--qj-bg-elevated",
-      "--qj-bg-subtle",
-      "--qj-bg-hover",
-      "--qj-bg-active",
-    ],
-    text: [
-      "--qj-text-primary",
-      "--qj-text-secondary",
-      "--qj-text-muted",
-      "--qj-text-inverse",
-    ],
-    borders: [
-      "--qj-border-subtle",
-      "--qj-border-default",
-      "--qj-border-strong",
-    ],
-    brandAndStatus: [
-      "--qj-brand-primary",
-      "--qj-brand-hover",
-      "--qj-brand-soft",
-      "--qj-brand-contrast",
-      "--qj-status-success",
-      "--qj-status-warning",
-      "--qj-status-danger",
-      "--qj-status-info",
-    ],
-    typographyAndRadius: [
-      "--qj-font-sans",
-      "--qj-font-mono",
-      "--qj-radius-sm",
-      "--qj-radius-md",
-      "--qj-radius-lg",
-    ],
-  },
-} as const;
 
 function resolvePluginTypesDir(config: PluginDevToolsConfig): string | undefined {
   const raw = typeof config.pluginTypesDir === "function" ? config.pluginTypesDir() : config.pluginTypesDir;

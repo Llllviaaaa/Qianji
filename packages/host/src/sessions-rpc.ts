@@ -156,8 +156,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       const fallback = config.defaultModel;
       const chosen = p.model === undefined ? (typeof fallback === "function" ? fallback() : fallback) : model(params(p.model));
       const created = ctx.sessions.create({ cwd });
-      if (chosen !== undefined) created.append("model", chosen);
-      if (p.effort !== undefined) created.append("effort", { effort: effortOf(p.effort) });
+      if (chosen !== undefined) created.setModel(chosen);
+      if (p.effort !== undefined) created.setEffort(effortOf(p.effort));
       return { session: toSessionInfo(created.summary()) };
     },
 
@@ -306,12 +306,12 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     "model.set": async (p): Promise<AppendResult> => {
       const target = await session(p);
-      return { seq: target.append("model", model(p)).seq };
+      return { seq: target.setModel(model(p)).seq };
     },
 
     "model.setEffort": async (p): Promise<AppendResult> => {
       const target = await session(p);
-      return { seq: target.append("effort", { effort: effortOf(p.effort) }).seq };
+      return { seq: target.setEffort(effortOf(p.effort)).seq };
     },
 
     "usage.summary": async (): Promise<UsageSummaryResult> => {
