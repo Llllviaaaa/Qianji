@@ -77,14 +77,17 @@ function toResponsesInput(messages: Message[]): ResponsesInputItem[] {
   const input: ResponsesInputItem[] = [];
   for (const message of messages) {
     if (message.role === "user") {
-      input.push({
-        role: "user",
-        content: message.content.map((block) =>
-          block.type === "text"
-            ? { type: "input_text", text: block.text }
-            : { type: "input_image", image_url: `data:${block.mimeType};base64,${block.data}` },
-        ),
-      });
+      const parts = message.content.map((block) =>
+        block.type === "text"
+          ? { type: "input_text", text: block.text }
+          : { type: "input_image", image_url: `data:${block.mimeType};base64,${block.data}` },
+      );
+      const prev = input.at(-1);
+      if (prev?.role === "user" && Array.isArray(prev.content)) {
+        prev.content = [...(prev.content as unknown[]), ...parts];
+      } else {
+        input.push({ role: "user", content: parts });
+      }
       continue;
     }
 

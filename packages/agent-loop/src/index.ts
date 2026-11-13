@@ -20,7 +20,7 @@ import {
   type RunOutcome,
 } from "@qianji/agent";
 import { BlockAssembler, type LlmRequest, type Message, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
-import { compactionPoint, deriveState, type EventOf, type ModelRef, type Session } from "@qianji/session";
+import { CONTINUATION_NAMESPACE, compactionPoint, deriveState, type EventOf, type ModelRef, type Session } from "@qianji/session";
 import "@qianji/system-prompt";
 import "@qianji/tools";
 import { SUMMARY_CLIP_LEVELS, shrinkForSummary } from "./summary-input.ts";
@@ -49,13 +49,21 @@ export interface AgentLoopConfig {
 
 export const COMPACTION_SYSTEM = `You summarize a conversation between a user and a coding agent so the agent can continue the work with only your summary as context.`;
 
-export const COMPACTION_REQUEST = `Summarize the conversation above for the agent that will continue it. Include:
-- the user's goals and requests, including the current one, in their own words where it matters;
-- decisions made and constraints given;
-- files read or changed and what was learned about them;
-- commands run and their important results;
-- what is done, what is in progress and what remains.
+export const COMPACTION_REQUEST = `Summarize the conversation above so the agent can seamlessly continue the active task. Structure your summary clearly:
+- Current user request: state the active goal, constraints, exact file paths/symbols, and acceptance criteria;
+- Completed work: files read or modified, verified findings, commands run and their key outputs;
+- Remaining work & next action: what steps remain and the exact next concrete action to execute.
 Be specific (paths, names, values) and concise. Reply with the summary only.`;
+
+export const LENGTH_CONTINUATION_PROMPT =
+  "Your previous response hit the output token limit and was cut off mid-generation. Continue directly from where you stopped; if you were about to call a tool, invoke it now.";
+
+export const EMPTY_TURN_CONTINUATION_PROMPT =
+  "Your previous turn produced no visible response or tool call. Either invoke the next tool needed to advance the task, or provide a clear answer to the user.";
+
+export const MAX_LENGTH_CONTINUATIONS = 3;
+export const MAX_EMPTY_CONTINUATIONS = 2;
+export const MAX_PLUGIN_CONTINUATIONS = 2;
 
 interface Run {
   controller: AbortController;
@@ -191,6 +199,9 @@ export class AgentLoop extends Service implements Agents {
     const { signal } = run.controller;
     await this.ctx.serial("agent/before-start", session);
     let compactedForLength = false;
+    let lengthContinuations = 0;
+    let emptyContinuations = 0;
+    let pluginContinuations = 0;
 
     for (let turn = 1; ; turn += 1) {
       if (signal.aborted) return "aborted";
@@ -216,6 +227,7 @@ export class AgentLoop extends Service implements Agents {
           continue;
         }
       }
+      if (response.reason !== "error") compactedForLength = false;
 
       session.append("assistant", {
         content: response.message.content,
@@ -242,9 +254,33 @@ export class AgentLoop extends Service implements Agents {
       await this.ctx.serial("agent/turn-end", session, turn);
       if (signal.aborted) return "aborted";
 
-      if (this.deliver(session, run, run.steer)) continue;
-      if (calls.length > 0) continue;
-      if (this.deliver(session, run, run.followUp)) continue;
+      if (this.deliver(session, run, run.steer) || calls.length > 0 || this.deliver(session, run, run.followUp)) {
+        lengthContinuations = 0;
+        emptyContinuations = 0;
+        pluginContinuations = 0;
+        continue;
+      }
+
+      const hasText = response.message.content.some((block) => block.type === "text" && block.text.trim() !== "");
+      if (response.reason === "length" && lengthContinuations < MAX_LENGTH_CONTINUATIONS) {
+        lengthContinuations += 1;
+        session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "length", text: LENGTH_CONTINUATION_PROMPT } });
+        continue;
+      }
+      if (!hasText && emptyContinuations < MAX_EMPTY_CONTINUATIONS) {
+        emptyContinuations += 1;
+        session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "empty", text: EMPTY_TURN_CONTINUATION_PROMPT } });
+        continue;
+      }
+      if (pluginContinuations < MAX_PLUGIN_CONTINUATIONS) {
+        const nudge = await this.ctx.serial("agent/before-stop", session, { turn, stop: response.reason, hasText });
+        if (signal.aborted) return "aborted";
+        if (typeof nudge === "string" && nudge.trim() !== "") {
+          pluginContinuations += 1;
+          session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "before-stop", text: nudge.trim() } });
+          continue;
+        }
+      }
       return "done";
     }
   }

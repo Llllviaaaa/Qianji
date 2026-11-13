@@ -212,6 +212,7 @@ export const CORDIS_EVENTS_CATALOG: readonly CordisEventCatalogEntry[] = [
   { name: "agent/before-start", mode: "parallel", signature: "(session: Session) => Promise<void> | void", description: "A run is starting, before its first model call." },
   { name: "agent/turn-start", mode: "parallel", signature: "(session: Session, turn: number) => Promise<void> | void", description: "Before each model call of a run; turn counts from 1." },
   { name: "agent/turn-end", mode: "parallel", signature: "(session: Session, turn: number) => Promise<void> | void", description: "After a model call and the tools it asked for." },
+  { name: "agent/before-stop", mode: "bail (async)", signature: "(session: Session, context: BeforeStopContext) => Promise<string | undefined> | string | undefined", description: "Right before a run would stop with done; return a continuation prompt string to keep working." },
   { name: "agent/settled", mode: "parallel", signature: "(session: Session, outcome: RunOutcome) => Promise<void>", description: "The run ended and its queues are empty. outcome is done, aborted, error, or max-turns." },
   { name: "llm/request", mode: "waterfall", signature: "(request: LlmRequest, next: () => AsyncIterable<StreamChunk>) => AsyncIterable<StreamChunk>", description: "Wrap every model call; change request before next(), or wrap the returned stream." },
   { name: "llm/response", mode: "emit", signature: "(response: LlmResponseInfo) => void", description: "One model call finished after retries, with usage and timing." },

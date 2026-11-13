@@ -6,11 +6,18 @@ import { Context } from "@deepseek-ai/cordis";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentBusyError, type AgentDelta } from "@qianji/agent";
 import { LlmService } from "@qianji/llm";
-import { COMPACTION_PREFIX, Sessions, type Session } from "@qianji/session";
+import { COMPACTION_CONTINUE_SUFFIX, COMPACTION_PREFIX, Sessions, type Session } from "@qianji/session";
 import { SystemPrompt } from "@qianji/system-prompt";
 import { ScriptedProvider, errorReply, goldenLog, textReply, toolReply, useScriptedProvider, type ScriptedOptions, type ScriptedReply } from "@qianji/testkit";
 import { Tools, textOutput } from "@qianji/tools";
-import { AgentLoop, COMPACTION_REQUEST, shrinkForSummary, type AgentLoopConfig } from "../src/index.ts";
+import {
+  AgentLoop,
+  COMPACTION_REQUEST,
+  EMPTY_TURN_CONTINUATION_PROMPT,
+  LENGTH_CONTINUATION_PROMPT,
+  shrinkForSummary,
+  type AgentLoopConfig,
+} from "../src/index.ts";
 
 interface Harness {
   ctx: Context;
@@ -206,7 +213,9 @@ describe("agent loop", () => {
     const [, summaryCall, retry] = harness.provider.requests;
     expect(summaryCall?.tools).toBeUndefined();
     expect(summaryCall?.messages.at(-1)).toEqual({ role: "user", content: text(COMPACTION_REQUEST) });
-    expect(retry?.messages).toEqual([{ role: "user", content: text(`${COMPACTION_PREFIX}The user said hi.`) }]);
+    expect(retry?.messages).toEqual([
+      { role: "user", content: text(`${COMPACTION_PREFIX}The user said hi.${COMPACTION_CONTINUE_SUFFIX}`) },
+    ]);
   });
 
   it("compacts on request, keeping the latest turn", async () => {
@@ -286,7 +295,7 @@ describe("agent loop", () => {
     expect(size(verbatim)).toBeGreaterThan(100_000);
     expect(size(clipped)).toBeLessThan(30_000);
     expect(JSON.stringify(clipped?.messages)).toContain("characters omitted");
-    expect(retry?.messages).toEqual([{ role: "user", content: text(`${COMPACTION_PREFIX}Summary.`) }]);
+    expect(retry?.messages).toEqual([{ role: "user", content: text(`${COMPACTION_PREFIX}Summary.${COMPACTION_CONTINUE_SUFFIX}`) }]);
     expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
   });
 
@@ -330,5 +339,66 @@ describe("agent loop", () => {
     expect(seen).toEqual(["before-start", "turn-start 1", "turn-end 1", "turn-start 2", "turn-end 2", "settled done"]);
     const result = harness.session.events.find((event) => event.type === "tool-result");
     expect(result?.data).toMatchObject({ isError: true, content: text("Denied: not today") });
+  });
+
+  it("continues automatically on finish_reason length and bounds repeated truncations", async () => {
+    const truncated = [{ type: "text-delta" as const, index: 0, text: "Working on it..." }, { type: "finish" as const, reason: "length" as const }];
+    const harness = await setup([
+      truncated,
+      toolReply([{ id: "call-1", name: "echo", args: { text: "ok" } }]),
+      textReply("All finished."),
+    ]);
+    await run(harness, "Complete multi-step task");
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(harness.provider.requests).toHaveLength(3);
+    expect(harness.provider.requests[1]?.messages.at(-1)).toEqual({ role: "user", content: text(LENGTH_CONTINUATION_PROMPT) });
+
+    // Bounded at MAX_LENGTH_CONTINUATIONS (3): initial + 3 retries = 4 calls total
+    const bounded = await setup([truncated, truncated, truncated, truncated, textReply("unreachable")]);
+    await run(bounded, "Truncate repeatedly");
+    expect(bounded.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(bounded.provider.requests).toHaveLength(4);
+  });
+
+  it("retries automatically when a model stops with thinking only or empty text", async () => {
+    const thinkingOnly = [
+      { type: "thinking-delta" as const, index: 0, text: "thinking without acting" },
+      { type: "finish" as const, reason: "stop" as const },
+    ];
+    const harness = await setup([
+      thinkingOnly,
+      textReply("Here is the answer."),
+    ]);
+    await run(harness, "Investigate");
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(harness.provider.requests).toHaveLength(2);
+    expect(harness.provider.requests[1]?.messages.at(-1)).toEqual({
+      role: "user",
+      content: [...text("Investigate"), ...text(`\n\n${EMPTY_TURN_CONTINUATION_PROMPT}`)],
+    });
+  });
+
+  it("nudges continuation via agent/before-stop and stops after the bound when no tools run", async () => {
+    const harness = await setup([
+      textReply("I will check a.ts next."),
+      toolReply([{ id: "call-1", name: "echo", args: { text: "checked" } }]),
+      textReply("Done after checking."),
+    ]);
+    let stopChecks = 0;
+    harness.ctx.on("agent/before-stop", () => {
+      stopChecks += 1;
+      return stopChecks === 1 ? "Continue executing with tools instead of stopping." : undefined;
+    });
+    await run(harness, "Check a.ts");
+    expect(stopChecks).toBe(2);
+    expect(harness.provider.requests).toHaveLength(3);
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+
+    // Bounded by MAX_PLUGIN_CONTINUATIONS (2) even if listener always returns a nudge
+    const capped = await setup([textReply("1"), textReply("2"), textReply("3"), textReply("4")]);
+    capped.ctx.on("agent/before-stop", () => "Keep going");
+    await run(capped, "Stop test");
+    expect(capped.provider.requests).toHaveLength(3);
+    expect(capped.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
   });
 });

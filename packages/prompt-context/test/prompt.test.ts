@@ -73,6 +73,8 @@ describe("desktop settings", () => {
     const prompt = await ctx.systemPrompt.build({ sessionId: "s", cwd: pkg, model: { provider: "p", model: "m" }, tools: [] });
     expect(prompt).toContain("The user's instructions:\nAnswer in Chinese.");
     expect(prompt.indexOf("Answer in Chinese.")).toBeGreaterThan(prompt.indexOf(GUIDELINES));
+    expect(prompt).toContain("do not stop mid-task");
+    expect(prompt).toContain("invoke the tool immediately");
     expect(prompt).not.toContain("repo rules");
     await ctx.fiber.dispose();
   });

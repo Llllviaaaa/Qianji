@@ -243,7 +243,7 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
       hasHost: true,
       hasClient: false,
       plugin: plan,
-      inject: ["sessions", "tools"],
+      inject: ["sessions", "tools", "systemPrompt"],
     },
     {
       id: "intelligent-ui",

@@ -36,7 +36,6 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "packages/host/src/agent-plugins.ts": 644,
   "src/store/runtime.ts": 625,
   "src/stores/workbenchStore.ts": 581,
-  "packages/prompt-context/src/index.ts": 569,
   "src/components/ModelPicker.tsx": 522,
   "src/types.ts": 501,
   "packages/permissions/src/rules.ts": 501,

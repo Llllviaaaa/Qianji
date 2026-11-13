@@ -7,6 +7,14 @@ import type { ModelRef, SessionEvent, SessionHeader, SessionModelUsage, SessionS
 
 /** The note a compaction summary is sent to the model under. */
 export const COMPACTION_PREFIX = "The conversation so far was compacted. Summary of the earlier part:\n\n";
+/** Appended when mid-run compaction swallowed the active prompt so the model continues working. */
+export const COMPACTION_CONTINUE_SUFFIX =
+  "\n\nContinue the active user task from this state using your tools as needed. Do not ask the user to repeat their request.";
+export const CONTINUATION_NAMESPACE = "qianji-continuation";
+export interface ContinuationEventData {
+  reason: "length" | "empty" | "before-stop";
+  text: string;
+}
 export const INTERRUPTED_TOOL_RESULT = "The tool call was interrupted before it returned a result.";
 
 /**
@@ -64,7 +72,13 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
   const messages: Message[] = [];
   if (compaction !== undefined) {
     state.compactedThrough = compaction.seq;
-    messages.push({ role: "user", content: [{ type: "text", text: COMPACTION_PREFIX + compaction.summary }] });
+    const hasUserAfterCompaction = branch.some(
+      (event) => event.seq > compaction.throughSeq && event.type === "user",
+    );
+    const compactionText = hasUserAfterCompaction
+      ? COMPACTION_PREFIX + compaction.summary
+      : COMPACTION_PREFIX + compaction.summary + COMPACTION_CONTINUE_SUFFIX;
+    messages.push({ role: "user", content: [{ type: "text", text: compactionText }] });
   }
   const pending = new Map<string, string>();
   for (const event of branch) {
@@ -74,8 +88,10 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
       messages.push({ role: "user", content: event.data.content });
     } else if (event.type === "assistant") {
       closeDanglingCalls(messages, pending);
-      // An empty reply (an error before any output) carries nothing to send back.
-      if (event.data.content.length === 0) continue;
+      const hasToolCall = event.data.content.some((block) => block.type === "tool-call");
+      const hasVisibleText = event.data.content.some((block) => block.type === "text" && block.text.trim() !== "");
+      // Skip empty, whitespace-only, thinking-only non-tool turns, and errored partial non-tool turns.
+      if (!hasToolCall && (event.data.stop === "error" || !hasVisibleText)) continue;
       const message: AssistantMessage = { role: "assistant", content: event.data.content };
       messages.push(message);
       for (const block of event.data.content) if (block.type === "tool-call") pending.set(block.id, block.name);
@@ -83,6 +99,21 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
       if (!pending.delete(event.data.callId)) continue;
       const result: ToolResultMessage = { role: "tool-result", callId: event.data.callId, content: event.data.content, isError: event.data.isError };
       messages.push(result);
+    } else if (event.type === "custom" && event.data.ns === CONTINUATION_NAMESPACE) {
+      const rawText = (event.data.data as { text?: unknown } | null)?.text;
+      if (typeof rawText === "string" && rawText.trim() !== "") {
+        closeDanglingCalls(messages, pending);
+        const trimmed = rawText.trim();
+        const prev = messages.at(-1);
+        if (prev?.role === "user") {
+          messages[messages.length - 1] = {
+            role: "user",
+            content: [...prev.content, { type: "text", text: `\n\n${trimmed}` }],
+          };
+        } else {
+          messages.push({ role: "user", content: [{ type: "text", text: trimmed }] });
+        }
+      }
     }
   }
   closeDanglingCalls(messages, pending);

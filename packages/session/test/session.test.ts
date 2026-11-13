@@ -1,7 +1,9 @@
 import { Context } from "@deepseek-ai/cordis";
 import { describe, expect, it } from "vitest";
 import {
+  COMPACTION_CONTINUE_SUFFIX,
   COMPACTION_PREFIX,
+  CONTINUATION_NAMESPACE,
   INTERRUPTED_TOOL_RESULT,
   MemoryStorage,
   Sessions,
@@ -66,6 +68,57 @@ describe("derivation", () => {
       { role: "user", content: text("new") },
       { role: "assistant", content: text("NEW") },
     ]);
+  });
+
+  it("appends COMPACTION_CONTINUE_SUFFIX for mid-run compactions with no trailing user turn", () => {
+    const events = log(() => [
+      ev("model", model),
+      ev("user", { content: text("fix bug") }),
+      assistant(text("Inspecting...")),
+      ev("compaction", { throughSeq: 3, summary: "S" }),
+    ]);
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text(`${COMPACTION_PREFIX}S${COMPACTION_CONTINUE_SUFFIX}`) },
+    ]);
+  });
+
+  it("skips thinking-only and errored non-tool assistant replies while keeping thinking tool calls", () => {
+    const events = log(() => [
+      ev("user", { content: text("go") }),
+      assistant([{ type: "thinking", text: "silent thought" }]),
+      ev("assistant", { content: text("partial error"), model, usage, stop: "error" }),
+      assistant([{ type: "thinking", text: "plan" }, { type: "tool-call", id: "c1", name: "read", arguments: {} }]),
+      ev("tool-result", { callId: "c1", name: "read", content: text("ok"), isError: false }),
+    ]);
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text("go") },
+      { role: "assistant", content: [{ type: "thinking", text: "plan" }, { type: "tool-call", id: "c1", name: "read", arguments: {} }] },
+      { role: "tool-result", callId: "c1", content: text("ok"), isError: false },
+    ]);
+  });
+
+  it("derives CONTINUATION_NAMESPACE custom events into user messages without inflating summarize", () => {
+    const events = log(() => [
+      ev("user", { content: text("start") }),
+      assistant(text("half")),
+      ev("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "length", text: "Continue." } }),
+    ]);
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text("start") },
+      { role: "assistant", content: text("half") },
+      { role: "user", content: text("Continue.") },
+    ]);
+    // Merges into immediately preceding user turn when assistant reply was skipped
+    const merged = log(() => [
+      ev("user", { content: text("start") }),
+      assistant([{ type: "thinking", text: "only thinking" }]),
+      ev("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "empty", text: "Retry." } }),
+    ]);
+    expect(deriveState(merged).messages).toEqual([
+      { role: "user", content: [...text("start"), ...text("\n\nRetry.")] },
+    ]);
+    const summary = summarize({ format: "pid.session", version: 1, id: "s", createdAt: "c", cwd: "/w" }, events);
+    expect(summary.messageCount).toBe(2);
   });
 
   it("closes tool calls that never got a result and skips empty replies", () => {

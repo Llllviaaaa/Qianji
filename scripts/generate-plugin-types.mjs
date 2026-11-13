@@ -324,7 +324,7 @@ export const Zap: LucideIcon;
 `;
 
 const CORDIS_HOST_AND_CLIENT_AUGMENTATION = `
-import type { Agents, AgentDelta, RunOutcome } from "@qianji/agent";
+import type { Agents, AgentDelta, BeforeStopContext, RunOutcome } from "@qianji/agent";
 import type { Commands } from "@qianji/commands";
 import type { Credentials, LlmRequest, LlmResponseInfo, LlmService, StreamChunk } from "@qianji/llm";
 import type { Pricing, PricingCallRecord } from "@qianji/pricing";
@@ -427,6 +427,7 @@ export interface Events {
   "agent/before-start"(session: Session): Promise<void> | void;
   "agent/turn-start"(session: Session, turn: number): Promise<void> | void;
   "agent/turn-end"(session: Session, turn: number): Promise<void> | void;
+  "agent/before-stop"(session: Session, context: BeforeStopContext): Promise<string | undefined> | string | undefined;
   "agent/settled"(session: Session, outcome: RunOutcome): Promise<void>;
   "llm/request"(request: LlmRequest, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>;
   "llm/response"(response: LlmResponseInfo): void;
