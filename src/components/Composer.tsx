@@ -192,7 +192,8 @@ export const Composer = memo(function Composer({
         data-dsh-claude-draft-empty={!text.trim() ? "" : undefined}
       >
         <ComposerSuggestionMenus
-          commandMenuOpen={suggest.commandMenuOpen} commandMatches={suggest.commandMatches}
+          commandMenuOpen={suggest.commandMenuOpen} commandQuery={suggest.commandQuery}
+          commandMatches={suggest.commandMatches}
           activeCommand={suggest.activeCommand} chooseCommand={suggest.chooseCommand}
           mentionMenuOpen={suggest.mentionMenuOpen} mentionQuery={suggest.mentionQuery}
           mentionEntries={suggest.mentionEntries} mentionLoading={suggest.mentionLoading}

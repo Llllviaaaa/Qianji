@@ -1,0 +1,450 @@
+/*
+ * Qianji Composer Autocomplete Popovers (`/` slash commands & `@` file mentions)
+ * Authored in @layer components using authoritative `--qj-*` semantic tokens.
+ */
+
+.codex-shot .command-menu {
+  position: absolute;
+  left: 6px;
+  right: auto;
+  bottom: calc(100% + 8px);
+  z-index: 80;
+  width: min(500px, calc(100% - 12px));
+  padding: 0;
+  border: 1px solid var(--qj-border-strong);
+  border-radius: 18px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  box-shadow: var(--muse-elevation-popover);
+}
+
+.codex-shot .task-start-composer .command-menu {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+.codex-shot .command-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px 7px;
+  border-bottom: 1px solid var(--qj-border-subtle);
+  background: color-mix(in srgb, var(--qj-bg-subtle) 45%, transparent);
+}
+
+.codex-shot .command-menu-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--qj-font-sans);
+  font-size: 11px;
+  font-weight: 560;
+  color: var(--qj-text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.codex-shot .command-menu-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-muted);
+  font-family: var(--qj-font-mono);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.codex-shot .command-menu-shortcuts {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family: var(--qj-font-sans);
+  font-size: 10.5px;
+  color: var(--qj-text-muted);
+}
+
+.codex-shot .command-menu-shortcuts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.codex-shot .command-menu-shortcuts kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-surface);
+  font-family: var(--qj-font-mono);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--qj-text-secondary);
+}
+
+@media (max-width: 520px) {
+  .codex-shot .command-menu-shortcuts {
+    display: none;
+  }
+}
+
+.codex-shot .side-chat-composer-dock .command-menu-shortcuts {
+  display: none;
+}
+
+.codex-shot .command-menu-list {
+  max-height: 292px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.codex-shot .command-menu-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.codex-shot .command-menu-list::-webkit-scrollbar-thumb {
+  background: var(--dsh-claude-scrollbar);
+  border-radius: 999px;
+}
+
+.codex-shot .command-menu-list::-webkit-scrollbar-thumb:hover {
+  background: var(--dsh-claude-scrollbar-hover);
+}
+
+.codex-shot .command-menu-group-label {
+  padding: 6px 9px 3px;
+  font-family: var(--qj-font-sans);
+  font-size: 10.5px;
+  font-weight: 560;
+  color: var(--qj-text-muted);
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.codex-shot .command-menu-group-label:not(:first-child) {
+  margin-top: 3px;
+  padding-top: 7px;
+  border-top: 1px solid var(--qj-border-subtle);
+}
+
+.codex-shot .command-menu button.command-menu-item {
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 11px;
+  outline: none;
+  background: transparent;
+  color: var(--qj-text-primary);
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.codex-shot .command-menu button.command-menu-item:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .command-menu button.command-menu-item.active,
+.codex-shot .command-menu button.command-menu-item:focus-visible {
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--qj-bg-subtle);
+  border: 1px solid var(--qj-border-subtle);
+  color: var(--qj-text-secondary);
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .command-menu button.command-menu-item.active .command-item-icon {
+  background: var(--qj-brand-soft);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 28%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--qj-font-sans);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-topline {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-name {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--qj-font-mono);
+  font-size: 12.5px;
+  line-height: 18px;
+  font-weight: 560;
+  color: var(--qj-text-primary);
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-name > span {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: inherit;
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-slash,
+.codex-shot .command-menu button.command-menu-item .command-item-namespace {
+  color: var(--qj-text-muted);
+  font-weight: 480;
+}
+
+.codex-shot .command-menu button.command-menu-item.active .command-item-slash {
+  color: var(--qj-brand-primary);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-match {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  background: transparent;
+  color: var(--qj-brand-primary);
+  font-weight: 650;
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-args {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--qj-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 450;
+  color: var(--qj-text-muted);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--qj-font-sans);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 420;
+  color: var(--qj-text-secondary);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-family: var(--qj-font-sans);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 6.5px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-family: var(--qj-font-sans);
+  font-size: 10.5px;
+  line-height: 1;
+  font-weight: 520;
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-secondary);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-badge[data-tone="feature"] {
+  background: color-mix(in srgb, var(--qj-brand-primary) 11%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-badge[data-tone="skill"] {
+  background: color-mix(in srgb, var(--qj-status-warning) 12%, transparent);
+  color: var(--qj-status-warning);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-badge[data-tone="mcp"] {
+  background: color-mix(in srgb, var(--qj-status-success) 12%, transparent);
+  color: var(--qj-status-success);
+}
+
+.codex-shot .command-menu button.command-menu-item .command-item-badge[data-tone="plugin"] {
+  background: var(--qj-bg-subtle);
+  border-color: var(--qj-border-default);
+  color: var(--qj-text-secondary);
+}
+
+.codex-shot .command-menu button .command-item-enter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-surface);
+  font-family: var(--qj-font-mono);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--qj-text-secondary);
+  opacity: 0;
+  transform: translateX(-2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.codex-shot .command-menu button.active .command-item-enter {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* ── `@` Mention File Menu ──────────────────────────────────────── */
+
+.codex-shot .command-menu button.mention-item {
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 11px;
+  outline: none;
+  background: transparent;
+  color: var(--qj-text-primary);
+  display: grid;
+  grid-template-columns: 26px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.codex-shot .command-menu button.mention-item:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .command-menu button.mention-item.active,
+.codex-shot .command-menu button.mention-item:focus-visible {
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .command-menu button.mention-item .mention-item-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--qj-bg-subtle);
+  border: 1px solid var(--qj-border-subtle);
+  color: var(--qj-text-secondary);
+}
+
+.codex-shot .command-menu button.mention-item .mention-item-icon[data-dir="true"] {
+  background: var(--qj-brand-soft);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 24%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+.codex-shot .command-menu button.mention-item .mention-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--qj-font-mono);
+  font-size: 12.5px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .command-menu button.mention-item .mention-item-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--qj-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 420;
+  color: var(--qj-text-muted);
+}
+
+.codex-shot .command-menu button.mention-item .mention-item-hint {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-surface);
+  font-family: var(--qj-font-mono);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--qj-text-secondary);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.codex-shot .command-menu button.mention-item.active .mention-item-hint {
+  opacity: 1;
+}
+
+.codex-shot .mention-menu-status {
+  padding: 12px 10px;
+  text-align: center;
+  font-family: var(--qj-font-sans);
+  font-size: 12.5px;
+  color: var(--qj-text-muted);
+}

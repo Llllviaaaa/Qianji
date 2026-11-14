@@ -16,9 +16,9 @@ import {
 import type {
   AttachmentPayload,
   ManagedQueuedMessage,
-  SlashCommand,
-  WorkspaceDirEntry,
 } from "../../types";
+
+export { ComposerSuggestionMenus } from "./ComposerSuggestionMenus";
 
 export function ComposerBreadcrumbTrail({
   workspace,
@@ -184,114 +184,6 @@ export function ComposerBreadcrumbTrail({
         </span>
       ) : null}
     </div>
-  );
-}
-
-export function ComposerSuggestionMenus({
-  commandMenuOpen,
-  commandMatches,
-  activeCommand,
-  chooseCommand,
-  mentionMenuOpen,
-  mentionQuery,
-  mentionEntries,
-  mentionLoading,
-  activeEntry,
-  chooseEntry,
-  suggestionsId,
-  suggestionMenuRef,
-  setSuggestionIndex,
-}: {
-  commandMenuOpen: boolean;
-  commandMatches: SlashCommand[];
-  activeCommand: SlashCommand | undefined;
-  chooseCommand: (command: SlashCommand) => void;
-  mentionMenuOpen: boolean;
-  mentionQuery: string | null;
-  mentionEntries: WorkspaceDirEntry[];
-  mentionLoading: boolean;
-  activeEntry: WorkspaceDirEntry | undefined;
-  chooseEntry: (entry: WorkspaceDirEntry, enterFolder: boolean) => void;
-  suggestionsId: string;
-  suggestionMenuRef: React.RefObject<HTMLDivElement | null>;
-  setSuggestionIndex: (next: number) => void;
-}) {
-  return (
-    <>
-      {commandMenuOpen && (
-        <div className="command-menu" id={suggestionsId} role="listbox" aria-label="快捷指令" ref={suggestionMenuRef}>
-          {commandMatches.map((command, index) => (
-            <button
-              key={`${command.source}-${command.name}`}
-              id={`${suggestionsId}-${index}`}
-              data-suggestion-index={index}
-              type="button"
-              className={`command-menu-item${command === activeCommand ? " active" : ""}`}
-              role="option"
-              aria-selected={command === activeCommand}
-              tabIndex={-1}
-              onMouseEnter={() => setSuggestionIndex(index)}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => chooseCommand(command)}
-            >
-              <span className="command-item-name">
-                /{command.name}
-                {command.argsHint ? ` ${command.argsHint}` : ""}
-              </span>
-              <small className="command-item-desc">{command.description || command.source}</small>
-              <em className="command-item-source">
-                {command.source === "builtin"
-                  ? "内置"
-                  : command.source === "skill"
-                    ? "技能"
-                    : command.source === "mcp"
-                      ? "MCP"
-                      : command.source === "plugin" || command.source === "extension"
-                        ? "插件"
-                        : command.source}
-              </em>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {mentionMenuOpen && (
-        <div className="command-menu mention-menu" id={suggestionsId} role="listbox" aria-label="引用文件" ref={suggestionMenuRef}>
-          <div className="mention-menu-heading" aria-hidden="true">
-            {mentionQuery?.endsWith("/") ? mentionQuery : "文件与文件夹"}
-          </div>
-          {mentionEntries.map((entry, index) => {
-            const folder = !mentionQuery?.endsWith("/") && entry.path.includes("/")
-              ? entry.path.slice(0, entry.path.lastIndexOf("/"))
-              : "";
-            return (
-              <button
-                key={entry.path}
-                id={`${suggestionsId}-${index}`}
-                data-suggestion-index={index}
-                type="button"
-                className={`mention-item${entry === activeEntry ? " active" : ""}`}
-                role="option"
-                aria-selected={entry === activeEntry}
-                tabIndex={-1}
-                title={entry.path}
-                onMouseEnter={() => setSuggestionIndex(index)}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => chooseEntry(entry, entry.isDir)}
-              >
-                {entry.isDir ? <Folder size={14} /> : <File size={14} />}
-                <span className="mention-item-name">{entry.name}{entry.isDir ? "/" : ""}</span>
-                <small className="mention-item-path">{folder}</small>
-                {entry.isDir && <kbd className="mention-item-hint">Tab 进入</kbd>}
-              </button>
-            );
-          })}
-          {mentionEntries.length === 0 && (
-            <div className="mention-menu-status">{mentionLoading ? "正在查找…" : "没有匹配的文件"}</div>
-          )}
-        </div>
-      )}
-    </>
   );
 }
 

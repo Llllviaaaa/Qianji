@@ -694,7 +694,6 @@
 
 /* ── Composer Popovers (Meta AI Muse 18px Floating Menus) ──────────── */
 
-.codex-shot .command-menu,
 .codex-shot .composer-actions-menu,
 .codex-shot .permission-menu,
 .codex-shot .model-picker-menu,
@@ -713,8 +712,7 @@
 .codex-shot .model-picker-thinking-row,
 .codex-shot .model-picker-levels > button,
 .codex-shot .workspace-context-list button,
-.codex-shot .workspace-context-new,
-.codex-shot .command-menu button {
+.codex-shot .workspace-context-new {
   min-height: 34px;
   border-radius: 11px;
   color: var(--text);
@@ -733,9 +731,7 @@
 .codex-shot .model-picker-levels > button:hover,
 .codex-shot .model-picker-levels > button:focus-visible,
 .codex-shot .workspace-context-list button:hover,
-.codex-shot .workspace-context-new:hover,
-.codex-shot .command-menu button:hover,
-.codex-shot .command-menu button.active {
+.codex-shot .workspace-context-new:hover {
   background: var(--dsh-claude-hover-bg, var(--hover));
 }
 
@@ -796,129 +792,6 @@
   font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 500;
-}
-
-/* Slash Command & Mention Menus */
-.codex-shot .command-menu {
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  bottom: calc(100% + 8px);
-  z-index: 80;
-  max-height: 280px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.codex-shot .command-menu-item {
-  width: 100%;
-  display: grid !important;
-  grid-template-columns: minmax(92px, auto) 1fr auto !important;
-  align-items: center !important;
-  gap: 10px !important;
-  padding: 6px 10px !important;
-  border-radius: 7px !important;
-}
-
-.codex-shot .command-item-name {
-  font-family: var(--code-font);
-  font-size: 12px;
-  font-weight: 550;
-  color: var(--text);
-  background: var(--panel-soft);
-  padding: 1px 6px;
-  border-radius: 5px;
-}
-
-.codex-shot .command-item-desc {
-  font-size: 12.5px;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.codex-shot .command-item-source {
-  font-style: normal;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 5px;
-  background: var(--panel-soft);
-  color: var(--text-3);
-}
-
-.codex-shot .mention-menu-heading,
-.codex-shot .mention-menu-status {
-  padding: 4px 10px 2px;
-  color: var(--text-3);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 18px;
-}
-
-.codex-shot .mention-menu-status {
-  padding: 6px 10px 8px;
-  font-size: 12.5px;
-  font-weight: 400;
-}
-
-.codex-shot .command-menu button.mention-item {
-  display: grid;
-  grid-template-columns: 16px auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: auto;
-  min-height: 30px;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.codex-shot .mention-item > svg {
-  color: var(--text-3);
-}
-
-.codex-shot .mention-item-name {
-  overflow: hidden;
-  font: 12.5px/18px var(--code-font);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.codex-shot .mention-item-path {
-  overflow: hidden;
-  color: var(--text-3);
-  font-family: var(--code-font);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-}
-
-.codex-shot .mention-item-hint {
-  padding: 0 5px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-3);
-  font: 10px/16px var(--code-font);
-  visibility: hidden;
-}
-
-.codex-shot .mention-item.active .mention-item-hint {
-  visibility: visible;
-}
-
-.codex-shot .command-menu button.mention-item:hover,
-.codex-shot .command-menu button.mention-item.active {
-  background: var(--dsh-claude-hover-bg, var(--hover));
 }
 
 .codex-shot .composer-actions-menu button.active,
