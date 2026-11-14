@@ -4,7 +4,7 @@ import { currentPlanStepIndex, deriveLiveTaskPlan } from "../lib/envSources";
 import { useAppStore } from "../store";
 import { PlanProgressRing, PlanSteps } from "./ConversationPlan";
 
-/** The running turn's plan, pinned above the composer only while the turn is live. */
+/** The running turn's active plan (including an unfinished session plan continued from an interrupted/earlier turn), pinned above the composer while streaming. */
 export function LivePlanBar() {
   const messages = useAppStore((state) => state.messages);
   const isStreaming = useAppStore((state) => state.isStreaming);
@@ -23,7 +23,7 @@ export function LivePlanBar() {
 
   return (
     <section className={`live-plan${expanded ? " is-expanded" : ""}`} aria-label="当前计划进度">
-      {expanded && <PlanSteps id={stepsId} steps={plan.steps} />}
+      {expanded && <PlanSteps id={stepsId} steps={plan.steps} live />}
       <button
         type="button"
         className="live-plan-toggle"

@@ -24,19 +24,19 @@ export interface TaskOutputItem {
   running: boolean;
 }
 
-export type TaskPlanStatus = "pending" | "in_progress" | "completed";
-
-export interface TaskPlanStep {
-  id: string;
-  text: string;
-  status: TaskPlanStatus;
-}
-
-export interface TaskPlanSummary {
-  explanation: string;
-  steps: TaskPlanStep[];
-  completed: number;
-}
+export {
+  currentPlanStepIndex,
+  deriveLiveTaskPlan,
+  deriveTaskPlan,
+  deriveTurnPlans,
+  deriveTurnPlanState,
+  findLatestTurnPlanMessageId,
+  planFromToolCall,
+  type TaskPlanStatus,
+  type TaskPlanStep,
+  type TaskPlanSummary,
+  type TurnPlanState,
+} from "./taskPlan";
 
 export type SubagentStatus = "queued" | "running" | "completed" | "failed";
 
@@ -227,190 +227,6 @@ export function deriveTaskOutputs(messages: UiMessage[], limit = 40): TaskOutput
     }
   }
   return [...outputs.values()].slice(-limit).reverse();
-}
-
-function planStatus(value: unknown): TaskPlanStatus | null {
-  return value === "pending" || value === "in_progress" || value === "completed" ? value : null;
-}
-
-function toolNameTail(name: string): string {
-  const segments = name.toLowerCase().split(/__|[.:/]/).filter(Boolean);
-  return segments[segments.length - 1] ?? name.toLowerCase();
-}
-
-/** Parse a single update_plan tool call into the conversation/inspector plan widget. */
-export function planFromToolCall(call: UiToolCall): TaskPlanSummary | null {
-  if (toolNameTail(call.name) !== "update_plan" || call.isError) return null;
-  const rawItems = Array.isArray(call.details?.items)
-    ? call.details.items
-    : Array.isArray(call.args.items) ? call.args.items : null;
-  if (!rawItems) return null;
-  const steps = rawItems.flatMap((value, stepIndex) => {
-    const item = recordValue(value);
-    const text = typeof item?.text === "string" ? item.text.trim() : "";
-    const status = planStatus(item?.status);
-    if (!text || !status) return [];
-    return [{
-      id: typeof item?.id === "string" && item.id.trim() ? item.id.trim() : `step-${stepIndex + 1}`,
-      text,
-      status,
-    }];
-  });
-  if (steps.length === 0) return null;
-  const explanation = typeof call.details?.explanation === "string"
-    ? call.details.explanation.trim()
-    : typeof call.args.explanation === "string" ? call.args.explanation.trim() : "";
-  return { explanation, steps, completed: steps.filter((step) => step.status === "completed").length };
-}
-
-const messageLatestPlanCache = new WeakMap<UiMessage, TaskPlanSummary | null>();
-
-function latestPlanInMessage(message: UiMessage): TaskPlanSummary | null {
-  if (messageLatestPlanCache.has(message)) {
-    return messageLatestPlanCache.get(message) ?? null;
-  }
-  const calls = message.toolCalls ?? [];
-  let resolved: TaskPlanSummary | null = null;
-  for (let index = calls.length - 1; index >= 0; index -= 1) {
-    const plan = planFromToolCall(calls[index]);
-    if (plan) {
-      resolved = plan;
-      break;
-    }
-  }
-  messageLatestPlanCache.set(message, resolved);
-  return resolved;
-}
-
-function latestPlanIn(messages: UiMessage[]): TaskPlanSummary | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const plan = latestPlanInMessage(messages[index]);
-    if (plan) return plan;
-  }
-  return null;
-}
-
-/** Return the latest valid update_plan payload for the active conversation branch. */
-export function deriveTaskPlan(messages: UiMessage[]): TaskPlanSummary | null {
-  return latestPlanIn(messages);
-}
-
-function openTurnStart(messages: UiMessage[]): number {
-  let start = messages.length;
-  while (start > 0 && messages[start - 1].role !== "user") start -= 1;
-  return start;
-}
-
-/** The plan of the turn still being answered: update_plan calls after the latest user message. */
-export function deriveLiveTaskPlan(messages: UiMessage[]): TaskPlanSummary | null {
-  return latestPlanIn(messages.slice(openTurnStart(messages)));
-}
-
-export interface TurnPlanState {
-  turnPlans: Map<string, TaskPlanSummary>;
-  latestPlanMessageId: string | undefined;
-}
-interface TurnPlanPrefixEntry {
-  settledCount: number;
-  prefix: readonly UiMessage[];
-  plans: Map<string, TaskPlanSummary>;
-  latestId: string | undefined;
-  lastStreaming?: boolean;
-  lastResult?: TurnPlanState;
-}
-const EMPTY_TURN_PLANS = new Map<string, TaskPlanSummary>();
-const EMPTY_TURN_PLAN_STATE: TurnPlanState = { turnPlans: EMPTY_TURN_PLANS, latestPlanMessageId: undefined };
-const turnPlanByArrayCache = new WeakMap<readonly UiMessage[], { streaming?: TurnPlanState; settled?: TurnPlanState }>();
-let lastPlanPrefix: TurnPlanPrefixEntry | null = null;
-
-function scanSettledPlans(
-  messages: readonly UiMessage[],
-  start: number,
-  end: number,
-  basePlans: Map<string, TaskPlanSummary>,
-  baseLatestId: string | undefined,
-): { plans: Map<string, TaskPlanSummary>; latestId: string | undefined } {
-  let plans: Map<string, TaskPlanSummary> | null = null;
-  let latestId = baseLatestId;
-  let turnPlan: { messageId: string; plan: TaskPlanSummary } | null = null;
-  for (let index = start; index < end; index += 1) {
-    const message = messages[index];
-    if (message.role === "user") {
-      if (turnPlan) {
-        plans ??= new Map(basePlans);
-        plans.set(turnPlan.messageId, turnPlan.plan);
-        latestId = turnPlan.messageId;
-      }
-      turnPlan = null;
-    } else {
-      const plan = latestPlanInMessage(message);
-      if (plan) turnPlan = { messageId: message.id, plan };
-    }
-  }
-  return { plans: plans ?? basePlans, latestId };
-}
-
-function getSettledPlanPrefix(messages: readonly UiMessage[], settledCount: number): TurnPlanPrefixEntry | null {
-  if (settledCount <= 0) return null;
-  const cached = lastPlanPrefix;
-  if (cached && settledCount >= cached.settledCount && cached.prefix.every((item, idx) => messages[idx] === item)) {
-    if (settledCount > cached.settledCount) {
-      const adv = scanSettledPlans(messages, cached.settledCount, settledCount, cached.plans, cached.latestId);
-      Object.assign(cached, { settledCount, prefix: messages.slice(0, settledCount), plans: adv.plans, latestId: adv.latestId, lastResult: undefined });
-    }
-    return cached;
-  }
-  const built = scanSettledPlans(messages, 0, settledCount, EMPTY_TURN_PLANS, undefined);
-  return (lastPlanPrefix = { settledCount, prefix: messages.slice(0, settledCount), plans: built.plans, latestId: built.latestId });
-}
-
-/** Single-pass cached derivation of per-turn plans and the newest plan message ID. */
-export function deriveTurnPlanState(messages: UiMessage[], isStreaming = false): TurnPlanState {
-  const arrayCached = turnPlanByArrayCache.get(messages);
-  const hit = isStreaming ? arrayCached?.streaming : arrayCached?.settled;
-  if (hit) return hit;
-
-  const settledCount = openTurnStart(messages);
-  const entry = getSettledPlanPrefix(messages, settledCount);
-  const prefixPlans = entry ? entry.plans : EMPTY_TURN_PLANS;
-  let openPlan: { messageId: string; plan: TaskPlanSummary } | null = null;
-  for (let index = settledCount; index < messages.length; index += 1) {
-    const plan = latestPlanInMessage(messages[index]);
-    if (plan) openPlan = { messageId: messages[index].id, plan };
-  }
-
-  let result: TurnPlanState;
-  if (isStreaming || !openPlan) {
-    const latestPlanMessageId = openPlan ? openPlan.messageId : entry?.latestId;
-    if (prefixPlans === EMPTY_TURN_PLANS && latestPlanMessageId === undefined) result = EMPTY_TURN_PLAN_STATE;
-    else if (entry?.lastResult && entry.lastStreaming === isStreaming && entry.lastResult.turnPlans === prefixPlans && entry.lastResult.latestPlanMessageId === latestPlanMessageId) result = entry.lastResult;
-    else result = { turnPlans: prefixPlans, latestPlanMessageId };
-  } else {
-    const turnPlans = new Map(prefixPlans);
-    turnPlans.set(openPlan.messageId, openPlan.plan);
-    result = { turnPlans, latestPlanMessageId: openPlan.messageId };
-  }
-
-  if (entry) { entry.lastStreaming = isStreaming; entry.lastResult = result; }
-  turnPlanByArrayCache.set(messages, isStreaming ? { ...arrayCached, streaming: result } : { ...arrayCached, settled: result });
-  return result;
-}
-
-export function findLatestTurnPlanMessageId(messages: UiMessage[]): string | undefined {
-  return deriveTurnPlanState(messages, false).latestPlanMessageId;
-}
-
-/** Map each turn's final plan to the message that last updated it; skips open turn while streaming. */
-export function deriveTurnPlans(messages: UiMessage[], skipOpenTurn = false): Map<string, TaskPlanSummary> {
-  return deriveTurnPlanState(messages, skipOpenTurn).turnPlans;
-}
-
-/** The step a plan is on: the first in progress, else the first pending, else the last. */
-export function currentPlanStepIndex(plan: TaskPlanSummary): number {
-  const active = plan.steps.findIndex((step) => step.status === "in_progress");
-  if (active >= 0) return active;
-  const pending = plan.steps.findIndex((step) => step.status === "pending");
-  return pending >= 0 ? pending : plan.steps.length - 1;
 }
 
 function subagentRole(value: unknown): SubagentActivity["role"] {
