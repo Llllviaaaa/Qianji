@@ -70,10 +70,13 @@
 
 .codex-shot .dshc-visually-hidden {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
@@ -770,6 +773,7 @@
 }
 
 .codex-shot .dshc-group-body {
+  position: relative;
   max-height: min(400px, calc(var(--ui-vh, 100vh) * 0.5));
   overflow: hidden;
 }
@@ -823,6 +827,7 @@
 /* ── Reasoning: the Think row and its compact Markdown (ReasoningRow.module.css) ── */
 
 .codex-shot .dshc-reasoning {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -891,6 +896,7 @@
 /* ── Tool rows (ToolRow.module.css) and their result cards ─────────── */
 
 .codex-shot .dshc-tool {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -991,6 +997,7 @@
 }
 
 .codex-shot .dshc-terminal-prompt {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -1708,6 +1715,7 @@
 /* ── The running line (ChatView running + dsh-claude-style chat-wait) ── */
 
 .codex-shot .dshc-running {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
