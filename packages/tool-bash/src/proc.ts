@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 export const DEFAULT_TIMEOUT_SECONDS = 120;
 /** Output kept in memory while a command runs; the tool then keeps the tail of it. */
@@ -12,7 +12,26 @@ export const POST_KILL_GRACE_MS = 500;
 
 export function killTree(pid: number): void {
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
+    try {
+      const child = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      child.on("error", () => {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      });
+      child.unref();
+    } catch {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
   } else {
     try {
       process.kill(-pid, "SIGKILL");

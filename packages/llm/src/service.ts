@@ -1,6 +1,7 @@
 import { Context, Service } from "@deepseek-ai/cordis";
 import type { SecretRef } from "./credentials.ts";
 import { LlmError, toLlmError } from "./errors.ts";
+import { markFreshConnectionSignal } from "./http.ts";
 import type { Effort, FinishReason, LlmErrorInfo, LlmRequest, ModelInfo, ProviderInfo, StreamChunk, Usage } from "./types.ts";
 
 declare module "@deepseek-ai/cordis" {
@@ -85,6 +86,10 @@ function stepDownEffort(effort: Effort | undefined): Effort | undefined {
   if (effort === "high") return "medium";
   if (effort === "medium") return "low";
   return undefined;
+}
+
+function shouldStepDownOnEmptyFailure(producedContent: boolean, error: LlmErrorInfo): boolean {
+  return !producedContent && error.kind === "server" && /empty response stream|finish_reason=|finishReason=/i.test(error.message);
 }
 
 function resetUsage(usage: Usage): void {
@@ -251,6 +256,8 @@ export class LlmService extends Service {
       finish = { type: "finish", reason: "error", error: { kind: "invalid-request", message: `Unknown LLM provider ${request.provider}`, retryable: false } };
     }
 
+    let forceFreshConnection = false;
+
     while (finish === undefined && entry !== undefined) {
       attempts += 1;
       const attemptStarted = Date.now();
@@ -259,10 +266,19 @@ export class LlmService extends Service {
         messages: [...request.messages],
         ...(currentEffort === undefined ? {} : { effort: currentEffort }),
       };
+      const attemptController: AbortController | undefined = forceFreshConnection ? new AbortController() : undefined;
+      const onParentAbort: (() => void) | undefined =
+        attemptController === undefined ? undefined : () => attemptController.abort();
+      if (attemptController !== undefined) {
+        if (signal.aborted) attemptController.abort();
+        else if (onParentAbort !== undefined) signal.addEventListener("abort", onParentAbort, { once: true });
+        markFreshConnectionSignal(attemptController.signal);
+      }
+      const attemptSignal: AbortSignal = attemptController?.signal ?? signal;
       let producedContent = false;
       let failure: LlmError | undefined;
       try {
-        const source = this.ctx.waterfall("llm/request", attemptRequest, () => entry.adapter.stream(attemptRequest, signal));
+        const source = this.ctx.waterfall("llm/request", attemptRequest, () => entry.adapter.stream(attemptRequest, attemptSignal));
         for await (const chunk of source) {
           if (chunk.type === "finish") {
             finish = chunk;
@@ -287,6 +303,10 @@ export class LlmService extends Service {
         }
       } catch (error) {
         failure = toLlmError(error, signal);
+      } finally {
+        if (onParentAbort !== undefined) {
+          signal.removeEventListener("abort", onParentAbort);
+        }
       }
 
       if (signal.aborted) {
@@ -306,13 +326,14 @@ export class LlmService extends Service {
         break;
       }
       let steppedEffort: Effort | undefined;
-      if (producedContent && attemptElapsedMs >= this.longStreamStepDownMs) {
+      if ((producedContent && attemptElapsedMs >= this.longStreamStepDownMs) || shouldStepDownOnEmptyFailure(producedContent, errorInfo)) {
         const lowered = stepDownEffort(currentEffort);
         if (lowered !== undefined) {
           currentEffort = lowered;
           steppedEffort = lowered;
         }
       }
+      forceFreshConnection = errorInfo.kind === "network";
       resetUsage(usage);
       const retryAfter = failure?.retryAfter;
       const retryAfterMs = retryAfter === undefined ? undefined : retryAfter * 1000;

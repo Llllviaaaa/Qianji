@@ -22,6 +22,10 @@ export interface CrashRecord {
   pluginId?: string;
   exitCode?: number;
   pid?: number;
+  /** Number of deduplicated occurrences aggregated under this incident fingerprint. */
+  occurrences?: number;
+  /** Timestamp of the earliest occurrence in the current burst window when occurrences > 1. */
+  firstSeenAt?: string;
 }
 
 export interface LogEntry {

@@ -25,6 +25,7 @@ import {
   isUserMessageOverLineLimit,
   liveActivityLabel,
   processSegments,
+  settledEmptyTurnHint,
   summarizeProcessGroup,
   TRANSCRIPT_POLICIES,
   USER_MESSAGE_COLLAPSED_LINES,
@@ -95,7 +96,7 @@ export const Message = memo(function Message({
   onCancelEdit?: () => void;
   onSubmitEdit?: (message: UiMessage, text: string) => Promise<boolean>;
 }) {
-  const [processOpen, setProcessOpen] = useState(false);
+  const [processOpen, setProcessOpen] = useState<boolean | null>(null);
   const slotCwd = useAppStore((store) => store.cwd);
   const slotSessionFile = useAppStore((store) => store.sessionFile);
   const transcriptDensity = summaryMode ? "summary" : normalizeTranscriptDensity(density);
@@ -149,8 +150,22 @@ export const Message = memo(function Message({
     && !message.isError
     && !message.isAborted;
   const durationMs = message.durationMs !== undefined && message.durationMs > 0 ? message.durationMs : workDurationMs(toolCalls);
+  const hadOnlyHiddenTools = (message.toolCalls?.length ?? 0) > 0 && toolCalls.length === 0;
+  const hasUiWidgets = Boolean(!message.isError && uiWidgets && uiWidgets.length > 0 && uiGroups);
+  const emptyTurn = settledEmptyTurnHint({
+    working,
+    hasContent,
+    hasProcess,
+    hasUiWidgets,
+    hadOnlyHiddenTools,
+    toolCallCount: toolCalls.length,
+    hasTurnTelemetry: message.durationMs !== undefined || message.usage !== undefined,
+    isError: message.isError,
+    isAborted: message.isAborted,
+  });
+  const effectiveProcessOpen = processOpen ?? emptyTurn.autoOpenProcess;
 
-  if (!hasContent && !working && !hasProcess && !reasoningUnavailable) return null;
+  if (!hasContent && !working && !hasProcess && !reasoningUnavailable && !emptyTurn.hint && !message.isError && !message.isAborted) return null;
 
   const usage = message.usage;
   const copyTitle = usage
@@ -211,11 +226,12 @@ export const Message = memo(function Message({
   });
 
   const canCollapse = hasProcess;
-  const settledProcessVisible = hasProcess && processOpen;
+  const settledProcessVisible = hasProcess && effectiveProcessOpen;
   const showTurnProcess = !working && (
     hasProcess
     || (showThinking && durationMs !== null)
     || reasoningUnavailable
+    || Boolean(emptyTurn.hint)
     || message.isAborted === true
     || message.isError === true
   );
@@ -242,13 +258,13 @@ export const Message = memo(function Message({
         <button
           type="button"
           className="dshc-turn-process"
-          data-open={(canCollapse && processOpen) || undefined}
+          data-open={(canCollapse && effectiveProcessOpen) || undefined}
           disabled={!canCollapse}
-          aria-expanded={canCollapse ? processOpen : undefined}
-          aria-label={canCollapse ? (processOpen ? "收起工作过程" : "展开工作过程") : undefined}
+          aria-expanded={canCollapse ? effectiveProcessOpen : undefined}
+          aria-label={canCollapse ? (effectiveProcessOpen ? "收起工作过程" : "展开工作过程") : undefined}
           onClick={(event) => {
             event.currentTarget.focus({ preventScroll: true });
-            setProcessOpen((value) => !value);
+            setProcessOpen((value) => !(value ?? emptyTurn.autoOpenProcess));
           }}
         >
           <span className="dshc-turn-process-label">
@@ -264,6 +280,7 @@ export const Message = memo(function Message({
       {settledProcessVisible && !working && renderProcess(true)}
       {liveProcessVisible && renderProcess(policy.liveGrouping)}
       {plan && !working && <ConversationPlan plan={plan} onOpenPlan={onOpenPlan} />}
+      {emptyTurn.hint && <div className="dshc-hint">{emptyTurn.hint}</div>}
       {!message.isError && uiWidgets && uiWidgets.length > 0 && uiGroups && (
         <div className="dshc-turn-widgets">
           {uiWidgets.map((ref) => {

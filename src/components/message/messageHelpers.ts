@@ -250,3 +250,41 @@ export function computeMergedFileTools(calls: UiToolCall[]): Map<string, MergedF
   }
   return result;
 }
+
+export function settledEmptyTurnHint(options: {
+  working: boolean;
+  hasContent: boolean;
+  hasProcess: boolean;
+  hasUiWidgets: boolean;
+  hadOnlyHiddenTools: boolean;
+  toolCallCount: number;
+  hasTurnTelemetry: boolean;
+  isError?: boolean;
+  isAborted?: boolean;
+}): { autoOpenProcess: boolean; hint: string | null } {
+  if (
+    options.working
+    || options.hasContent
+    || options.hasUiWidgets
+    || options.isError
+    || options.isAborted
+    || options.hadOnlyHiddenTools
+  ) {
+    return { autoOpenProcess: false, hint: null };
+  }
+  if (options.hasProcess) {
+    return {
+      autoOpenProcess: true,
+      hint: options.toolCallCount > 0
+        ? "模型未输出总结回复，已展开本轮执行步骤（可输入「继续」接着执行）"
+        : "模型仅返回了内部思考，未生成可见回复（可重试或调低推理强度）",
+    };
+  }
+  if (options.hasTurnTelemetry) {
+    return {
+      autoOpenProcess: false,
+      hint: "模型返回了空响应（可重试、执行 /compact 压缩上下文或调低推理强度）",
+    };
+  }
+  return { autoOpenProcess: false, hint: null };
+}

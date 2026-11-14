@@ -352,4 +352,52 @@ describe("openai-compat adapter", () => {
       { type: "tool-call", id: "c2", name: "ls", arguments: {} },
     ]);
   });
+
+  it("retries empty 0-token stop streams and MALFORMED_FUNCTION_CALL finish reasons while mapping SAFETY to refusal", async () => {
+    const { ctx, server } = await setup();
+
+    server.reply(
+      {
+        sse: [
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          'data: {"usage":{"prompt_tokens":120,"completion_tokens":0}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+      },
+      { sse: fixture("reasoning-text.sse") },
+    );
+    const emptyRecovered = await assemble(ctx.llm.stream(request));
+    expect(emptyRecovered.reason).toBe("stop");
+    expect(emptyRecovered.message.content).toEqual([
+      { type: "thinking", text: "The user wants a greeting." },
+      { type: "text", text: "Hello there!" },
+    ]);
+    expect(server.requests).toHaveLength(2);
+
+    server.reply(
+      {
+        sse: [
+          'data: {"choices":[{"delta":{},"finish_reason":"MALFORMED_FUNCTION_CALL"}]}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+      },
+      { sse: fixture("reasoning-text.sse") },
+    );
+    const malformedRecovered = await assemble(ctx.llm.stream(request));
+    expect(malformedRecovered.reason).toBe("stop");
+    expect(server.requests).toHaveLength(4);
+
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{},"finish_reason":"SAFETY"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const safetyRefusal = await assemble(ctx.llm.stream(request));
+    expect(safetyRefusal.reason).toBe("refusal");
+    expect(server.requests).toHaveLength(5);
+  });
 });

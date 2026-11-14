@@ -48,16 +48,133 @@ export function shouldIgnoreWatchedPath(filename: string | null | undefined): bo
     || normalized.endsWith("~");
 }
 
-export function resolveCordisPluginExport(mod: Record<string, unknown>, pluginId: string): Plugin {
+const fiberToPluginId = new WeakMap<object, string>();
+
+export function tagFiberPluginId(fiber: unknown, pluginId: string): void {
+  if (typeof fiber === "object" && fiber !== null && pluginId !== "") {
+    fiberToPluginId.set(fiber, pluginId);
+  }
+}
+
+export function readFiberPluginId(fiber: unknown): string | undefined {
+  let cursor: unknown = fiber;
+  let guard = 0;
+  while (typeof cursor === "object" && cursor !== null && guard < 32) {
+    const tagged = fiberToPluginId.get(cursor);
+    if (tagged !== undefined) return tagged;
+    try {
+      const parentCtx = (cursor as { parent?: unknown }).parent;
+      cursor =
+        typeof parentCtx === "object" && parentCtx !== null
+          ? (parentCtx as { fiber?: unknown }).fiber
+          : undefined;
+    } catch {
+      return undefined;
+    }
+    guard += 1;
+  }
+  return undefined;
+}
+
+function isClassConstructor(fn: unknown): fn is new (ctx: unknown, config: unknown) => object {
+  if (typeof fn !== "function") return false;
+  const proto = fn.prototype as object | undefined;
+  if (proto === undefined || proto === null) return false;
+  const src = Function.prototype.toString.call(fn);
+  if (/^\s*class\b/.test(src)) return true;
+  const staticRecord = fn as unknown as Record<string, unknown>;
+  return typeof staticRecord.provide === "string" || Object.getPrototypeOf(fn) !== Function.prototype;
+}
+
+function mergeManifestInject(existing: unknown, manifestInject?: readonly string[]): unknown {
+  if (manifestInject === undefined || manifestInject.length === 0) return existing;
+  if (existing === undefined) return [...manifestInject];
+  if (Array.isArray(existing)) {
+    const merged = new Set<string>();
+    for (const item of existing) {
+      if (typeof item === "string" && item.trim() !== "") merged.add(item);
+    }
+    for (const item of manifestInject) {
+      if (item.trim() !== "") merged.add(item);
+    }
+    return [...merged];
+  }
+  if (isRecord(existing)) {
+    const merged: Record<string, unknown> = { ...existing };
+    for (const item of manifestInject) {
+      if (item.trim() !== "" && !Object.prototype.hasOwnProperty.call(merged, item)) {
+        merged[item] = true;
+      }
+    }
+    return merged;
+  }
+  return existing;
+}
+
+function wrapServiceClass(
+  Ctor: new (ctx: unknown, config: unknown) => object,
+  pluginId: string,
+  manifestInject?: readonly string[],
+): Plugin {
+  const TaggedService = class extends Ctor {
+    constructor(ctx: { fiber?: unknown }, config: unknown) {
+      tagFiberPluginId(ctx?.fiber, pluginId);
+      super(ctx, config);
+    }
+  };
+  Object.defineProperty(TaggedService, "name", {
+    value: (Ctor as { name?: string }).name || pluginId,
+    configurable: true,
+  });
+  const mergedInject = mergeManifestInject((Ctor as { inject?: unknown }).inject, manifestInject);
+  if (mergedInject !== undefined) {
+    (TaggedService as { inject?: unknown }).inject = mergedInject;
+  }
+  return TaggedService as unknown as Plugin;
+}
+
+function wrapPluginApply(
+  applyFn: (ctx: unknown, config: unknown) => unknown,
+  pluginId: string,
+  meta: Record<string, unknown>,
+  manifestInject?: readonly string[],
+): Plugin {
+  const wrapped: Record<string, unknown> = {
+    apply(ctx: { fiber?: unknown }, config: unknown) {
+      tagFiberPluginId(ctx?.fiber, pluginId);
+      return applyFn.call(this, ctx, config);
+    },
+  };
+  for (const key of ["name", "inject", "provide", "Config", "schema", "reusable"] as const) {
+    if (meta[key] !== undefined) wrapped[key] = meta[key];
+  }
+  const mergedInject = mergeManifestInject(wrapped.inject, manifestInject);
+  if (mergedInject !== undefined) wrapped.inject = mergedInject;
+  return wrapped as unknown as Plugin;
+}
+
+export function resolveCordisPluginExport(
+  mod: Record<string, unknown>,
+  pluginId: string,
+  manifestInject?: readonly string[],
+): Plugin {
   if (typeof mod.apply === "function") {
-    return mod as unknown as Plugin;
+    return wrapPluginApply(mod.apply as (ctx: unknown, config: unknown) => unknown, pluginId, mod, manifestInject);
   }
   const def = mod.default;
   if (typeof def === "function") {
-    return def as unknown as Plugin;
+    if (isClassConstructor(def)) {
+      return wrapServiceClass(def, pluginId, manifestInject);
+    }
+    return wrapPluginApply(
+      def as (ctx: unknown, config: unknown) => unknown,
+      pluginId,
+      def as unknown as Record<string, unknown>,
+      manifestInject,
+    );
   }
   if (isRecord(def) && typeof def.apply === "function") {
-    return def as unknown as Plugin;
+    return wrapPluginApply(def.apply as (ctx: unknown, config: unknown) => unknown, pluginId, def, manifestInject);
   }
   throw new Error(`Plugin "${pluginId}" host entry must export apply(ctx, config) or a default Cordis plugin`);
 }

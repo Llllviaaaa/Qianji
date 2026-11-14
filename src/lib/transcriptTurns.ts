@@ -137,8 +137,10 @@ export function mergeAssistantTurn(messages: UiMessage[]): UiMessage {
   const normalized = normalizedMessages(messages);
   const last = normalized[normalized.length - 1];
   const finalIndex = findFinalContentIndex(normalized);
-  const content = finalIndex >= 0 ? normalized[finalIndex].content : "";
-  const steps = workStepsFromMessages(normalized, content, finalIndex);
+  const preserveLastError = finalIndex < 0 && last?.isError === true && last.content.trim() !== "";
+  const effectiveFinalIndex = preserveLastError ? normalized.length - 1 : finalIndex;
+  const content = effectiveFinalIndex >= 0 ? normalized[effectiveFinalIndex].content : "";
+  const steps = workStepsFromMessages(normalized, content, effectiveFinalIndex);
   const thinking = steps.filter((step) => step.kind === "thinking").map((step) => step.text).join("\n\n") || undefined;
   const merged: UiMessage = {
     ...last,

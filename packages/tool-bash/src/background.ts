@@ -349,11 +349,13 @@ export class BackgroundProcessManager {
     }
   }
 
-  stopAll(): void {
-    for (const entry of this.entries.values()) {
+  stopAll(): Promise<void> {
+    const dones = Array.from(this.entries.values(), (entry) => {
       this.terminateEntry(entry);
-    }
+      return entry.done;
+    });
     this.entries.clear();
+    return Promise.all(dones).then(() => undefined);
   }
 
   private terminateEntry(entry: BgEntry): void {

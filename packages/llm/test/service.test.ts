@@ -283,6 +283,20 @@ describe("LlmService", () => {
     expect(result.reason).toBe("stop");
     expect(result.message.content).toEqual([{ type: "text", text: "hello" }]);
   });
+
+  it("steps down reasoning effort when retrying empty response streams", async () => {
+    const ctx = await setup();
+    const emptyErr = new LlmError({ kind: "server", message: "fake returned an empty response stream (0 output tokens)", retryable: true });
+    const adapter = scripted(() => throws(emptyErr), () => throws(emptyErr), ok);
+    ctx.llm.registerAdapter(info, adapter);
+
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of ctx.llm.stream({ ...request, effort: "xhigh" })) chunks.push(chunk);
+    expect(adapter.calls.map((c) => c.effort)).toEqual(["xhigh", "high", "medium"]);
+    const retries = chunks.filter((c): c is Extract<StreamChunk, { type: "retry" }> => c.type === "retry");
+    expect(retries.map((r) => r.effort)).toEqual(["high", "medium"]);
+    expect(chunks.at(-1)).toEqual({ type: "finish", reason: "stop" });
+  });
 });
 
 describe("Credentials", () => {

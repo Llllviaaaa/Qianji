@@ -136,13 +136,32 @@ export function buildRequestBody(
   return body;
 }
 
-const FINISH_REASONS: Record<string, FinishReason> = {
+const FINISH_REASONS: Record<string, FinishReason | "retryable-error"> = {
   stop: "stop",
+  end_turn: "stop",
   length: "length",
+  max_tokens: "length",
+  model_context_window_exceeded: "length",
   tool_calls: "tool-use",
   function_call: "tool-use",
+  tool_use: "tool-use",
   content_filter: "refusal",
+  safety: "refusal",
+  recitation: "refusal",
+  prohibited_content: "refusal",
+  blocklist: "refusal",
+  spii: "refusal",
+  image_safety: "refusal",
+  malformed_function_call: "retryable-error",
+  unexpected_tool_call: "retryable-error",
+  error: "retryable-error",
+  network_error: "retryable-error",
+  other: "retryable-error",
 };
+
+function classifyOpenAiFinishReason(raw: string): FinishReason | "retryable-error" {
+  return FINISH_REASONS[raw.trim().toLowerCase()] ?? "stop";
+}
 
 interface WireDelta {
   content?: string | null;
@@ -173,6 +192,10 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
   let lastImplicitWireIndex: number | undefined;
   let nextSyntheticWireIndex = 10_000;
   let reason: FinishReason | undefined;
+  let rawFinishReason: string | undefined;
+  let rawErrorFinishReason: string | undefined;
+  let emittedContent = false;
+  let reportedOutputTokens: number | undefined;
   let sawDone = false;
 
   for await (const event of events) {
@@ -194,10 +217,12 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
       const thinking = delta.reasoning_content ?? delta.reasoning;
       if (typeof thinking === "string" && thinking !== "") {
         thinkingIndex ??= next++;
+        emittedContent = true;
         yield { type: "thinking-delta", index: thinkingIndex, text: thinking };
       }
       if (typeof delta.content === "string" && delta.content !== "") {
         textIndex ??= next++;
+        emittedContent = true;
         yield { type: "text-delta", index: textIndex, text: delta.content };
       }
       for (const call of delta.tool_calls ?? []) {
@@ -238,16 +263,30 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
           const blockIndex = next++;
           entry = { blockIndex, id: callId };
           toolState.set(wireIndex, entry);
+          emittedContent = true;
           yield { type: "tool-call-start", index: blockIndex, id: callId ?? `call_${blockIndex}`, name: call.function?.name ?? "" };
         }
         const args = call.function?.arguments;
         if (typeof args === "string" && args !== "") yield { type: "tool-call-delta", index: entry.blockIndex, argumentsDelta: args };
       }
-      if (typeof choice.finish_reason === "string") reason = FINISH_REASONS[choice.finish_reason] ?? "stop";
+      if (typeof choice.finish_reason === "string") {
+        rawFinishReason = choice.finish_reason;
+        const classified = classifyOpenAiFinishReason(choice.finish_reason);
+        if (classified === "retryable-error") {
+          rawErrorFinishReason = choice.finish_reason;
+          reason = undefined;
+        } else {
+          rawErrorFinishReason = undefined;
+          reason = classified;
+        }
+      }
     }
     if (chunk.usage) {
       const cached = chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens ?? 0;
       const reasoning = chunk.usage.completion_tokens_details?.reasoning_tokens;
+      if (typeof chunk.usage.completion_tokens === "number") {
+        reportedOutputTokens = chunk.usage.completion_tokens;
+      }
       yield {
         type: "usage",
         usage: {
@@ -259,16 +298,35 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
       };
     }
   }
-  if (!sawDone && reason === undefined) {
+  if (!sawDone && reason === undefined && rawErrorFinishReason === undefined) {
     throw new LlmError({
       kind: "network",
       message: `${providerId}: upstream stream ended before completion`,
       retryable: true,
     });
   }
+  if (toolState.size === 0 && reason === undefined && rawErrorFinishReason !== undefined) {
+    throw new LlmError({
+      kind: "server",
+      message: `${providerId} aborted generation with finish_reason=${rawFinishReason ?? rawErrorFinishReason}`,
+      retryable: true,
+    });
+  }
   const resolvedReason = toolState.size > 0 && (reason === undefined || reason === "stop")
     ? "tool-use"
     : (reason ?? "stop");
+  if (
+    !emittedContent
+    && toolState.size === 0
+    && resolvedReason === "stop"
+    && (reportedOutputTokens === undefined || reportedOutputTokens === 0)
+  ) {
+    throw new LlmError({
+      kind: "server",
+      message: `${providerId} returned an empty response stream (0 output tokens)`,
+      retryable: true,
+    });
+  }
   yield { type: "finish", reason: resolvedReason };
 }
 

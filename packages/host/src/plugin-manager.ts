@@ -598,7 +598,7 @@ export class PluginManager {
   async install(params: PluginInstallParams): Promise<PluginMutationResult> {
     let installedId = "";
     await this.enqueue(async () => {
-      const installed = installPlugin(this.options.dataDir, params);
+      const installed = await installPlugin(this.options.dataDir, params);
       installedId = installed.manifest.id;
       this.bundles.invalidateDir(installed.manifest.dir);
       this.circuitBroken.delete(installedId);
@@ -625,7 +625,7 @@ export class PluginManager {
 
       const updatedIds = new Set<string>();
       for (const pluginId of ids) {
-        const updated = updateInstalledPlugin(this.options.dataDir, pluginId);
+        const updated = await updateInstalledPlugin(this.options.dataDir, pluginId);
         this.bundles.invalidateDir(updated.manifest.dir);
         this.circuitBroken.delete(updated.manifest.id);
         this.errors.delete(updated.manifest.id);
@@ -1001,7 +1001,7 @@ export class PluginManager {
             `${Date.now()}-${this.importCounter}`,
             candidate.dir,
           );
-          nextPlugin = resolveCordisPluginExport(mod, candidate.id);
+          nextPlugin = resolveCordisPluginExport(mod, candidate.id, candidate.inject);
           const depMeta = extractPluginDependencyMeta(mod, {
             inject: candidate.inject,
             provides: candidate.provides,

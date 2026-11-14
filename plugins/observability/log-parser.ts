@@ -41,6 +41,7 @@ const CORDIS_STDERR_LINE_RE =
   /^(?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+)?\[([IWED])\]\s+([^\s]+)\s*(.*)$/;
 
 const STACK_CONTINUATION_BODY_RE = /^(?:\s{2,}(?:at\b|\d+:)|Backtrace:$|Caused by:)/;
+const JS_ERROR_CONTINUATION_RE = /^(?:(?:[A-Z][A-Za-z0-9_]*)?(?:Error|Exception):|Uncaught\s+[A-Z])/;
 
 const LOG_FILE_DATE_RE = /^(?:desktop|host)-(\d{4}-\d{2}-\d{2})\.log$/;
 
@@ -83,6 +84,7 @@ export function extractPluginId(
   component: string,
   message: string,
   stack?: string,
+  knownPluginIds?: ReadonlySet<string>,
 ): string | undefined {
   const slotMatch = /^plugin-slot:([a-z0-9][a-z0-9._-]{0,63}):/i.exec(component);
   if (isValidPluginId(slotMatch?.[1])) return slotMatch[1];
@@ -99,10 +101,22 @@ export function extractPluginId(
     /\(plugin:([a-z0-9][a-z0-9._-]{0,63})\)/i,
     /\bplugin:([a-z0-9][a-z0-9._-]{0,63})(?=[\s):,/]|$)/i,
     /\bplugin\s+"([a-z0-9][a-z0-9._-]{0,63})"/i,
+    /\bqianji-plugin:\/\/([a-z0-9][a-z0-9._-]{0,63})\//i,
+    /\/plugins\/([a-z0-9][a-z0-9._-]{0,63})\/client\.js(?=[?:#\s)/]|$)/i,
   ];
   for (const re of patterns) {
     const match = re.exec(combined);
     if (isValidPluginId(match?.[1])) return match[1];
+  }
+
+  if (component === "rpc" && knownPluginIds !== undefined && knownPluginIds.size > 0) {
+    const rpcMatch = /^[a-z0-9]+\s+([a-z0-9_-]+)\.[a-z0-9_.-]+\s+failed\b/i.exec(message);
+    const ns = rpcMatch?.[1];
+    if (ns !== undefined) {
+      if (knownPluginIds.has(ns) && isValidPluginId(ns)) return ns;
+      const hyphenated = ns.replace(/_/g, "-");
+      if (knownPluginIds.has(hyphenated) && isValidPluginId(hyphenated)) return hyphenated;
+    }
   }
 
   if (component === "plugins") {
@@ -338,18 +352,26 @@ function classifyDesktopBody(rawBody: string): {
   };
 }
 
-function finalizeEntry(draft: ParsedLogEntry, stackLines: string[]): ParsedLogEntry {
+function finalizeEntry(
+  draft: ParsedLogEntry,
+  stackLines: string[],
+  knownPluginIds?: ReadonlySet<string>,
+): ParsedLogEntry {
   if (stackLines.length > 0) {
     draft.stack = stackLines.join("\n");
   }
-  const attributed = extractPluginId(draft.component, draft.message, draft.stack);
+  const attributed = extractPluginId(draft.component, draft.message, draft.stack, knownPluginIds);
   if (attributed !== undefined) {
     draft.pluginId = attributed;
   }
   return draft;
 }
 
-export function parseDesktopLogText(content: string, fileName: string): ParsedLogEntry[] {
+export function parseDesktopLogText(
+  content: string,
+  fileName: string,
+  knownPluginIds?: ReadonlySet<string>,
+): ParsedLogEntry[] {
   if (content === "") return [];
   const rawLines = content.split(/\r?\n/);
   const entries: ParsedLogEntry[] = [];
@@ -370,15 +392,32 @@ export function parseDesktopLogText(content: string, fileName: string): ParsedLo
     const timestamp = match[1] ?? "";
     const body = match[2] ?? "";
 
+    if (current !== undefined && body.startsWith("[harness|]")) {
+      const stripped = body.startsWith("[harness|] ")
+        ? body.slice("[harness|] ".length)
+        : body.slice("[harness|]".length);
+      stackLines.push(stripped);
+      continue;
+    }
+
     // Sidecar stderr or multi-line outputs forwarded line-by-line can carry a fresh timestamp
-    // followed immediately by indented stack frames (`    at ...`) or `Backtrace:`.
-    if (current !== undefined && STACK_CONTINUATION_BODY_RE.test(body)) {
+    // followed immediately by indented stack frames (`    at ...`), `Backtrace:`,
+    // or a bare `Error:` / `TypeError:` header from legacy unframed multi-line output.
+    const entryEpochMs = parseTimestampEpoch(timestamp);
+    const closeInTime =
+      current !== undefined &&
+      (entryEpochMs === 0 || current.epochMs === 0 || Math.abs(entryEpochMs - current.epochMs) <= 250);
+    if (
+      current !== undefined &&
+      (STACK_CONTINUATION_BODY_RE.test(body) ||
+        (JS_ERROR_CONTINUATION_RE.test(body) && (current.plane === "host" || stackLines.length === 0) && closeInTime))
+    ) {
       stackLines.push(body);
       continue;
     }
 
     if (current !== undefined) {
-      entries.push(finalizeEntry(current, stackLines));
+      entries.push(finalizeEntry(current, stackLines, knownPluginIds));
       stackLines = [];
     }
 
@@ -403,12 +442,16 @@ export function parseDesktopLogText(content: string, fileName: string): ParsedLo
   }
 
   if (current !== undefined) {
-    entries.push(finalizeEntry(current, stackLines));
+    entries.push(finalizeEntry(current, stackLines, knownPluginIds));
   }
   return entries;
 }
 
-export function parseHostLogText(content: string, fileName: string): ParsedLogEntry[] {
+export function parseHostLogText(
+  content: string,
+  fileName: string,
+  knownPluginIds?: ReadonlySet<string>,
+): ParsedLogEntry[] {
   if (content === "") return [];
   const rawLines = content.split(/\r?\n/);
   const entries: ParsedLogEntry[] = [];
@@ -427,7 +470,7 @@ export function parseHostLogText(content: string, fileName: string): ParsedLogEn
     }
 
     if (current !== undefined) {
-      entries.push(finalizeEntry(current, stackLines));
+      entries.push(finalizeEntry(current, stackLines, knownPluginIds));
       stackLines = [];
     }
 
@@ -450,7 +493,7 @@ export function parseHostLogText(content: string, fileName: string): ParsedLogEn
   }
 
   if (current !== undefined) {
-    entries.push(finalizeEntry(current, stackLines));
+    entries.push(finalizeEntry(current, stackLines, knownPluginIds));
   }
   return entries;
 }
@@ -466,14 +509,15 @@ export function loadDateLogEntries(
   date: string,
   dedupeMirroredStderr: boolean,
   liveEntries: readonly LogEntry[] = [],
+  knownPluginIds?: ReadonlySet<string>,
 ): LogEntry[] {
   const desktopFile = `desktop-${date}.log`;
   const hostFile = `host-${date}.log`;
   const desktopPath = join(logsDir, desktopFile);
   const hostPath = join(logsDir, hostFile);
 
-  const desktopParsed = parseDesktopLogText(readTailUtf8(desktopPath), desktopFile);
-  const hostParsed = parseHostLogText(readTailUtf8(hostPath), hostFile);
+  const desktopParsed = parseDesktopLogText(readTailUtf8(desktopPath), desktopFile, knownPluginIds);
+  const hostParsed = parseHostLogText(readTailUtf8(hostPath), hostFile, knownPluginIds);
   const hasHostSource = hostParsed.length > 0 || existsSync(hostPath);
 
   const merged: Array<{ entry: LogEntry; order: number }> = [];
@@ -667,14 +711,19 @@ function deriveIncidentFromLogEntry(entry: LogEntry): CrashRecord | undefined {
     };
   }
 
-  if (entry.plane === "host" && entry.component === "plugins" && entry.level === "error" && entry.pluginId !== undefined) {
+  if (
+    entry.plane === "host" &&
+    (entry.component === "plugins" || entry.component === "rpc") &&
+    entry.level === "error" &&
+    entry.pluginId !== undefined
+  ) {
     return {
       v: 1,
       id: `log:${entry.id}`,
       timestamp: entry.timestamp,
       plane: "host",
       kind: "plugin_error",
-      summary: entry.message,
+      summary: entry.component === "rpc" ? `[rpc] ${entry.message}` : entry.message,
       ...(entry.stack === undefined ? {} : { detail: entry.stack }),
       pluginId: entry.pluginId,
     };
@@ -683,11 +732,35 @@ function deriveIncidentFromLogEntry(entry: LogEntry): CrashRecord | undefined {
   return undefined;
 }
 
+function normalizeIncidentSignature(rec: CrashRecord): string {
+  const firstLine = rec.summary.split(/\r?\n/, 1)[0] ?? "";
+  let normalized = firstLine.trim();
+  if (rec.kind === "plugin_error") {
+    normalized = normalized
+      .replace(/^\[client:[^\]]+\]\s*plugin=[^:\s]+:\s*/i, "")
+      .replace(/^\[[^\]]+\]\s*/, "")
+      .replace(/^\(plugin[-a-z]*:[^)]+\)\s*/i, "")
+      .replace(/,\s*keeping previous fiber\b/gi, "")
+      .replace(/^plugin[=\s]+[^\s:]+\s+(?:(?:reload|HMR)\s+)?(?:import|apply|client bundle compile|reload)\s+failed(?:\s*\([^)]*\))?:\s*/i, "")
+      .replace(/^HMR sync failed for\s+[^:\s]+:\s*/i, "")
+      .replace(/^client bundle compile failed for\s+[^:\s]+:\s*/i, "")
+      .replace(/^[a-z0-9_-]+\s+([a-z0-9_-]+\.[a-z0-9_.-]+\s+failed)\b/i, "$1");
+  } else {
+    normalized = normalized.replace(/\bpid=\d+\b/g, "pid=*");
+  }
+  return normalized.replace(/\s+/g, " ").toLowerCase();
+}
+
+function incidentFingerprint(rec: CrashRecord): string {
+  return `${rec.kind}\0${rec.pluginId ?? ""}\0${normalizeIncidentSignature(rec)}`;
+}
+
 export function collectDiagnosticsSnapshot(
   logsDir: string,
   options: {
     dedupeMirroredStderr: boolean;
     liveEntries: readonly LogEntry[];
+    knownPluginIds?: ReadonlySet<string>;
     now?: Date;
   },
 ): DiagnosticsSnapshot {
@@ -716,6 +789,7 @@ export function collectDiagnosticsSnapshot(
       date,
       options.dedupeMirroredStderr,
       date === today ? options.liveEntries : [],
+      options.knownPluginIds,
     );
     if (date === today) {
       todayEntries = entries;
@@ -736,11 +810,11 @@ export function collectDiagnosticsSnapshot(
     ...parseJsonlCrashFile(join(logsDir, "host-crashes.jsonl"), "host"),
   ];
 
-  const kept: Array<{ record: CrashRecord; epochMs: number; fromJsonl: boolean }> = [];
+  const distinctOccurrences: Array<{ record: CrashRecord; epochMs: number; fromJsonl: boolean; fingerprint: string }> = [];
 
   for (const rec of jsonlRecords) {
     const epochMs = parseTimestampEpoch(rec.timestamp);
-    const dup = kept.some(
+    const dup = distinctOccurrences.some(
       (k) =>
         k.record.kind === rec.kind
         && (k.record.pluginId ?? "") === (rec.pluginId ?? "")
@@ -748,13 +822,13 @@ export function collectDiagnosticsSnapshot(
         && Math.abs(k.epochMs - epochMs) <= 2_000,
     );
     if (!dup) {
-      kept.push({ record: rec, epochMs, fromJsonl: true });
+      distinctOccurrences.push({ record: rec, epochMs, fromJsonl: true, fingerprint: incidentFingerprint(rec) });
     }
   }
 
   // Ensure JSONL-only plugin crashes also reflect in pluginErrorCounts even when log files rotated.
   const jsonlPluginTotals: Record<string, number> = {};
-  for (const item of kept) {
+  for (const item of distinctOccurrences) {
     const pid = item.record.pluginId;
     if (pid !== undefined) {
       jsonlPluginTotals[pid] = (jsonlPluginTotals[pid] ?? 0) + 1;
@@ -768,7 +842,8 @@ export function collectDiagnosticsSnapshot(
 
   for (const cand of fallbackCandidates) {
     const epochMs = parseTimestampEpoch(cand.timestamp);
-    const coveredByJsonl = kept.some(
+    const fp = incidentFingerprint(cand);
+    const coveredByJsonl = distinctOccurrences.some(
       (k) =>
         k.fromJsonl
         && k.record.kind === cand.kind
@@ -777,21 +852,75 @@ export function collectDiagnosticsSnapshot(
     );
     if (coveredByJsonl) continue;
 
-    const coveredByLog = kept.some(
+    // Cross-plane same-event merge (e.g. Host `[client:load]` + WebView `plugin-load:<id>` within 5s).
+    const sameEvent = distinctOccurrences.find(
       (k) =>
         !k.fromJsonl
-        && k.record.kind === cand.kind
-        && (k.record.pluginId ?? "") === (cand.pluginId ?? "")
-        && k.record.summary === cand.summary
-        && Math.abs(k.epochMs - epochMs) <= 3_000,
+        && k.record.plane !== cand.plane
+        && k.fingerprint === fp
+        && Math.abs(k.epochMs - epochMs) <= 5_000,
     );
-    if (!coveredByLog) {
-      kept.push({ record: cand, epochMs, fromJsonl: false });
+    if (sameEvent !== undefined) {
+      if (sameEvent.record.detail === undefined && cand.detail !== undefined) {
+        sameEvent.record = { ...sameEvent.record, detail: cand.detail };
+      }
+      continue;
+    }
+    distinctOccurrences.push({ record: cand, epochMs, fromJsonl: false, fingerprint: fp });
+  }
+
+  // Group repeated occurrences by fingerprint so burst loops (e.g. 35 HMR compile errors) collapse into one card.
+  const grouped = new Map<string, {
+    latest: CrashRecord;
+    latestEpochMs: number;
+    firstSeenAt: string;
+    firstEpochMs: number;
+    occurrences: number;
+    fallbackDetail?: string;
+  }>();
+  for (const occ of distinctOccurrences) {
+    const existing = grouped.get(occ.fingerprint);
+    if (existing === undefined) {
+      grouped.set(occ.fingerprint, {
+        latest: occ.record,
+        latestEpochMs: occ.epochMs,
+        firstSeenAt: occ.record.timestamp,
+        firstEpochMs: occ.epochMs,
+        occurrences: 1,
+        ...(occ.record.detail !== undefined ? { fallbackDetail: occ.record.detail } : {}),
+      });
+      continue;
+    }
+    existing.occurrences += 1;
+    if (occ.epochMs < existing.firstEpochMs) {
+      existing.firstEpochMs = occ.epochMs;
+      existing.firstSeenAt = occ.record.timestamp;
+    }
+    if (occ.record.detail !== undefined) {
+      existing.fallbackDetail = occ.record.detail;
+    }
+    if (
+      occ.epochMs > existing.latestEpochMs
+      || (occ.epochMs === existing.latestEpochMs && occ.record.timestamp.localeCompare(existing.latest.timestamp) > 0)
+    ) {
+      existing.latest = occ.record;
+      existing.latestEpochMs = occ.epochMs;
     }
   }
 
-  kept.sort((a, b) => b.epochMs - a.epochMs || b.record.timestamp.localeCompare(a.record.timestamp));
-  const recentIncidents = kept.slice(0, MAX_INCIDENTS).map((item) => item.record);
+  const aggregated = [...grouped.values()].map((bucket) => {
+    const base: CrashRecord =
+      bucket.latest.detail === undefined && bucket.fallbackDetail !== undefined
+        ? { ...bucket.latest, detail: bucket.fallbackDetail }
+        : bucket.latest;
+    const item = bucket.occurrences > 1
+      ? { ...base, occurrences: bucket.occurrences, firstSeenAt: bucket.firstSeenAt }
+      : base;
+    return { record: item, epochMs: bucket.latestEpochMs };
+  });
+
+  aggregated.sort((a, b) => b.epochMs - a.epochMs || b.record.timestamp.localeCompare(a.record.timestamp));
+  const recentIncidents = aggregated.slice(0, MAX_INCIDENTS).map((item) => item.record);
 
   let errorLogsToday = 0;
   let warnLogsToday = 0;

@@ -220,7 +220,7 @@ export function buildRequestBody(request: LlmRequest, model?: ModelInfo): Record
   return body;
 }
 
-const FINISH_REASONS: Record<string, FinishReason> = {
+const FINISH_REASONS: Record<string, FinishReason | "retryable-error"> = {
   STOP: "stop",
   MAX_TOKENS: "length",
   SAFETY: "refusal",
@@ -229,7 +229,9 @@ const FINISH_REASONS: Record<string, FinishReason> = {
   PROHIBITED_CONTENT: "refusal",
   SPII: "refusal",
   IMAGE_SAFETY: "refusal",
-  MALFORMED_FUNCTION_CALL: "error",
+  MALFORMED_FUNCTION_CALL: "retryable-error",
+  UNEXPECTED_TOOL_CALL: "retryable-error",
+  OTHER: "retryable-error",
 };
 
 interface GeminiWirePart {
@@ -271,6 +273,9 @@ export async function* translateStream(
   let textIndex: number | undefined;
   let hasToolCalls = false;
   let reason: FinishReason | undefined;
+  let rawErrorReason: string | undefined;
+  let emittedContent = false;
+  let reportedOutputTokens: number | undefined;
 
   for await (const sse of events) {
     if (sse.data === "[DONE]" || sse.data.trim() === "") continue;
@@ -309,19 +314,23 @@ export async function* translateStream(
         if (part.thought === true) {
           thinkingIndex ??= next++;
           if (typeof part.text === "string" && part.text !== "") {
+            emittedContent = true;
             yield { type: "thinking-delta", index: thinkingIndex, text: part.text };
           }
           if (typeof part.thoughtSignature === "string" && part.thoughtSignature !== "") {
+            emittedContent = true;
             yield { type: "thinking-signature", index: thinkingIndex, signature: part.thoughtSignature };
           }
           continue;
         }
         if (typeof part.thoughtSignature === "string" && part.thoughtSignature !== "") {
           thinkingIndex ??= next++;
+          emittedContent = true;
           yield { type: "thinking-signature", index: thinkingIndex, signature: part.thoughtSignature };
         }
         if (part.functionCall !== undefined) {
           hasToolCalls = true;
+          emittedContent = true;
           const index = next++;
           const callId = part.functionCall.id && part.functionCall.id !== "" ? part.functionCall.id : `gemini_call_${index}`;
           yield { type: "tool-call-start", index, id: callId, name: part.functionCall.name ?? "" };
@@ -331,11 +340,19 @@ export async function* translateStream(
         }
         if (typeof part.text === "string" && part.text !== "") {
           textIndex ??= next++;
+          emittedContent = true;
           yield { type: "text-delta", index: textIndex, text: part.text };
         }
       }
       if (typeof candidate.finishReason === "string") {
-        reason = FINISH_REASONS[candidate.finishReason] ?? "stop";
+        const mapped = FINISH_REASONS[candidate.finishReason];
+        if (mapped === "retryable-error") {
+          rawErrorReason = candidate.finishReason;
+          reason = undefined;
+        } else {
+          rawErrorReason = undefined;
+          reason = mapped ?? "stop";
+        }
       }
     }
 
@@ -345,6 +362,7 @@ export async function* translateStream(
       const prompt = Math.max(0, (meta.promptTokenCount ?? 0) - cached);
       const candidates = meta.candidatesTokenCount ?? 0;
       const thoughts = meta.thoughtsTokenCount ?? 0;
+      reportedOutputTokens = candidates + thoughts;
       yield {
         type: "usage",
         usage: {
@@ -357,7 +375,14 @@ export async function* translateStream(
     }
   }
 
-  yield { type: "finish", reason: hasToolCalls ? "tool-use" : (reason ?? "stop") };
+  if (!hasToolCalls && rawErrorReason !== undefined) {
+    throw new LlmError({ kind: "server", message: `${providerId} aborted generation with finishReason=${rawErrorReason}`, retryable: true });
+  }
+  const finalReason = hasToolCalls ? "tool-use" : (reason ?? "stop");
+  if (!emittedContent && !hasToolCalls && finalReason === "stop" && (reportedOutputTokens === undefined || reportedOutputTokens === 0)) {
+    throw new LlmError({ kind: "server", message: `${providerId} returned an empty response stream (0 output tokens)`, retryable: true });
+  }
+  yield { type: "finish", reason: finalReason };
 }
 
 export class GeminiAdapter implements LlmAdapter {

@@ -231,6 +231,53 @@ export function apply(ctx: Context, config: ObservabilityPluginConfig = {}): voi
   const hostInfo = readHostInfo(ctx);
   const getDataDir = (): string => hostInfo.dataDir;
   const getLogsDir = (): string => join(hostInfo.dataDir, "logs");
+  let cachedKnownIds: { dataDir: string; at: number; ids: ReadonlySet<string> } | null = null;
+  const collectKnownPluginIds = (allowCache = false): ReadonlySet<string> => {
+    const dataDir = getDataDir();
+    const now = Date.now();
+    if (allowCache && cachedKnownIds && cachedKnownIds.dataDir === dataDir && now - cachedKnownIds.at < 2000) {
+      return cachedKnownIds.ids;
+    }
+    const ids = new Set<string>();
+    const scanDir = (dir: string): void => {
+      try {
+        if (!existsSync(dir)) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (entry.isDirectory() && !entry.name.startsWith(".")) {
+            ids.add(entry.name);
+          }
+        }
+      } catch {
+        // Ignore unreadable plugin directories during diagnostics collection.
+      }
+    };
+    scanDir(join(dataDir, "plugins"));
+    scanDir(join(dataDir, "bundled-plugins"));
+    scanDir(join(process.cwd(), "plugins"));
+    scanDir(join(process.execPath, "..", "bundled-plugins"));
+    scanDir(join(process.execPath, "..", "harness", "bundled-plugins"));
+    scanDir(join(process.execPath, "..", "resources", "harness", "bundled-plugins"));
+    try {
+      const storePath = join(dataDir, "plugins.json");
+      if (existsSync(storePath)) {
+        const parsed = JSON.parse(readFileSync(storePath, "utf8")) as {
+          plugins?: Record<string, unknown>;
+          workspacePlugins?: Record<string, unknown>;
+        };
+        for (const bucket of [parsed?.plugins, parsed?.workspacePlugins]) {
+          if (bucket && typeof bucket === "object" && !Array.isArray(bucket)) {
+            for (const id of Object.keys(bucket)) {
+              if (id.trim()) ids.add(id.trim());
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed plugins.json when gathering known IDs.
+    }
+    cachedKnownIds = { dataDir, at: now, ids };
+    return ids;
+  };
 
   ctx.effect(() => {
     const liveExporter: Exporter = {
@@ -249,7 +296,7 @@ export function apply(ctx: Context, config: ObservabilityPluginConfig = {}): voi
             ? message.type
             : "info";
         const component = message.name || "host";
-        const pluginId = extractPluginId(component, firstLine, stack);
+        const pluginId = extractPluginId(component, firstLine, stack, collectKnownPluginIds(true));
 
         liveLogs.push({
           id: `live:${message.sn}`,
@@ -341,6 +388,7 @@ export function apply(ctx: Context, config: ObservabilityPluginConfig = {}): voi
     const snap = collectDiagnosticsSnapshot(logsDir, {
       dedupeMirroredStderr: dedupe,
       liveEntries: liveLogs,
+      knownPluginIds: collectKnownPluginIds(),
     });
     const lastAckedAt = readLastAckedAt(logsDir);
     const mem = process.memoryUsage();
@@ -402,10 +450,11 @@ export function apply(ctx: Context, config: ObservabilityPluginConfig = {}): voi
       includeLiveOnFallback = true;
     }
 
+    const knownPluginIds = collectKnownPluginIds();
     const combined: LogEntry[] = [];
     for (const d of targetDates) {
       const useLive = d === today || includeLiveOnFallback;
-      combined.push(...loadDateLogEntries(logsDir, d, dedupe, useLive ? liveLogs : []));
+      combined.push(...loadDateLogEntries(logsDir, d, dedupe, useLive ? liveLogs : [], knownPluginIds));
     }
 
     const planeFilter =
@@ -450,8 +499,21 @@ export function apply(ctx: Context, config: ObservabilityPluginConfig = {}): voi
   };
 
   const ackIncidents = (): ObservabilityAckResult => {
-    const acknowledgedAt = new Date().toISOString();
-    writeLastAckedAt(getLogsDir(), acknowledgedAt);
+    const logsDir = getLogsDir();
+    const snap = collectDiagnosticsSnapshot(logsDir, {
+      dedupeMirroredStderr: config.dedupeMirroredStderr ?? true,
+      liveEntries: liveLogs,
+      knownPluginIds: collectKnownPluginIds(),
+    });
+    let maxEpochMs = Date.now();
+    for (const item of snap.recentIncidents) {
+      const epoch = Date.parse(item.timestamp);
+      if (Number.isFinite(epoch) && epoch > maxEpochMs) {
+        maxEpochMs = epoch;
+      }
+    }
+    const acknowledgedAt = new Date(maxEpochMs).toISOString();
+    writeLastAckedAt(logsDir, acknowledgedAt);
     return { acknowledgedAt };
   };
 

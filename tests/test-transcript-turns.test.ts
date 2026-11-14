@@ -100,4 +100,16 @@ test("transcript turns", async () => {
     assert.doesNotMatch(draftThinking.text, /### 1/);
     assert.doesNotMatch(draftThinking.text, /好的，我来给你整理/);
   }
+
+  const failedAfterPartialTool = mergeAssistantTurn([
+    step1,
+    assistant({
+      id: "err-step",
+      isError: true,
+      content: "provider returned an empty response stream (0 output tokens)",
+      toolCalls: [{ id: "partial", name: "read", args: {}, running: false, isError: true }],
+    }),
+  ]);
+  assert.equal(failedAfterPartialTool.isError, true);
+  assert.equal(failedAfterPartialTool.content, "provider returned an empty response stream (0 output tokens)");
 });
