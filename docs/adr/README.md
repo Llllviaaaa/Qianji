@@ -12,8 +12,8 @@ V2 重构（[REFACTOR_V2_PLAN.md](../archive/REFACTOR_V2_PLAN.md)）期间的架
 | [0006](0006-better-sidebar-in-host.md) | better-sidebar 宿主端并入 Host（边界例外） | 已接受 |
 | [0007](0007-llm-layer.md) | LLM 层：统一词汇、适配器与密钥引用 | 已接受，部分由 0018 修订 |
 | [0008](0008-agent-loop-and-sessions.md) | Agent loop、会话与工具管线 | 已接受，部分由 0019 修订 |
-| [0009](0009-feature-plugins.md) | 能力迁移（一）：交互、权限、checkpoint、计划、记忆、hooks | 已接受 |
-| [0010](0010-subagents-mcp-usage.md) | 能力迁移（二）：子 agent、MCP、标题与用量 | 已接受 |
+| [0009](0009-feature-plugins.md) | 能力迁移（一）：交互、权限、checkpoint、计划、记忆、hooks | 已接受，部分由 0022 扩展 |
+| [0010](0010-subagents-mcp-usage.md) | 能力迁移（二）：子 agent、MCP、标题与用量 | 已接受，部分由 0022 扩展 |
 | [0011](0011-computer-and-schedule.md) | 能力迁移（三）：computer use 与定时任务 | 已接受 |
 | [0012](0012-browser.md) | 能力迁移（四）：内置浏览器 | 已接受 |
 | [0013](0013-desktop-settings-and-secrets.md) | 桌面端设置、密钥与热重载 | 已接受 |
@@ -22,9 +22,10 @@ V2 重构（[REFACTOR_V2_PLAN.md](../archive/REFACTOR_V2_PLAN.md)）期间的架
 | [0016](0016-dynamic-plugins-and-hmr.md) | 动态插件内核、分层覆盖与全栈热重载 | 已接受，部分由 0017 修订 |
 | [0017](0017-plugin-trust-model.md) | 插件信任模型 | 已接受 |
 | [0018](0018-anthropic-adaptive-thinking-and-caching.md) | Anthropic 适配器：自适应 thinking 与提示词缓存 | 已接受 |
-| [0019](0019-context-pressure.md) | 上下文压力：提前压缩、摘要请求收缩与工具输出上限 | 已接受 |
+| [0019](0019-context-pressure.md) | 上下文压力：提前压缩、摘要请求收缩与工具输出上限 | 已接受，部分由 0022 扩展 |
 | [0020](0020-tool-guards.md) | 工具调用的时限与重复提醒 | 已接受 |
 | [0021](0021-powershell-fallback.md) | Windows 上没有 Git Bash 时改用 PowerShell | 已接受 |
+| [0022](0022-agent-capability-enhancements.md) | Agent 核心能力五向演进（Hashline 编辑、隔离 Subagent、滑动压缩与分支摘要、受管后台进程、渐进式记忆索引） | 已接受 |
 
 ## 旧名对照
 

@@ -2,11 +2,21 @@
  * Taken from the Pi engine's pidesktop-memory-core.ts, extended with dual-layer
  * scopes (`user` / `project`) and unified diff generation for write approvals.
  */
-export type MemoryWriteAction = "append" | "replace" | "clear";
+import { upsertMemorySection } from "./index-search.ts";
+
+export type MemoryWriteAction = "append" | "replace" | "clear" | "upsert_section";
 export type MemoryScope = "user" | "project";
 
-export function nextMemoryContent(current: string, action: MemoryWriteAction, content?: string): string {
+export function nextMemoryContent(
+  current: string,
+  action: MemoryWriteAction,
+  content?: string,
+  section?: string,
+): string {
   if (action === "clear") return "";
+  if (action === "upsert_section") {
+    return upsertMemorySection(current, section ?? "", content ?? "");
+  }
   const value = content?.trim();
   if (!value) throw new Error(`content is required for ${action}`);
   return action === "append" && current.trim()

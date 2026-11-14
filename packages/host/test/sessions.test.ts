@@ -170,6 +170,38 @@ describe("session RPC", () => {
     expect((await client.call("session.get", { sessionId })).result).toMatchObject({ model: { model: "other" }, effort: "high" });
   });
 
+  it("records explicit branchSummary and auto-summarizes dropped branches on session.rewind", async () => {
+    const provider = new ScriptedProvider([
+      textReply("Tried approach A and failed."),
+      textReply("Trying approach B now."),
+      textReply("Bullet summary: approach B failed on foo.ts."),
+    ]);
+    const { port, cwd } = await startHost(provider);
+    const client = await connect(port);
+    const sessionId = (await client.call("session.create", { cwd })).result.session.id;
+    await client.call("session.subscribe", { sessionId });
+
+    // Explicit branchSummary on rewind
+    await client.call("session.prompt", { sessionId, content: "Solve task" });
+    await client.until(settled);
+    await client.call("session.rewind", { sessionId, toSeq: 1, branchSummary: "Explicit dead-end note." });
+
+    // Subsequent prompt sees explicit branchSummary in messages
+    await client.call("session.prompt", { sessionId, content: "Retry cleanly" });
+    await client.until(settled);
+    const messagesSeenOnRetry = provider.requests[1]?.messages ?? [];
+    expect(JSON.stringify(messagesSeenOnRetry)).toContain("Explicit dead-end note.");
+
+    // Now rewind back with summarizeDropped: true
+    await client.call("session.rewind", { sessionId, toSeq: 1, summarizeDropped: true });
+    const summaryRequest = provider.requests[2];
+    expect(JSON.stringify(summaryRequest?.messages)).toContain("Summarize the abandoned branch below");
+    expect(JSON.stringify(summaryRequest?.messages)).toContain("Trying approach B now.");
+    const afterRewind = await client.call("session.subscribe", { sessionId });
+    const rewindEvent = afterRewind.result.events.findLast((e: { type: string }) => e.type === "rewind");
+    expect(rewindEvent?.data.branchSummary).toBe("Bullet summary: approach B failed on foo.ts.");
+  });
+
   it("answers with protocol errors", async () => {
     const provider = new ScriptedProvider([[{ type: "text-delta", index: 0, text: "…" }, { type: "finish", reason: "stop" }]], { chunkDelayMs: 30 });
     const { port, cwd } = await startHost(provider);

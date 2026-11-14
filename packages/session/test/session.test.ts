@@ -1,6 +1,7 @@
 import { Context } from "@deepseek-ai/cordis";
 import { describe, expect, it } from "vitest";
 import {
+  BRANCH_SUMMARY_PREFIX,
   COMPACTION_CONTINUE_SUFFIX,
   COMPACTION_PREFIX,
   CONTINUATION_NAMESPACE,
@@ -12,6 +13,7 @@ import {
   deriveState,
   forkEvents,
   settledSeq,
+  slidingCompactionPoint,
   summarize,
   uuidv7,
   type SessionEvent,
@@ -364,5 +366,70 @@ describe("sessions service", () => {
     await expect(ctx.sessions.setModel("missing-session", { provider: "p", model: "m" })).rejects.toThrow("No session missing-session");
     await expect(ctx.sessions.setEffort("missing-session", "high")).rejects.toThrow("No session missing-session");
     await ctx.fiber.dispose();
+  });
+
+  it("injects branchSummary notes cleanly, clears superseded notes on earlier rewinds, and preserves them on fork", () => {
+    const model = { provider: "p", model: "m" };
+    const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    seq = 0;
+    const u1 = ev("user", { content: text("Start") });
+    const a1 = ev("assistant", { content: [{ type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } }], model, stop: "tool-use", usage });
+    const tr1 = ev("tool-result", { callId: "c1", name: "read", content: text("file-a"), isError: false });
+    const uDead = ev("user", { content: text("Dead end path") });
+    const aDead = ev("assistant", { content: text("Failed attempt"), model, stop: "stop", usage });
+    const rw1 = ev("rewind", { toSeq: tr1.seq, branchSummary: "Approach A failed after reading a.ts." });
+    const u2 = ev("user", { content: text("Next path") });
+
+    const events = [u1, a1, tr1, uDead, aDead, rw1, u2];
+    const state = deriveState(events);
+    expect(state.messages.map((m) => m.role)).toEqual(["user", "assistant", "tool-result", "user", "user"]);
+    expect(state.messages[3]).toEqual({ role: "user", content: text(`${BRANCH_SUMMARY_PREFIX}Approach A failed after reading a.ts.`) });
+    expect(state.messages[4]).toEqual({ role: "user", content: text("Next path") });
+
+    // Never splits a tool-call from its tool-result if a rewind points at the assistant tool-call itself.
+    seq = 0;
+    const x1 = ev("user", { content: text("U") });
+    const x2 = ev("assistant", { content: [{ type: "tool-call", id: "tc", name: "read", arguments: {} }], model, stop: "tool-use", usage });
+    const xRw = ev("rewind", { toSeq: x2.seq, branchSummary: "Deferred until tool-result closes." });
+    const x3 = ev("tool-result", { callId: "tc", name: "read", content: text("ok"), isError: false });
+    const unsplit = deriveState([x1, x2, xRw, x3]);
+    expect(unsplit.messages.map((m) => m.role)).toEqual(["user", "assistant", "tool-result", "user"]);
+    expect(unsplit.messages[3]).toEqual({ role: "user", content: text(`${BRANCH_SUMMARY_PREFIX}Deferred until tool-result closes.`) });
+
+    // Forking preserves active branch summaries at renumbered anchor positions.
+    const forked = forkEvents(events, u2.seq);
+    expect(deriveState(forked).messages).toEqual(state.messages);
+
+    // Rewinding further back than an earlier rewind discards its descendant note.
+    const rwRoot = ev("rewind", { toSeq: u1.seq, branchSummary: "Root restart summary." });
+    const rewoundBack = deriveState([...events, rwRoot]);
+    expect(rewoundBack.messages).toEqual([
+      { role: "user", content: text("Start") },
+      { role: "user", content: text(`${BRANCH_SUMMARY_PREFIX}Root restart summary.`) },
+    ]);
+  });
+
+  it("slidingCompactionPoint keeps newest complete steps within token budget and falls back cleanly", () => {
+    const model = { provider: "p", model: "m" };
+    const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const chunk400 = "x".repeat(400); // ~100 tokens
+    seq = 0;
+    const u1 = ev("user", { content: text(`turn1-${chunk400}`) });
+    const a1 = ev("assistant", { content: text(`ans1-${chunk400}`), model, stop: "stop", usage });
+    const u2 = ev("user", { content: text(`turn2-${chunk400}`) });
+    const a2 = ev("assistant", { content: [{ type: "tool-call", id: "c2", name: "read", arguments: { text: chunk400 } }], model, stop: "tool-use", usage });
+    const tr2 = ev("tool-result", { callId: "c2", name: "read", content: text(`res2-${chunk400}`), isError: false });
+    const u3 = ev("user", { content: text(`turn3-${chunk400}`) });
+    const a3 = ev("assistant", { content: text(`ans3-${chunk400}`), model, stop: "stop", usage });
+    const all = [u1, a1, u2, a2, tr2, u3, a3];
+
+    // Budget enough only for unit 3 (u3+a3 ~204 tokens): cuts right after tr2 (keeps u3+a3)
+    expect(slidingCompactionPoint(all, 260)).toBe(tr2.seq);
+    // Larger budget keeps unit 2 (u2+a2+tr2) AND unit 3 intact without splitting a2/tr2
+    expect(slidingCompactionPoint(all, 650)).toBe(a1.seq);
+    // Tiny budget where even newest unit doesn't fit falls back to full compactionPoint(events, false)
+    expect(slidingCompactionPoint(all, 10)).toBe(a3.seq);
+    // Single-step log falls back to compactionPoint(events, false)
+    expect(slidingCompactionPoint([u1, a1], 10_000)).toBe(a1.seq);
   });
 });

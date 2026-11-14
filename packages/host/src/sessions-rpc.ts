@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import { AgentBusyError, NoModelError } from "@qianji/agent";
-import type { Effort, UserContent } from "@qianji/llm";
+import { BlockAssembler, type Effort, type LlmRequest, type UserContent } from "@qianji/llm";
 import "@qianji/pricing";
 import {
   ErrorCode,
@@ -27,7 +27,7 @@ import {
   type SessionSubscribeResult,
   type UsageSummaryResult,
 } from "@qianji/protocol";
-import { sessionMarkdown, settledSeq, type Session, type SessionSummary } from "@qianji/session";
+import { currentBranch, sessionMarkdown, settledSeq, type Session, type SessionEvent, type SessionSummary } from "@qianji/session";
 import { RpcError, type RpcCall } from "./rpc.ts";
 
 export const name = "qianji-sessions-rpc";
@@ -39,6 +39,92 @@ export interface Config {
 }
 
 const EFFORT_ID_RE = /^[a-zA-Z0-9._:-]{1,64}$/;
+const BRANCH_SUMMARY_EVENT_CHARS = 4_000;
+const BRANCH_SUMMARY_MAX_CHARS = 48_000;
+const BRANCH_SUMMARY_SYSTEM =
+  "You summarize an abandoned conversation branch before rewinding so the main branch retains concise, factual learnings without repeating dead ends.";
+const BRANCH_SUMMARY_REQUEST =
+  "Summarize the abandoned branch below in 3-6 concise bullet points: (1) what was attempted, (2) files touched or verified facts discovered, and (3) why it failed or was abandoned so future attempts do not repeat the same mistakes.";
+
+function clipSummaryText(text: string, limit: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= limit) return trimmed;
+  return `${trimmed.slice(0, limit)}…`;
+}
+
+function formatDroppedEvent(event: SessionEvent): string | undefined {
+  if (event.type === "user") {
+    const text = event.data.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
+    return text === "" ? undefined : `[user]: ${clipSummaryText(text, BRANCH_SUMMARY_EVENT_CHARS)}`;
+  }
+  if (event.type === "assistant") {
+    const parts: string[] = [];
+    for (const block of event.data.content) {
+      if (block.type === "text" && block.text.trim() !== "") parts.push(block.text.trim());
+      else if (block.type === "tool-call") parts.push(`[tool-call ${block.name}(${clipSummaryText(JSON.stringify(block.arguments), 400)})]`);
+    }
+    const text = parts.join("\n").trim();
+    return text === "" ? undefined : `[assistant]: ${clipSummaryText(text, BRANCH_SUMMARY_EVENT_CHARS)}`;
+  }
+  if (event.type === "tool-result") {
+    const text = event.data.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
+    if (text === "") return undefined;
+    const tag = event.data.isError ? `tool-result ${event.data.name} ERROR` : `tool-result ${event.data.name}`;
+    return `[${tag}]: ${clipSummaryText(text, BRANCH_SUMMARY_EVENT_CHARS)}`;
+  }
+  return undefined;
+}
+
+async function summarizeDroppedBranch(
+  ctx: Context,
+  target: Session,
+  toSeq: number,
+  signal: AbortSignal,
+  defaultModel: Config["defaultModel"],
+): Promise<string | undefined> {
+  const model = target.state().model ?? (typeof defaultModel === "function" ? defaultModel() : defaultModel);
+  if (model === undefined) return undefined;
+  const dropped = currentBranch(target.events).filter((event) => event.seq > toSeq);
+  if (dropped.length === 0) return undefined;
+
+  const lines: string[] = [];
+  let total = 0;
+  for (const event of dropped) {
+    const line = formatDroppedEvent(event);
+    if (line === undefined) continue;
+    if (total + line.length > BRANCH_SUMMARY_MAX_CHARS && lines.length > 0) break;
+    lines.push(line);
+    total += line.length;
+  }
+  if (lines.length === 0) return undefined;
+
+  const request: LlmRequest = {
+    provider: model.provider,
+    model: model.model,
+    system: BRANCH_SUMMARY_SYSTEM,
+    messages: [{ role: "user", content: [{ type: "text", text: `${BRANCH_SUMMARY_REQUEST}\n\n${lines.join("\n\n")}` }] }],
+    maxTokens: 1_024,
+  };
+  const assembler = new BlockAssembler();
+  try {
+    for await (const chunk of ctx.llm.stream(request, signal)) assembler.push(chunk);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    ctx.logger("sessions-rpc").warn("summarizing dropped branch for %s failed: %s", target.id, String(error));
+    return undefined;
+  }
+  if (signal.aborted) throw new Error("Request aborted");
+  const response = assembler.result();
+  const summary = response.message.content
+    .flatMap((block) => (block.type === "text" ? [block.text] : []))
+    .join("")
+    .trim();
+  if (response.reason === "error" || response.reason === "aborted" || summary === "") {
+    ctx.logger("sessions-rpc").warn("summarizing dropped branch for %s failed: %s", target.id, response.error?.message ?? response.reason);
+    return undefined;
+  }
+  return summary;
+}
 
 type Params = Record<string, unknown>;
 
@@ -261,13 +347,31 @@ export function apply(ctx: Context, config: Config = {}): void {
       return { session: ctx.sessions.fork(source, seq).summary() };
     },
 
-    "session.rewind": async (p): Promise<AppendResult> => {
+    "session.rewind": async (p, call): Promise<AppendResult> => {
       const target = await session(p);
       idle(target);
       const toSeq = optionalSeq(p, "toSeq");
       if (toSeq === undefined || toSeq > target.lastSeq) throw new RpcError(ErrorCode.InvalidParams, "toSeq must be a seq of this session");
       const reason = typeof p.reason === "string" ? p.reason : undefined;
-      return { seq: target.append("rewind", reason === undefined ? { toSeq } : { toSeq, reason }).seq };
+      if (p.branchSummary !== undefined && typeof p.branchSummary !== "string") {
+        throw new RpcError(ErrorCode.InvalidParams, "branchSummary must be a string");
+      }
+      if (p.summarizeDropped !== undefined && typeof p.summarizeDropped !== "boolean") {
+        throw new RpcError(ErrorCode.InvalidParams, "summarizeDropped must be a boolean");
+      }
+      const explicitSummary = typeof p.branchSummary === "string" && p.branchSummary.trim() !== "" ? p.branchSummary.trim() : undefined;
+      const branchSummary = explicitSummary ?? (
+        p.summarizeDropped === true
+          ? await summarizeDroppedBranch(ctx, target, toSeq, call.signal, config.defaultModel)
+          : undefined
+      );
+      return {
+        seq: target.append("rewind", {
+          toSeq,
+          ...(reason === undefined ? {} : { reason }),
+          ...(branchSummary === undefined ? {} : { branchSummary }),
+        }).seq,
+      };
     },
 
     "session.compact": async (p, call): Promise<Partial<AppendResult>> => {

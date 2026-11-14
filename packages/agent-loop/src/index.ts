@@ -20,7 +20,7 @@ import {
   type RunOutcome,
 } from "@qianji/agent";
 import { BlockAssembler, type LlmRequest, type Message, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
-import { CONTINUATION_NAMESPACE, compactionPoint, deriveState, type EventOf, type ModelRef, type Session } from "@qianji/session";
+import { CONTINUATION_NAMESPACE, compactionPoint, deriveState, slidingCompactionPoint, type EventOf, type ModelRef, type Session } from "@qianji/session";
 import "@qianji/system-prompt";
 import "@qianji/tools";
 import { SUMMARY_CLIP_LEVELS, shrinkForSummary } from "./summary-input.ts";
@@ -45,6 +45,8 @@ export interface AgentLoopConfig {
   compactAtContextRatio?: number;
   /** Output budget of the compaction summary call. */
   summaryMaxTokens?: number;
+  /** Approximate recent tokens kept verbatim during mid-run proactive compaction (`turn >= 2`). Default `12_000`. */
+  keepRecentTokens?: number;
 }
 
 export const COMPACTION_SYSTEM = `You summarize a conversation between a user and a coding agent so the agent can continue the work with only your summary as context.`;
@@ -76,6 +78,7 @@ interface Run {
 
 const IDLE_QUEUE = { steer: 0, followUp: 0 };
 const DEFAULT_COMPACT_RATIO = 0.8;
+const DEFAULT_KEEP_RECENT_TOKENS = 12_000;
 /** A context this small is never worth summarizing, so its model's window is not even looked up. */
 const MIN_COMPACT_TOKENS = 8_192;
 /** How long a model's context window is remembered, and how long its lookup may take. */
@@ -136,7 +139,7 @@ export class AgentLoop extends Service implements Agents {
 
   async compact(session: Session, signal?: AbortSignal): Promise<EventOf<"compaction"> | undefined> {
     if (this.runs.has(session.id)) throw new AgentBusyError(session.id);
-    return this.summarize(session, signal ?? new AbortController().signal, true);
+    return this.summarize(session, signal ?? new AbortController().signal, "keepLatestTurn");
   }
 
   status(sessionId: string): AgentStatus {
@@ -222,7 +225,7 @@ export class AgentLoop extends Service implements Agents {
         && response.message.content.length === 0 && !compactedForLength) {
         // Nothing was said yet: shrink the context and try the same turn again.
         compactedForLength = true;
-        if (await this.summarize(session, signal) !== undefined) {
+        if (await this.summarize(session, signal, "full") !== undefined) {
           turn -= 1;
           continue;
         }
@@ -347,7 +350,7 @@ export class AgentLoop extends Service implements Agents {
     if (explicit === undefined && used <= MIN_COMPACT_TOKENS) return;
     const limit = explicit ?? await this.contextLimit(state.model);
     if (limit === undefined || used <= limit) return;
-    await this.summarize(session, signal, keepLatestTurn);
+    await this.summarize(session, signal, keepLatestTurn ? "keepLatestTurn" : "sliding");
   }
 
   /** The token count past which `model`'s context counts as full, when its window is known. */
@@ -375,12 +378,19 @@ export class AgentLoop extends Service implements Agents {
 
   /**
    * Summarize the log and append a compaction; undefined when it failed.
-   * Mid-run the latest turn is what grew, so it is summarized too; on request
-   * the latest turn stays verbatim.
+   * Mid-run (`sliding`) keeps the recent step window verbatim while compacting
+   * earlier history; on turn 1 or manual compact (`keepLatestTurn`) the active
+   * user turn stays verbatim; emergency overflow (`full`) summarizes all history.
    */
-  private async summarize(session: Session, signal: AbortSignal, keepLatestTurn = false): Promise<EventOf<"compaction"> | undefined> {
+  private async summarize(
+    session: Session,
+    signal: AbortSignal,
+    mode: "full" | "keepLatestTurn" | "sliding" = "full",
+  ): Promise<EventOf<"compaction"> | undefined> {
     const model = session.state().model;
-    const throughSeq = compactionPoint(session.events, keepLatestTurn);
+    const throughSeq = mode === "sliding"
+      ? slidingCompactionPoint(session.events, this.config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS)
+      : compactionPoint(session.events, mode === "keepLatestTurn");
     if (model === undefined || throughSeq === undefined) return undefined;
     this.delta(session, { type: "compaction-start" });
     const head = deriveState(session.events.filter((event) => event.seq <= throughSeq));

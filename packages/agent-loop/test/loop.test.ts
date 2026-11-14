@@ -401,4 +401,33 @@ describe("agent loop", () => {
     expect(capped.provider.requests).toHaveLength(3);
     expect(capped.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
   });
+
+  it("performs mid-run sliding compaction keeping the newest complete step verbatim", async () => {
+    const heavyStep2 = [
+      ...toolReply([{ id: "call-2", name: "echo", args: { text: "step-2-recent" } }]).slice(0, -2),
+      { type: "usage" as const, usage: { inputTokens: 90_000, outputTokens: 100 } },
+      { type: "finish" as const, reason: "tool-use" as const },
+    ];
+    const harness = await setup([
+      toolReply([{ id: "call-1", name: "echo", args: { text: "step-1" } }]),
+      heavyStep2,
+      textReply("Earlier step-1 done."),
+      textReply("Final answer."),
+    ], {
+      loop: { compactAboveTokens: 50_000, keepRecentTokens: 500 },
+    });
+    await run(harness, "Investigate two steps");
+    // Requests: [turn 1, turn 2, sliding summary call (at start of turn 3), turn 3]
+    expect(harness.provider.requests).toHaveLength(4);
+    const [, , summaryCall, resumedCall] = harness.provider.requests;
+    expect(JSON.stringify(summaryCall?.messages)).toContain("step-1");
+    expect(JSON.stringify(summaryCall?.messages)).not.toContain("step-2-recent");
+    expect(resumedCall?.messages[0]).toEqual({
+      role: "user",
+      content: text(`${COMPACTION_PREFIX}Earlier step-1 done.${COMPACTION_CONTINUE_SUFFIX}`),
+    });
+    expect(JSON.stringify(resumedCall?.messages.slice(1))).toContain("step-2-recent");
+    expect(JSON.stringify(resumedCall?.messages.slice(1))).not.toContain("step-1");
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+  });
 });

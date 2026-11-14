@@ -15,8 +15,10 @@ import { SectionOrder } from "@qianji/system-prompt";
 import { textOutput, type ToolDefinition, type ToolEnv } from "@qianji/tools";
 import "@qianji/ui";
 import { buildMemoryDiff, nextMemoryContent, type MemoryScope, type MemoryWriteAction } from "./core.ts";
+import { DEFAULT_MEMORY_INLINE_MAX_CHARS, formatMemoryDirectory, readMemorySlice, searchMemory } from "./index-search.ts";
 
 export * from "./core.ts";
+export * from "./index-search.ts";
 
 export const name = "qianji-memory";
 export const inject = ["tools", "systemPrompt"];
@@ -28,6 +30,8 @@ export interface Config {
   userEnabled?: boolean;
   /** Inject workspace `<project-memory>` section into the system prompt. Default `true`. */
   projectEnabled?: boolean;
+  /** Inline memory into system prompt up to this character threshold before switching to indexed mode (default 4000). */
+  inlineMaxChars?: number;
   /** Optional workspace trust gate for `<cwd>/.qianji/memory.md`. */
   isTrusted?: (cwd: string) => boolean;
 }
@@ -66,32 +70,46 @@ export interface MemoryToolOptions {
   isTrusted?: (cwd: string) => boolean;
 }
 
+export type MemoryToolArgs = {
+  action: "read" | "search" | MemoryWriteAction;
+  scope?: MemoryScope;
+  content?: string;
+  query?: string;
+  section?: string;
+  offset?: number;
+  limit?: number;
+};
+
 export function memoryTool(
   fileOrOptions: string | MemoryToolOptions,
-): ToolDefinition<{ action: "read" | MemoryWriteAction; scope?: MemoryScope; content?: string }> {
+): ToolDefinition<MemoryToolArgs> {
   const options: MemoryToolOptions = typeof fileOrOptions === "string" ? { file: fileOrOptions } : fileOrOptions;
   return {
     name: "desktop_memory",
     description: [
-      "Read or update the user's explicit local Qianji memory Markdown file (`scope: 'user'` for global preferences, or `scope: 'project'` for `<workspace>/.qianji/memory.md` project conventions).",
-      "Use append or replace only when the user explicitly asks you to remember something, or states a stable preference/convention that will clearly help future tasks.",
+      "Read, search, or update the user's explicit local Qianji memory Markdown file (`scope: 'user'` for global preferences, or `scope: 'project'` for `<workspace>/.qianji/memory.md` project conventions).",
+      "For large memories shown in indexed mode, use `search` (`query`) or targeted `read` (`section`, or `offset`/`limit`) instead of rewriting the whole file.",
+      "Use `upsert_section` (with `section` and `content`), `append`, or `replace` only when the user explicitly asks you to remember something or states a stable preference/convention.",
       "Do not store secrets, credentials, transient task details, guesses, or sensitive personal data.",
-      "Use read before replacing. Prefer append for a new independent entry and keep entries concise.",
     ].join(" "),
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["read", "append", "replace", "clear"] },
+        action: { type: "string", enum: ["read", "search", "append", "upsert_section", "replace", "clear"] },
         scope: {
           type: "string",
           enum: ["user", "project"],
           description: "Target memory layer: 'user' (global preferences, default) or 'project' (<workspace>/.qianji/memory.md)",
         },
-        content: { type: "string", description: "Markdown content for append or replace" },
+        content: { type: "string", description: "Markdown content for append, upsert_section, or replace" },
+        query: { type: "string", description: "Search keywords for action='search'" },
+        section: { type: "string", description: "Markdown section heading title for targeted read or upsert_section" },
+        offset: { type: "number", description: "1-based start line for paged read (with optional limit)" },
+        limit: { type: "number", description: "Max lines for paged read (default 100) or max search hits (default 10)" },
       },
       required: ["action"],
     },
-    async execute({ action, scope: rawScope, content }, env: ToolEnv) {
+    async execute({ action, scope: rawScope, content, query, section, offset, limit }, env: ToolEnv) {
       const scope: MemoryScope = rawScope === "project" ? "project" : "user";
       if (scope === "project" && options.isTrusted?.(env.cwd) === false) {
         return textOutput("Project memory is disabled because the current workspace is not trusted.", true);
@@ -99,13 +117,28 @@ export function memoryTool(
       const targetPath = scope === "project" ? projectMemoryPath(env.cwd) : options.file;
       const readPath = scope === "project" ? readableProjectMemoryPath(env.cwd) : options.file;
       const current = await readMemory(readPath);
-      if (action === "read") {
-        return textOutput(current || (scope === "project" ? "Project memory is empty." : "Local memory is empty."));
+      if (action === "search") {
+        if (query === undefined || query.trim() === "") {
+          return textOutput("desktop_memory failed: query is required for search", true);
+        }
+        if (current.trim() === "") {
+          return textOutput(scope === "project" ? "Project memory is empty." : "Local memory is empty.");
+        }
+        return textOutput(searchMemory(current, query, limit));
       }
-      if (!["append", "replace", "clear"].includes(action)) {
+      if (action === "read") {
+        if (current === "") {
+          return textOutput(scope === "project" ? "Project memory is empty." : "Local memory is empty.");
+        }
+        if (section !== undefined || offset !== undefined || limit !== undefined) {
+          return textOutput(readMemorySlice(current, { section, offset, limit }));
+        }
+        return textOutput(current);
+      }
+      if (!["append", "upsert_section", "replace", "clear"].includes(action)) {
         return textOutput(`Unknown action ${action}.`, true);
       }
-      const next = nextMemoryContent(current, action, content);
+      const next = nextMemoryContent(current, action, content, section);
       if (next === current) {
         return textOutput(scope === "project" ? "Project memory is already up to date." : "Local memory is already up to date.");
       }
@@ -150,17 +183,21 @@ export function memoryTool(
         return textOutput(
           action === "append"
             ? "Preference added to project memory."
-            : action === "clear"
-              ? "Project memory cleared."
-              : "Project memory replaced.",
+            : action === "upsert_section"
+              ? "Section updated in project memory."
+              : action === "clear"
+                ? "Project memory cleared."
+                : "Project memory replaced.",
         );
       }
       return textOutput(
         action === "append"
           ? "Preference added to local memory."
-          : action === "clear"
-            ? "Local memory cleared."
-            : "Local memory replaced.",
+          : action === "upsert_section"
+            ? "Section updated in local memory."
+            : action === "clear"
+              ? "Local memory cleared."
+              : "Local memory replaced.",
       );
     },
   };
@@ -221,6 +258,8 @@ export function apply(ctx: Context, config: Config): void {
     );
   }
 
+  const maxInlineChars = config.inlineMaxChars ?? DEFAULT_MEMORY_INLINE_MAX_CHARS;
+
   if (config.userEnabled !== false) {
     ctx.effect(
       () =>
@@ -229,7 +268,10 @@ export function apply(ctx: Context, config: Config): void {
           async () => {
             const memory = (await readMemory(config.file)).trim();
             if (memory === "") return undefined;
-            return `The user's saved preferences (local memory). Follow them unless the user says otherwise:\n<memory>\n${memory}\n</memory>`;
+            if (memory.length <= maxInlineChars) {
+              return `The user's saved preferences (local memory). Follow them unless the user says otherwise:\n<memory>\n${memory}\n</memory>`;
+            }
+            return `The user's saved preferences exceed the inline threshold (${memory.length} > ${maxInlineChars} chars); only a section directory is preloaded. Use \`desktop_memory\` (\`search\` or \`read\`) to inspect details:\n<memory mode="indexed">\n${formatMemoryDirectory(memory, "user")}\n</memory>`;
           },
           { order: SectionOrder.contextFiles + 50 },
         ),
@@ -246,7 +288,10 @@ export function apply(ctx: Context, config: Config): void {
             if (config.isTrusted?.(cwd) === false) return undefined;
             const memory = (await readMemory(readableProjectMemoryPath(cwd))).trim();
             if (memory === "") return undefined;
-            return `Project-specific conventions saved in .qianji/memory.md for this workspace. Follow them unless the user says otherwise:\n<project-memory>\n${memory}\n</project-memory>`;
+            if (memory.length <= maxInlineChars) {
+              return `Project-specific conventions saved in .qianji/memory.md for this workspace. Follow them unless the user says otherwise:\n<project-memory>\n${memory}\n</project-memory>`;
+            }
+            return `Project-specific conventions in .qianji/memory.md exceed the inline threshold (${memory.length} > ${maxInlineChars} chars); only a section directory is preloaded. Use \`desktop_memory\` (\`search\` or \`read\`, scope: "project") to inspect details:\n<project-memory mode="indexed">\n${formatMemoryDirectory(memory, "project")}\n</project-memory>`;
           },
           { order: SectionOrder.contextFiles + 60 },
         ),

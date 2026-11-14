@@ -26,7 +26,6 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "src/lib/intelligentUi.ts": 533,
   "src/lib/clientPluginRuntime.ts": 636,
   "src/lib/harnessRuntime.ts": 858,
-  "packages/protocol/src/methods.ts": 865,
   "packages/browser/src/driver.ts": 860,
   "packages/protocol/src/self-guard.ts": 849,
   "src/components/SideChatPanel.tsx": 789,
@@ -38,7 +37,6 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "src/stores/workbenchStore.ts": 581,
   "src/components/ModelPicker.tsx": 522,
   "src/types.ts": 501,
-  "packages/permissions/src/rules.ts": 501,
 };
 
 function countPhysicalLines(absolutePath: string): number {

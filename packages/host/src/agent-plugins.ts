@@ -268,6 +268,7 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
         file: config.memory.file ?? join(dataDir, "memory.md"),
         userEnabled: config.memory.enabled,
         projectEnabled: config.memory.projectEnabled ?? config.memory.enabled,
+        ...(config.memory.inlineMaxChars === undefined ? {} : { inlineMaxChars: config.memory.inlineMaxChars }),
         ...(options.isWorkspaceTrusted === undefined ? {} : { isTrusted: options.isWorkspaceTrusted }),
       },
     },

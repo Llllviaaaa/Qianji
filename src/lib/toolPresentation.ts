@@ -246,6 +246,31 @@ function replacementDiff(oldText: string, newText: string): ToolDiffLine[] {
   ].slice(0, DIFF_MAX_LINES);
 }
 
+function editsDiffLines(args: Record<string, unknown>, details: unknown): ToolDiffLine[] | null {
+  const detailDiff = typeof details === "object" && details !== null ? (details as { diff?: unknown }).diff : undefined;
+  if (typeof detailDiff === "string" && looksLikeUnifiedDiff(detailDiff)) {
+    return parseDiffLines(detailDiff);
+  }
+  if (!Array.isArray(args.edits)) return null;
+  const out: ToolDiffLine[] = [];
+  for (const item of args.edits) {
+    if (typeof item !== "object" || item === null) continue;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.anchor === "string") {
+      const span = typeof rec.endAnchor === "string" ? `${rec.anchor}..${rec.endAnchor}` : rec.anchor;
+      out.push({ type: "hunk", text: `@@ ${typeof rec.op === "string" ? rec.op : "replace"} ${span} @@` });
+      if (typeof rec.newText === "string" && rec.op !== "delete") {
+        for (const line of rec.newText.replace(/\r\n/g, "\n").split("\n")) out.push({ type: "add", text: line });
+      }
+      continue;
+    }
+    if (typeof rec.oldText === "string" && typeof rec.newText === "string") {
+      out.push(...replacementDiff(rec.oldText, rec.newText));
+    }
+  }
+  return out.length > 0 ? out.slice(0, DIFF_MAX_LINES) : null;
+}
+
 export function classifyToolKind(name: string): ToolKind {
   if (isWebSearchTool(name)) return "web-search";
   const lower = name.toLowerCase();
@@ -364,9 +389,9 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
   const diffSource = kind === "edit"
     ? (oldText != null && newText != null
       ? replacementDiff(oldText, newText)
-      : looksLikeUnifiedDiff(patch || call.result || "")
+      : editsDiffLines(call.args, call.details) ?? (looksLikeUnifiedDiff(patch || call.result || "")
         ? parseDiffLines(patch || call.result || "")
-        : null)
+        : null))
     : null;
   const counts = diffSource && diffSource.length > 0 ? diffCounts(diffSource) : undefined;
 

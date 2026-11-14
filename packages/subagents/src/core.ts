@@ -4,6 +4,8 @@
 export type SubagentRole = "explorer" | "planner" | "reviewer" | "worker";
 export type SubagentPermission = "read-only" | "workspace-write";
 
+export const SHELL_VERIFICATION_TOOLS = ["bash", "powershell", "diagnostics"] as const;
+
 export interface SubagentTask {
   label: string;
   task: string;
@@ -30,6 +32,19 @@ export function normalizeSubagentTasks(input: Array<Partial<SubagentTask>>): Sub
   });
 }
 
-export function subagentPrompt(task: SubagentTask): string {
-  return `${ROLE_PROMPTS[task.role]}\n\nDelegated task:\n${task.task}`;
+export interface SubagentPromptOptions {
+  allowShell?: boolean;
+  isolatedWorktree?: boolean;
+}
+
+export function subagentPrompt(task: SubagentTask, options: SubagentPromptOptions = {}): string {
+  const hints: string[] = [];
+  if (options.isolatedWorktree) {
+    hints.push("You are running in an isolated Git worktree branched from HEAD; focus solely on your delegated scope.");
+  }
+  if (options.allowShell) {
+    hints.push("You have verification shell/diagnostics access; run targeted checks (typecheck/tests) before finalizing your answer.");
+  }
+  const extra = hints.length > 0 ? `\n\nExecution environment:\n- ${hints.join("\n- ")}` : "";
+  return `${ROLE_PROMPTS[task.role]}${extra}\n\nDelegated task:\n${task.task}`;
 }
