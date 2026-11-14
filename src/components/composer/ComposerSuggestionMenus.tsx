@@ -1,209 +1,24 @@
-import { Fragment } from "react";
-import {
-  Activity,
-  BarChart3,
-  Blocks,
-  FileText,
-  Folder,
-  Globe,
-  ListChecks,
-  MessageSquarePlus,
-  Minimize2,
-  PanelsTopLeft,
-  Puzzle,
-  RotateCcw,
-  ScrollText,
-  Slash,
-  Sparkles,
-  Terminal,
-  type LucideIcon,
-} from "lucide-react";
+import { Fragment, type ReactNode } from "react";
+import { FileText, Folder, Maximize2, Minimize2 } from "lucide-react";
 import type { SlashCommand, WorkspaceDirEntry } from "../../types";
-import { MAX_COMMAND_MATCHES } from "./composerHelpers";
+import {
+  formatCommandDescription,
+  resolveSlashCommandMeta,
+  splitHighlightSegments,
+  useSuggestionMenuChrome,
+  type CommandMenuLayoutPrefs,
+  type SuggestionHoverPreview,
+} from "./slashCommandHelpers";
 
-export type SlashCommandGroupKey = "core" | "plugin" | "skill" | "system";
-export type SlashCommandBadgeTone = "builtin" | "feature" | "plugin" | "skill" | "mcp" | "diagnostic";
-
-export interface SlashCommandVisualMeta {
-  group: SlashCommandGroupKey;
-  groupLabel: string;
-  badgeLabel: string;
-  tone: SlashCommandBadgeTone;
-  Icon: LucideIcon;
-}
-
-const GROUP_RANK: Record<SlashCommandGroupKey, number> = {
-  core: 0,
-  plugin: 1,
-  skill: 2,
-  system: 3,
-};
-
-const CORE_COMMAND_ORDER = ["clear", "compact", "plan", "ui", "doctor"] as const;
-
-const COMMAND_ICON_BY_NAME: Record<string, LucideIcon> = {
-  clear: MessageSquarePlus,
-  compact: Minimize2,
-  doctor: Activity,
-  plan: ListChecks,
-  ui: PanelsTopLeft,
-  rewind: RotateCcw,
-  usage: BarChart3,
-  "session-usage": BarChart3,
-  logs: ScrollText,
-  "browser-diagnose": Globe,
-};
-
-function iconForTone(tone: SlashCommandBadgeTone): LucideIcon {
-  switch (tone) {
-    case "skill":
-      return Sparkles;
-    case "mcp":
-      return Blocks;
-    case "plugin":
-      return Puzzle;
-    case "builtin":
-      return Terminal;
-    default:
-      return Slash;
-  }
-}
-
-/** Resolve localized group, badge label, tone and icon for a slash command. */
-export function resolveSlashCommandMeta(
-  command: Pick<SlashCommand, "name" | "source">,
-): SlashCommandVisualMeta {
-  let group: SlashCommandGroupKey = "plugin";
-  let groupLabel = "插件扩展";
-  let badgeLabel = "插件";
-  let tone: SlashCommandBadgeTone = "plugin";
-
-  if (command.source === "builtin") {
-    group = "core";
-    groupLabel = "常用指令";
-    badgeLabel = "内置";
-    tone = "builtin";
-  } else if (command.source === "plan") {
-    group = "core";
-    groupLabel = "常用指令";
-    badgeLabel = "计划";
-    tone = "feature";
-  } else if (command.source === "intelligent-ui") {
-    group = "core";
-    groupLabel = "常用指令";
-    badgeLabel = "界面";
-    tone = "feature";
-  } else if (command.source === "skill" || command.name.startsWith("skill:")) {
-    group = "skill";
-    groupLabel = "工作区技能";
-    badgeLabel = "技能";
-    tone = "skill";
-  } else if (command.source === "mcp" || command.name.startsWith("mcp-")) {
-    group = "system";
-    groupLabel = "MCP 与诊断";
-    badgeLabel = "MCP";
-    tone = "mcp";
-  } else if (command.source === "browser") {
-    group = "system";
-    groupLabel = "MCP 与诊断";
-    badgeLabel = "诊断";
-    tone = "diagnostic";
-  }
-
-  return {
-    group,
-    groupLabel,
-    badgeLabel,
-    tone,
-    Icon: COMMAND_ICON_BY_NAME[command.name] ?? iconForTone(tone),
-  };
-}
-
-/** Normalize raw command descriptions by removing inline Markdown backticks and excess spacing. */
-export function formatCommandDescription(raw: string | undefined, fallback: string): string {
-  const cleaned = (raw ?? "")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned || fallback;
-}
-
-function compareCoreOrder(left: SlashCommand, right: SlashCommand, group: SlashCommandGroupKey): number {
-  if (group !== "core") return 0;
-  const leftOrder = CORE_COMMAND_ORDER.indexOf(left.name as (typeof CORE_COMMAND_ORDER)[number]);
-  const rightOrder = CORE_COMMAND_ORDER.indexOf(right.name as (typeof CORE_COMMAND_ORDER)[number]);
-  const leftRank = leftOrder === -1 ? 999 : leftOrder;
-  const rightRank = rightOrder === -1 ? 999 : rightOrder;
-  return leftRank - rightRank;
-}
-
-/** Filter and rank slash commands by exact/prefix/sub-token/substring/description match. */
-export function filterAndRankSlashCommands(
-  commands: SlashCommand[],
-  query: string | null,
-  limit = MAX_COMMAND_MATCHES,
-): SlashCommand[] {
-  if (query === null) return [];
-  const q = query.trim().toLowerCase();
-
-  if (q === "") {
-    return commands
-      .map((command) => ({ command, meta: resolveSlashCommandMeta(command) }))
-      .sort(
-        (left, right) =>
-          GROUP_RANK[left.meta.group] - GROUP_RANK[right.meta.group] ||
-          compareCoreOrder(left.command, right.command, left.meta.group) ||
-          left.command.name.localeCompare(right.command.name),
-      )
-      .slice(0, limit)
-      .map((item) => item.command);
-  }
-
-  const scored: Array<{ command: SlashCommand; meta: SlashCommandVisualMeta; score: number }> = [];
-  for (const command of commands) {
-    const nameLower = command.name.toLowerCase();
-    const descLower = (command.description ?? "").toLowerCase();
-    const meta = resolveSlashCommandMeta(command);
-    const badgeLower = meta.badgeLabel.toLowerCase();
-
-    let score: number | null = null;
-    if (nameLower === q) score = 0;
-    else if (nameLower.startsWith(q)) score = 1;
-    else if (nameLower.split(/[:-]/).slice(1).some((part) => part.startsWith(q))) score = 2;
-    else if (nameLower.includes(q)) score = 3;
-    else if (descLower.includes(q) || badgeLower.includes(q)) score = 4;
-
-    if (score !== null) scored.push({ command, meta, score });
-  }
-
-  return scored
-    .sort(
-      (left, right) =>
-        left.score - right.score ||
-        GROUP_RANK[left.meta.group] - GROUP_RANK[right.meta.group] ||
-        compareCoreOrder(left.command, right.command, left.meta.group) ||
-        left.command.name.localeCompare(right.command.name),
-    )
-    .slice(0, limit)
-    .map((item) => item.command);
-}
-
-/** Split text into matched/unmatched segments for the first case-insensitive query occurrence. */
-export function splitHighlightSegments(
-  text: string,
-  query: string | null,
-): Array<{ text: string; matched: boolean }> {
-  const q = query?.trim() ?? "";
-  if (!q) return [{ text, matched: false }];
-  const index = text.toLowerCase().indexOf(q.toLowerCase());
-  if (index < 0) return [{ text, matched: false }];
-
-  const segments: Array<{ text: string; matched: boolean }> = [];
-  if (index > 0) segments.push({ text: text.slice(0, index), matched: false });
-  segments.push({ text: text.slice(index, index + q.length), matched: true });
-  if (index + q.length < text.length) segments.push({ text: text.slice(index + q.length), matched: false });
-  return segments;
-}
+export {
+  filterAndRankSlashCommands,
+  formatCommandDescription,
+  resolveSlashCommandMeta,
+  splitHighlightSegments,
+  type SlashCommandBadgeTone,
+  type SlashCommandGroupKey,
+  type SlashCommandVisualMeta,
+} from "./slashCommandHelpers";
 
 function renderHighlightedName(text: string, query: string | null) {
   return splitHighlightSegments(text, query).map((segment, index) =>
@@ -233,6 +48,110 @@ function renderCommandName(name: string, query: string | null) {
     }
   }
   return renderHighlightedName(name, query);
+}
+
+function SuggestionMenuShell({
+  menuClassName,
+  menuRef,
+  layout,
+  isResizing,
+  title,
+  shortcuts,
+  isExpandedOrCustom,
+  onToggleExpand,
+  onResetWidth,
+  onResizePointerDown,
+  hoverPreview,
+  children,
+}: {
+  menuClassName: string;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  layout: CommandMenuLayoutPrefs;
+  isResizing: boolean;
+  title: ReactNode;
+  shortcuts: ReactNode;
+  isExpandedOrCustom: boolean;
+  onToggleExpand: () => void;
+  onResetWidth: () => void;
+  onResizePointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+  hoverPreview: SuggestionHoverPreview | null;
+  children: ReactNode;
+}) {
+  const inlineStyle =
+    !layout.expanded && layout.customWidth !== null
+      ? { width: `${layout.customWidth}px`, right: "auto" as const }
+      : undefined;
+
+  return (
+    <div
+      className={menuClassName}
+      ref={menuRef}
+      data-expanded={layout.expanded ? "true" : undefined}
+      data-resizing={isResizing ? "true" : undefined}
+      style={inlineStyle}
+    >
+      <div className="command-menu-header">
+        <span className="command-menu-title" aria-hidden="true">
+          {title}
+        </span>
+        <span className="command-menu-header-actions">
+          <span className="command-menu-shortcuts" aria-hidden="true">
+            {shortcuts}
+          </span>
+          <button
+            type="button"
+            className="command-menu-expand-btn"
+            data-active={isExpandedOrCustom ? "true" : undefined}
+            tabIndex={-1}
+            aria-label={isExpandedOrCustom ? "恢复默认宽度" : "展开面板宽度与完整介绍"}
+            title={isExpandedOrCustom ? "恢复默认宽度" : "展开面板宽度与完整介绍"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={onToggleExpand}
+          >
+            {isExpandedOrCustom ? (
+              <Minimize2 size={12} strokeWidth={1.9} />
+            ) : (
+              <Maximize2 size={12} strokeWidth={1.9} />
+            )}
+          </button>
+        </span>
+      </div>
+      {children}
+      {hoverPreview && (
+        <div
+          className="command-menu-tooltip"
+          data-placement={hoverPreview.placement}
+          style={
+            hoverPreview.placement === "above"
+              ? { bottom: `${hoverPreview.offsetPx}px` }
+              : { top: `${hoverPreview.offsetPx}px` }
+          }
+          role="tooltip"
+        >
+          <div className="command-menu-tooltip-head">
+            <span className="command-menu-tooltip-name">{hoverPreview.title}</span>
+            {hoverPreview.argsHint ? (
+              <span className="command-menu-tooltip-args">{hoverPreview.argsHint}</span>
+            ) : null}
+            {hoverPreview.badgeLabel ? (
+              <span className="command-menu-tooltip-badge">{hoverPreview.badgeLabel}</span>
+            ) : null}
+          </div>
+          <div className="command-menu-tooltip-desc">{hoverPreview.description}</div>
+        </div>
+      )}
+      <div
+        className="command-menu-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖拽调整面板宽度"
+        title="拖拽调整宽度（双击恢复默认）"
+        onMouseDown={(event) => event.preventDefault()}
+        onDoubleClick={onResetWidth}
+        onPointerDown={onResizePointerDown}
+      />
+    </div>
+  );
 }
 
 export function ComposerSuggestionMenus({
@@ -266,6 +185,24 @@ export function ComposerSuggestionMenus({
   suggestionMenuRef: React.RefObject<HTMLDivElement | null>;
   setSuggestionIndex: (next: number) => void;
 }) {
+  const {
+    layout,
+    isResizing,
+    hoverPreview,
+    isExpandedOrCustom,
+    handleToggleExpand,
+    handleResetWidth,
+    handleResizePointerDown,
+    clearHoverPreview,
+    scheduleHoverPreview,
+  } = useSuggestionMenuChrome({
+    commandMenuOpen,
+    mentionMenuOpen,
+    commandQuery,
+    mentionQuery,
+    suggestionMenuRef,
+  });
+
   const hasQuery = Boolean(commandQuery && commandQuery.trim() !== "");
   const commandEntries = commandMatches.map((command) => ({
     command,
@@ -276,23 +213,43 @@ export function ComposerSuggestionMenus({
   return (
     <>
       {commandMenuOpen && (
-        <div className="command-menu" ref={suggestionMenuRef}>
-          <div className="command-menu-header" aria-hidden="true">
-            <span className="command-menu-title">
+        <SuggestionMenuShell
+          menuClassName="command-menu"
+          menuRef={suggestionMenuRef}
+          layout={layout}
+          isResizing={isResizing}
+          title={
+            <>
               {hasQuery ? "匹配指令" : "快捷指令"}
               <span className="command-menu-count">{commandMatches.length}</span>
-            </span>
-            <span className="command-menu-shortcuts">
+            </>
+          }
+          shortcuts={
+            <>
               <span><kbd>↑↓</kbd> 选择</span>
               <span><kbd>↵</kbd> 填入</span>
               <span><kbd>Esc</kbd> 关闭</span>
-            </span>
-          </div>
-          <div className="command-menu-list" id={suggestionsId} role="listbox" aria-label="快捷指令">
+            </>
+          }
+          isExpandedOrCustom={isExpandedOrCustom}
+          onToggleExpand={handleToggleExpand}
+          onResetWidth={handleResetWidth}
+          onResizePointerDown={handleResizePointerDown}
+          hoverPreview={hoverPreview}
+        >
+          <div
+            className="command-menu-list"
+            id={suggestionsId}
+            role="listbox"
+            aria-label="快捷指令"
+            onMouseLeave={clearHoverPreview}
+            onScroll={clearHoverPreview}
+          >
             {commandEntries.map(({ command, meta }, index) => {
               const prevGroup = index > 0 ? commandEntries[index - 1]?.meta.group : undefined;
               const isActive = command === activeCommand;
               const { Icon } = meta;
+              const description = formatCommandDescription(command.description, meta.badgeLabel);
               return (
                 <Fragment key={`${command.source}-${command.name}`}>
                   {showGroupHeaders && (index === 0 || meta.group !== prevGroup) && (
@@ -308,7 +265,29 @@ export function ComposerSuggestionMenus({
                     role="option"
                     aria-selected={isActive}
                     tabIndex={-1}
-                    onMouseEnter={() => setSuggestionIndex(index)}
+                    onMouseEnter={(event) => {
+                      setSuggestionIndex(index);
+                      if (layout.expanded) return;
+                      const buttonEl = event.currentTarget;
+                      const descEl = buttonEl.querySelector<HTMLElement>(".command-item-desc");
+                      const argsEl = buttonEl.querySelector<HTMLElement>(".command-item-args");
+                      const nameEl = buttonEl.querySelector<HTMLElement>(".command-item-name");
+                      const isTruncated =
+                        Boolean(descEl && descEl.scrollWidth > descEl.clientWidth) ||
+                        Boolean(argsEl && argsEl.scrollWidth > argsEl.clientWidth) ||
+                        Boolean(nameEl && nameEl.scrollWidth > nameEl.clientWidth);
+                      if (!isTruncated) {
+                        clearHoverPreview();
+                        return;
+                      }
+                      scheduleHoverPreview(buttonEl, {
+                        key: `${command.source}-${command.name}`,
+                        title: `/${command.name}`,
+                        argsHint: command.argsHint,
+                        badgeLabel: meta.badgeLabel,
+                        description,
+                      });
+                    }}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => chooseCommand(command)}
                   >
@@ -323,9 +302,7 @@ export function ComposerSuggestionMenus({
                         </span>
                         {command.argsHint ? <span className="command-item-args">{command.argsHint}</span> : null}
                       </span>
-                      <span className="command-item-desc">
-                        {formatCommandDescription(command.description, meta.badgeLabel)}
-                      </span>
+                      <span className="command-item-desc">{description}</span>
                     </span>
                     <span className="command-item-meta">
                       <span className="command-item-badge" data-tone={meta.tone}>
@@ -338,21 +315,36 @@ export function ComposerSuggestionMenus({
               );
             })}
           </div>
-        </div>
+        </SuggestionMenuShell>
       )}
 
       {mentionMenuOpen && (
-        <div className="command-menu mention-menu" ref={suggestionMenuRef}>
-          <div className="command-menu-header" aria-hidden="true">
-            <span className="command-menu-title">
-              {mentionQuery?.endsWith("/") ? mentionQuery : "引用文件与目录"}
-            </span>
-            <span className="command-menu-shortcuts">
+        <SuggestionMenuShell
+          menuClassName="command-menu mention-menu"
+          menuRef={suggestionMenuRef}
+          layout={layout}
+          isResizing={isResizing}
+          title={mentionQuery?.endsWith("/") ? mentionQuery : "引用文件与目录"}
+          shortcuts={
+            <>
               <span><kbd>↵</kbd> 引用</span>
               <span><kbd>Tab</kbd> 进入目录</span>
-            </span>
-          </div>
-          <div className="command-menu-list" id={suggestionsId} role="listbox" aria-label="引用文件">
+            </>
+          }
+          isExpandedOrCustom={isExpandedOrCustom}
+          onToggleExpand={handleToggleExpand}
+          onResetWidth={handleResetWidth}
+          onResizePointerDown={handleResizePointerDown}
+          hoverPreview={hoverPreview}
+        >
+          <div
+            className="command-menu-list"
+            id={suggestionsId}
+            role="listbox"
+            aria-label="引用文件"
+            onMouseLeave={clearHoverPreview}
+            onScroll={clearHoverPreview}
+          >
             {mentionEntries.map((entry, index) => {
               const folder = !mentionQuery?.endsWith("/") && entry.path.includes("/")
                 ? entry.path.slice(0, entry.path.lastIndexOf("/"))
@@ -368,8 +360,25 @@ export function ComposerSuggestionMenus({
                   role="option"
                   aria-selected={isActive}
                   tabIndex={-1}
-                  title={entry.path}
-                  onMouseEnter={() => setSuggestionIndex(index)}
+                  onMouseEnter={(event) => {
+                    setSuggestionIndex(index);
+                    const buttonEl = event.currentTarget;
+                    const nameEl = buttonEl.querySelector<HTMLElement>(".mention-item-name");
+                    const pathEl = buttonEl.querySelector<HTMLElement>(".mention-item-path");
+                    const isTruncated =
+                      Boolean(nameEl && nameEl.scrollWidth > nameEl.clientWidth) ||
+                      Boolean(pathEl && pathEl.scrollWidth > pathEl.clientWidth);
+                    if (!isTruncated) {
+                      clearHoverPreview();
+                      return;
+                    }
+                    scheduleHoverPreview(buttonEl, {
+                      key: `mention-${entry.path}`,
+                      title: `${entry.name}${entry.isDir ? "/" : ""}`,
+                      badgeLabel: entry.isDir ? "目录" : "文件",
+                      description: entry.path,
+                    });
+                  }}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => chooseEntry(entry, entry.isDir)}
                 >
@@ -390,7 +399,7 @@ export function ComposerSuggestionMenus({
               <div className="mention-menu-status">{mentionLoading ? "正在查找工作区文件…" : "没有匹配的文件"}</div>
             )}
           </div>
-        </div>
+        </SuggestionMenuShell>
       )}
     </>
   );

@@ -6,20 +6,49 @@
 .codex-shot .command-menu {
   position: absolute;
   left: 6px;
-  right: auto;
+  right: 6px;
   bottom: calc(100% + 8px);
   z-index: 80;
-  width: min(500px, calc(100% - 12px));
+  width: auto;
+  max-width: calc(100vw - 24px);
   padding: 0;
   border: 1px solid var(--qj-border-strong);
   border-radius: 18px;
-  overflow: hidden;
+  overflow: visible;
   display: flex;
   flex-direction: column;
   gap: 0;
   background: var(--qj-bg-surface);
   color: var(--qj-text-primary);
   box-shadow: var(--muse-elevation-popover);
+}
+
+.codex-shot .main-stage .command-menu {
+  max-width: calc(100cqw - 24px);
+}
+
+.codex-shot .command-menu[data-expanded="true"] {
+  --command-menu-expanded-width: max(calc(100% - 12px), min(960px, calc(100vw - 48px)));
+  width: var(--command-menu-expanded-width);
+  left: calc(50% - var(--command-menu-expanded-width) / 2);
+  right: auto;
+}
+
+.codex-shot .main-stage .command-menu[data-expanded="true"] {
+  --command-menu-expanded-width: max(calc(100% - 12px), min(1080px, calc(100cqw - 48px)));
+}
+
+.codex-shot .side-chat-composer-dock .command-menu,
+.codex-shot .side-chat-composer-dock .command-menu[data-expanded="true"] {
+  left: 6px;
+  right: 6px;
+  width: auto;
+  min-width: calc(100% - 12px);
+  max-width: calc(100% - 12px);
+}
+
+.codex-shot .command-menu[data-resizing="true"] {
+  user-select: none;
 }
 
 .codex-shot .task-start-composer .command-menu {
@@ -33,8 +62,49 @@
   justify-content: space-between;
   gap: 8px;
   padding: 8px 12px 7px;
+  border-radius: 17px 17px 0 0;
   border-bottom: 1px solid var(--qj-border-subtle);
   background: color-mix(in srgb, var(--qj-bg-subtle) 45%, transparent);
+}
+
+.codex-shot .command-menu-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.codex-shot .command-menu button.command-menu-expand-btn {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--qj-text-muted);
+  display: inline-flex;
+  grid-template-columns: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .command-menu button.command-menu-expand-btn:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .command-menu button.command-menu-expand-btn[data-active="true"] {
+  background: var(--qj-brand-soft);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 28%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+.codex-shot .side-chat-composer-dock .command-menu-expand-btn,
+.codex-shot .side-chat-composer-dock .command-menu-resizer {
+  display: none;
 }
 
 .codex-shot .command-menu-title {
@@ -110,13 +180,18 @@
 }
 
 .codex-shot .command-menu-list {
-  max-height: 292px;
+  max-height: min(360px, 48vh);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 5px;
+  border-radius: 0 0 17px 17px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.codex-shot .command-menu[data-expanded="true"] .command-menu-list {
+  max-height: min(480px, 62vh);
 }
 
 .codex-shot .command-menu-list::-webkit-scrollbar {
@@ -447,4 +522,121 @@
   font-family: var(--qj-font-sans);
   font-size: 12.5px;
   color: var(--qj-text-muted);
+}
+
+/* ── Expanded Multi-Line Mode, Drag Resizer & Hover Tooltip ─────── */
+
+.codex-shot .command-menu[data-expanded="true"] button.command-menu-item {
+  align-items: flex-start;
+}
+
+.codex-shot .command-menu[data-expanded="true"] button.command-menu-item .command-item-icon,
+.codex-shot .command-menu[data-expanded="true"] button.command-menu-item .command-item-meta {
+  margin-top: 2px;
+}
+
+.codex-shot .command-menu[data-expanded="true"] button.command-menu-item .command-item-topline {
+  flex-wrap: wrap;
+}
+
+.codex-shot .command-menu[data-expanded="true"] button.command-menu-item .command-item-args {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.codex-shot .command-menu[data-expanded="true"] button.command-menu-item .command-item-desc {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.codex-shot .command-menu-resizer {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  right: -3px;
+  width: 7px;
+  z-index: 6;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.codex-shot .command-menu-resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 28px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: color-mix(in srgb, var(--qj-brand-primary) 70%, var(--qj-border-strong));
+  opacity: 0;
+  transition: opacity 140ms ease, height 140ms ease;
+}
+
+.codex-shot .command-menu-resizer:hover::after,
+.codex-shot .command-menu[data-resizing="true"] .command-menu-resizer::after {
+  opacity: 1;
+  height: 44px;
+}
+
+.codex-shot .command-menu-tooltip {
+  position: absolute;
+  left: 42px;
+  right: 12px;
+  max-width: 680px;
+  z-index: 95;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--qj-border-strong);
+  background: var(--qj-bg-elevated);
+  color: var(--qj-text-primary);
+  box-shadow: var(--muse-elevation-popover);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.codex-shot .command-menu-tooltip-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.codex-shot .command-menu-tooltip-name {
+  font-family: var(--qj-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .command-menu-tooltip-args {
+  font-family: var(--qj-font-mono);
+  font-size: 11px;
+  color: var(--qj-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.codex-shot .command-menu-tooltip-badge {
+  margin-left: auto;
+  font-family: var(--qj-font-sans);
+  font-size: 10.5px;
+  color: var(--qj-text-secondary);
+  background: var(--qj-bg-subtle);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.codex-shot .command-menu-tooltip-desc {
+  font-family: var(--qj-font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--qj-text-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

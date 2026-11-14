@@ -9,6 +9,11 @@ import {
   resolveSlashCommandMeta,
   splitHighlightSegments,
 } from "../src/components/composer/ComposerSuggestionMenus.tsx";
+import {
+  COMMAND_MENU_MAX_WIDTH,
+  COMMAND_MENU_MIN_WIDTH,
+  parseCommandMenuLayoutPrefs,
+} from "../src/components/composer/slashCommandHelpers.ts";
 import type { SlashCommand, WorkspaceDirEntry } from "../src/types.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
@@ -120,6 +125,8 @@ describe("Composer `/` command & `@` mention menus", () => {
     expect(htmlBare).toContain('<span class="command-item-name"><span class="command-item-slash">/</span><span>ui</span></span>');
     expect(htmlBare).toContain('<span class="command-item-args">[交互界面需求 | list | clear]</span>');
     expect(htmlBare).not.toContain('class="command-item-match"');
+    expect(htmlBare).toContain('class="command-menu-expand-btn"');
+    expect(htmlBare).toContain('class="command-menu-resizer"');
 
     const filtered = filterAndRankSlashCommands(SAMPLE_COMMANDS, "comp");
     const htmlFiltered = renderToStaticMarkup(
@@ -175,13 +182,41 @@ describe("Composer `/` command & `@` mention menus", () => {
     expect(html).toContain('class="mention-item active" role="option" aria-selected="true"');
     expect(html).toContain('data-dir="true"');
     expect(html).toContain('components/');
+    expect(html).toContain('class="command-menu-expand-btn"');
+    expect(html).toContain('class="command-menu-resizer"');
   });
 
-  it("enforces @layer components CSS ordering with zero !important rules on .command-menu-item in skin-composer.css", () => {
+  it("parses and clamps persisted command-menu layout preferences safely", () => {
+    expect(parseCommandMenuLayoutPrefs(null)).toEqual({ expanded: false, customWidth: null });
+    expect(parseCommandMenuLayoutPrefs("not-json")).toEqual({ expanded: false, customWidth: null });
+    expect(parseCommandMenuLayoutPrefs(JSON.stringify({ expanded: true, customWidth: null }))).toEqual({
+      expanded: true,
+      customWidth: null,
+    });
+    expect(parseCommandMenuLayoutPrefs(JSON.stringify({ expanded: false, customWidth: 120 }))).toEqual({
+      expanded: false,
+      customWidth: COMMAND_MENU_MIN_WIDTH,
+    });
+    expect(parseCommandMenuLayoutPrefs(JSON.stringify({ expanded: false, customWidth: 9999 }))).toEqual({
+      expanded: false,
+      customWidth: COMMAND_MENU_MAX_WIDTH,
+    });
+    expect(parseCommandMenuLayoutPrefs(JSON.stringify({ expanded: false, customWidth: 824.6 }))).toEqual({
+      expanded: false,
+      customWidth: 825,
+    });
+  });
+
+  it("enforces @layer components CSS ordering, adaptive width, expand/resize controls, and tooltip styling", () => {
     const indexCss = readFileSync(resolve(REPO_ROOT, "src/styles/index.css"), "utf8");
     const skinComposerCss = readFileSync(resolve(REPO_ROOT, "src/styles/skin-composer.css"), "utf8");
+    const composerMenusCss = readFileSync(resolve(REPO_ROOT, "src/styles/composer-menus.css"), "utf8");
 
     expect(indexCss).toMatch(/@import\s+"\.\/composer-menus\.css"\s+layer\(components\);/);
     expect(skinComposerCss).not.toContain(".command-menu-item");
+    expect(composerMenusCss).not.toContain("width: min(500px");
+    expect(composerMenusCss).toContain('[data-expanded="true"]');
+    expect(composerMenusCss).toContain(".command-menu-resizer");
+    expect(composerMenusCss).toContain(".command-menu-tooltip");
   });
 });
