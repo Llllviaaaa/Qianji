@@ -15,23 +15,23 @@
   --code-font: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, Courier, monospace;
 
   /* ── Authoritative `--qj-*` Semantic Tokens (Dark Default) ── */
-  --qj-bg-app: #181819;
+  --qj-bg-app: #191a1d;
   --qj-bg-canvas: var(--qj-bg-app);
-  --qj-bg-sidebar: #181819;
-  --qj-bg-surface: #222325;
-  --qj-bg-subtle: #252628;
-  --qj-bg-elevated: #323435;
+  --qj-bg-sidebar: #111214;
+  --qj-bg-surface: #222428;
+  --qj-bg-subtle: #26282d;
+  --qj-bg-elevated: #31343a;
   --qj-bg-hover: rgba(255, 255, 255, 0.055);
-  --qj-bg-active: rgba(255, 255, 255, 0.085);
+  --qj-bg-active: rgba(255, 255, 255, 0.088);
 
   --qj-text-primary: #fcfcfc;
   --qj-text-secondary: #989b9e;
   --qj-text-muted: #717477;
-  --qj-text-inverse: #181819;
+  --qj-text-inverse: #111214;
 
-  --qj-border-subtle: rgba(255, 255, 255, 0.048);
-  --qj-border-default: rgba(255, 255, 255, 0.068);
-  --qj-border-strong: rgba(255, 255, 255, 0.12);
+  --qj-border-subtle: rgba(255, 255, 255, 0.05);
+  --qj-border-default: rgba(255, 255, 255, 0.075);
+  --qj-border-strong: rgba(255, 255, 255, 0.13);
 
   --qj-brand-primary: #4b93ff;
   --qj-brand-contrast: #ffffff;
@@ -80,11 +80,11 @@
   --muse-agent-bubble: var(--qj-bg-subtle);
   --muse-agent-ink: var(--qj-text-primary);
   --muse-soft-fill: rgba(255, 255, 255, 0.055);
-  --muse-soft-fill-hover: rgba(255, 255, 255, 0.085);
-  --muse-soft-fill-strong: rgba(255, 255, 255, 0.11);
-  --muse-divider: rgba(255, 255, 255, 0.06);
-  --muse-blur-pill-bg: rgba(40, 41, 44, 0.78);
-  --muse-dialog-bg: #202124;
+  --muse-soft-fill-hover: rgba(255, 255, 255, 0.088);
+  --muse-soft-fill-strong: rgba(255, 255, 255, 0.12);
+  --muse-divider: rgba(255, 255, 255, 0.068);
+  --muse-blur-pill-bg: rgba(36, 38, 43, 0.84);
+  --muse-dialog-bg: #1e2024;
   --muse-dialog-scrim: rgba(0, 0, 0, 0.5);
   --muse-primary-pill-bg: #fcfcfc;
   --muse-primary-pill-fg: #111112;
@@ -107,11 +107,13 @@
   --pi-surface: var(--qj-bg-surface);
   --pi-surface-soft: var(--qj-bg-subtle);
   --pi-surface-strong: var(--qj-bg-elevated);
+  --pi-stage-border: var(--qj-border-default);
   --pi-bevel-top: inset 0 1px 0 rgba(255, 255, 255, 0.055);
   --pi-grid-dot: rgba(255, 255, 255, 0.065);
   --pi-shadow-stage:
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 8px 24px -8px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 1px 3px rgba(0, 0, 0, 0.36),
+    0 10px 28px -10px rgba(0, 0, 0, 0.52);
   --pi-shadow-card:
     0 1px 2px rgba(0, 0, 0, 0.28),
     0 4px 12px -2px rgba(0, 0, 0, 0.22);
@@ -132,7 +134,7 @@
   --dsh-claude-link: color-mix(in srgb, var(--qj-brand-primary) 78%, #ffffff);
   --dsh-claude-link-underline: color-mix(in srgb, var(--qj-brand-primary) 45%, transparent);
   --dsh-claude-link-hover: var(--qj-brand-primary);
-  --dsh-claude-code-block-bg: color-mix(in srgb, #000000 24%, var(--qj-bg-app));
+  --dsh-claude-code-block-bg: #131417;
   --dsh-claude-code-banner-bg: var(--qj-bg-subtle);
   --dsh-claude-table-head: var(--qj-bg-subtle);
   --dsh-claude-scrollbar: color-mix(in srgb, var(--qj-text-muted) 42%, transparent);
@@ -156,23 +158,23 @@
 
 :root[data-theme="light"] {
   /* ── Authoritative `--qj-*` Semantic Tokens (Light Mode) ── */
-  --qj-bg-app: #fcfcfc;
+  --qj-bg-app: #ffffff;
   --qj-bg-canvas: var(--qj-bg-app);
-  --qj-bg-sidebar: #fcfcfc;
+  --qj-bg-sidebar: #f2f3f6;
   --qj-bg-surface: #ffffff;
-  --qj-bg-subtle: #f3f4f5;
-  --qj-bg-elevated: #e9eaeb;
-  --qj-bg-hover: rgba(17, 17, 18, 0.045);
-  --qj-bg-active: rgba(17, 17, 18, 0.068);
+  --qj-bg-subtle: #f4f5f7;
+  --qj-bg-elevated: #eaecf0;
+  --qj-bg-hover: rgba(15, 23, 42, 0.048);
+  --qj-bg-active: rgba(15, 23, 42, 0.076);
 
-  --qj-text-primary: #111112;
-  --qj-text-secondary: #717477;
-  --qj-text-muted: #8f9296;
+  --qj-text-primary: #111214;
+  --qj-text-secondary: #686b70;
+  --qj-text-muted: #8b8f95;
   --qj-text-inverse: #ffffff;
 
-  --qj-border-subtle: rgba(17, 17, 18, 0.04);
-  --qj-border-default: rgba(17, 17, 18, 0.058);
-  --qj-border-strong: rgba(17, 17, 18, 0.11);
+  --qj-border-subtle: rgba(15, 23, 42, 0.05);
+  --qj-border-default: rgba(15, 23, 42, 0.075);
+  --qj-border-strong: rgba(15, 23, 42, 0.13);
 
   --qj-brand-primary: #006ee4;
   --qj-brand-contrast: #ffffff;
@@ -186,14 +188,14 @@
 
   --muse-user-bubble: #b8dbfe;
   --muse-user-ink: #111112;
-  --muse-agent-bubble: #e9eaeb;
+  --muse-agent-bubble: #eef0f3;
   --muse-agent-ink: #111112;
-  --muse-soft-fill: rgba(17, 17, 18, 0.045);
-  --muse-soft-fill-hover: rgba(17, 17, 18, 0.072);
-  --muse-soft-fill-strong: rgba(17, 17, 18, 0.095);
-  --muse-divider: rgba(17, 17, 18, 0.052);
-  --muse-blur-pill-bg: rgba(255, 255, 255, 0.8);
-  --muse-dialog-bg: #fcfcfc;
+  --muse-soft-fill: rgba(15, 23, 42, 0.048);
+  --muse-soft-fill-hover: rgba(15, 23, 42, 0.076);
+  --muse-soft-fill-strong: rgba(15, 23, 42, 0.105);
+  --muse-divider: rgba(15, 23, 42, 0.068);
+  --muse-blur-pill-bg: rgba(248, 249, 251, 0.88);
+  --muse-dialog-bg: #ffffff;
   --muse-dialog-scrim: rgba(17, 17, 18, 0.22);
   --muse-primary-pill-bg: #111112;
   --muse-primary-pill-fg: #ffffff;
@@ -207,11 +209,12 @@
     0 6px 16px rgba(17, 17, 18, 0.16),
     0 10px 40px rgba(17, 17, 18, 0.12);
 
+  --pi-stage-border: rgba(15, 23, 42, 0.078);
   --pi-bevel-top: inset 0 1px 0 rgba(255, 255, 255, 0.92);
   --pi-grid-dot: rgba(17, 19, 24, 0.075);
   --pi-shadow-stage:
-    0 1px 3px rgba(15, 20, 28, 0.06),
-    0 8px 24px -10px rgba(15, 20, 28, 0.09);
+    0 1px 2px rgba(15, 23, 42, 0.045),
+    0 8px 24px -10px rgba(15, 23, 42, 0.08);
   --pi-shadow-card:
     0 1px 2px rgba(15, 20, 28, 0.045),
     0 3px 10px -2px rgba(15, 20, 28, 0.05);
@@ -224,7 +227,7 @@
   --dsh-claude-inline-code-fg: color-mix(in srgb, var(--qj-brand-primary) 82%, #111318);
   --dsh-claude-link: color-mix(in srgb, var(--qj-brand-primary) 86%, #111318);
   --dsh-claude-link-underline: color-mix(in srgb, var(--qj-brand-primary) 42%, transparent);
-  --dsh-claude-code-block-bg: var(--qj-bg-surface);
+  --dsh-claude-code-block-bg: #f6f7f9;
   --dsh-claude-scrollbar: color-mix(in srgb, var(--qj-text-muted) 38%, transparent);
   --dsh-claude-scrollbar-hover: color-mix(in srgb, var(--qj-text-secondary) 62%, transparent);
   --dsh-claude-inverse-ink: var(--qj-bg-surface);

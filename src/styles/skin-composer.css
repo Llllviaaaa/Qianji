@@ -378,7 +378,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 14px 4px 10px !important;
-  border: 1px solid rgba(17, 17, 18, 0.03) !important;
+  border: 1px solid var(--qj-border-default) !important;
   border-radius: 28px !important;
   background: var(--muse-blur-pill-bg) !important;
   backdrop-filter: saturate(180%) blur(24px);
@@ -399,7 +399,7 @@
 .codex-shot .composer-card[data-composer-variant="hero"]:focus-within,
 .codex-shot .composer-card[data-composer-variant="inline"]:focus-within {
   background: var(--panel) !important;
-  border-color: rgba(17, 17, 18, 0.07) !important;
+  border-color: var(--qj-border-strong) !important;
   box-shadow:
     0 4px 16px rgba(17, 17, 18, 0.1),
     0 8px 32px rgba(17, 17, 18, 0.06) !important;

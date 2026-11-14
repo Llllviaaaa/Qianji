@@ -20,7 +20,7 @@
   --dshc-hover: var(--hover);
   --dshc-hover-solid: var(--panel-soft);
   --dshc-bubble: var(--muse-user-bubble, #0074e8);
-  --dshc-code-block: #181819;
+  --dshc-code-block: var(--dsh-claude-code-block-bg, #131417);
   --dshc-code-banner: rgba(255, 255, 255, 0.04);
   --dshc-inline-code-bg: color-mix(in srgb, var(--text) 7%, transparent);
   --dshc-inline-code-fg: var(--text);
@@ -53,8 +53,8 @@
 
 :root[data-theme="light"] .codex-shot {
   --dshc-bubble: var(--muse-user-bubble, #b8dbfe);
-  --dshc-code-block: #ffffff;
-  --dshc-code-banner: rgba(17, 17, 18, 0.032);
+  --dshc-code-block: var(--dsh-claude-code-block-bg, #f6f7f9);
+  --dshc-code-banner: rgba(15, 23, 42, 0.038);
   --dshc-inline-code-bg: color-mix(in srgb, var(--text) 5.5%, transparent);
   --dshc-inline-code-fg: var(--text);
   --dshc-link: var(--accent);

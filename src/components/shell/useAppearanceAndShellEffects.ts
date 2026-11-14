@@ -199,7 +199,7 @@ export function useAppearanceAndShellEffects({
       );
       root.style.fontFamily = settings?.uiFont || "var(--font-ui)";
       root.style.color = palette.text;
-      root.style.background = palette.app;
+      root.style.background = palette.sidebar;
       applyUiScale(root, document.getElementById("root"), settings?.uiScale);
     };
     applyTheme();
