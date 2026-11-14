@@ -69,6 +69,64 @@ describe("JSONL session storage", () => {
     expect(parsed.skipped).toBe(2);
   });
 
+  it("skips only corrupt or unknown mid-log lines and recovers subsequent events without seq collisions", async () => {
+    const writer = await start();
+    const session = writer.sessions.create({ cwd: "/w" });
+    session.append("user", { content: text("first") });
+    const id = session.id;
+    const file = join(dir, session.header.createdAt.slice(0, 7), `${id}.jsonl`);
+    const ev3 = { seq: 3, ts: "2026-01-01T00:00:03.000Z", type: "user", data: { content: text("third") } };
+    const ev4Unknown = { seq: 4, ts: "2026-01-01T00:00:04.000Z", type: "future-thing", data: {} };
+    const ev5 = { seq: 5, ts: "2026-01-01T00:00:05.000Z", type: "user", data: { content: text("fifth") } };
+    appendFileSync(
+      file,
+      `{"seq":2,"ts":"t","type":"user","data":\n${JSON.stringify(ev3)}\n${JSON.stringify(ev4Unknown)}\n${JSON.stringify(ev5)}\n`,
+    );
+    await writer.fiber.dispose();
+
+    const parsed = parseLog(readFileSync(file, "utf8"));
+    expect(parsed.events.map((event) => event.seq)).toEqual([1, 3, 5]);
+    expect(parsed.skipped).toBe(2);
+
+    const reader = new Context();
+    ctx = reader;
+    await reader.plugin(Sessions);
+    await reader.plugin(sessionJsonl, { dir });
+    const loaded = await reader.sessions.get(id);
+    expect(loaded?.state().messages).toEqual([
+      { role: "user", content: text("first") },
+      { role: "user", content: text("third") },
+      { role: "user", content: text("fifth") },
+    ]);
+    expect(loaded?.lastSeq).toBe(5);
+    const appended = loaded?.append("user", { content: text("sixth") });
+    expect(appended?.seq).toBe(6);
+
+    const afterAppend = parseLog(readFileSync(file, "utf8"));
+    expect(afterAppend.events.map((event) => event.seq)).toEqual([1, 3, 5, 6]);
+    expect(afterAppend.skipped).toBe(2);
+  });
+
+  it("rejects duplicate, out-of-order, non-positive, and non-integer seq lines", () => {
+    const header = JSON.stringify({ format: "pid.session", version: 1, id: "s-seq", createdAt: "2026-01-01T00:00:00.000Z", cwd: "/w" });
+    const ev = (seq: unknown) => JSON.stringify({ seq, ts: "2026-01-01T00:00:00.000Z", type: "user", data: { content: text(`m${String(seq)}`) } });
+    const log = [
+      header,
+      ev(0),
+      ev(-1),
+      ev(1.5),
+      "null",
+      ev(1),
+      ev(1),
+      ev(4),
+      ev(3),
+      ev(5),
+    ].join("\n");
+    const parsed = parseLog(log);
+    expect(parsed.events.map((event) => event.seq)).toEqual([1, 4, 5]);
+    expect(parsed.skipped).toBe(6);
+  });
+
   it("refuses a newer major version and files that are not sessions", () => {
     expect(() => parseLog(`${JSON.stringify({ format: "pid.session", version: 2, id: "x" })}\n`)).toThrow("newer");
     expect(() => parseLog(`{"hello":1}\n`)).toThrow("not a pid session");

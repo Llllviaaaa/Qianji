@@ -32,6 +32,7 @@ const MAX_ENTRIES = 500;
 
 export const read: ToolDefinition<{ path: string; offset?: number; limit?: number; hashlines?: boolean }> = {
   name: "read",
+  readOnly: true,
   description: `Read a file. Text is returned from line \`offset\` (1-based) for at most \`limit\` lines, capped at ${MAX_LINES} lines or ${MAX_BYTES / 1024} KB; pass \`hashlines: true\` to prefix lines with \`line:hash|\` anchors for resilient \`edit\`. Images (png, jpg, gif, webp) return as image blocks.`,
   parameters: {
     type: "object",
@@ -271,6 +272,7 @@ export const edit: ToolDefinition<{ path: string; edits: FileEdit[] }> = {
 
 export const ls: ToolDefinition<{ path?: string }> = {
   name: "ls",
+  readOnly: true,
   description: `List a directory (default: the working directory). Directories end with "/". At most ${MAX_ENTRIES} entries.`,
   parameters: {
     type: "object",

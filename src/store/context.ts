@@ -233,7 +233,6 @@ export class StoreContext {
     const runtimeId = get().runtimeId;
     if (!runtimeId) return;
     const stateRequest = harnessRuntimes.state(runtimeId);
-    const historyRequest = harnessRuntimes.messages(runtimeId);
     const activeCwd = get().cwd;
     const commandsRequest = harnessRuntimes.commands(activeCwd || undefined).catch(() => []);
     const modelCatalogRequest = Promise.all([harnessRuntimes.models(), commandsRequest]).then(([models, commands]) => {
@@ -288,8 +287,9 @@ export class StoreContext {
       }));
     }
 
-    const restoredMessages = await historyRequest;
+    const restoredMessages = await harnessRuntimes.messages(runtimeId);
     if (get().runtimeId !== runtimeId || expectedVersion !== this.connectionVersion) return;
+    this.clearPendingAssistantUpdate(runtimeId);
     set({
       messages: restoredMessages,
       agentBrowser: agentBrowserFromMessages(restoredMessages),

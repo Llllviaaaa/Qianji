@@ -36,13 +36,12 @@ import type { ExtensionUIRequest, ForkPoint, ModelInfo, SessionStats, SlashComma
 import type { SessionTreeNode } from "./sessionTree";
 import { connectHarness, harnessEndpoint, isRpcMethodNotFound, type HarnessConnection } from "./harnessClient";
 import { effortForLevel, forkPointsOf, sessionTreeOf } from "./hostSessions";
-import { TranscriptTranslator, historyToUi, interruptTurn, type TranscriptEvent } from "./transcript";
-
+import { buildResumeEvents, replaySessionToUi, seedTranslatorFromStatus } from "./harnessReplay";
+import { TranscriptTranslator, type TranscriptEvent } from "./transcript";
 import { thinkingLevelsFor, toModelInfo } from "./harnessModels";
 import { promptContent, uiRequestEvent, type PromptInput } from "./harnessPayloads";
 export { isRpcMethodNotFound };
 export { buildPromptPayload, parseLeadingSlashCommand, promptContent, uiRequestEvent, type PromptInput } from "./harnessPayloads";
-
 
 export const HARNESS_RUNTIME_PREFIX = "harness:";
 export const HARNESS_SESSION_PREFIX = "harness:";
@@ -91,6 +90,7 @@ interface Runtime {
   pendingPermission?: string;
   pendingAgentMode?: string;
   lastSeq: number;
+  lastLiveSeq: number;
   translator: TranscriptTranslator;
   model?: { provider: string; model: string };
   title?: string;
@@ -205,7 +205,7 @@ export class HarnessRuntimes {
   async start(cwd: string, sessionFile?: string, side = false): Promise<{ runtimeId: string; sessionLoaded: boolean; sessionForked: boolean }> {
     this.nextRuntime += 1;
     const id = `${HARNESS_RUNTIME_PREFIX}${Date.now().toString(36)}-${this.nextRuntime}`;
-    const runtime: Runtime = { id, cwd, lastSeq: 0, streaming: false, translator: new TranscriptTranslator() };
+    const runtime: Runtime = { id, cwd, lastSeq: 0, lastLiveSeq: 0, streaming: false, translator: new TranscriptTranslator() };
     if (isHarnessSessionFile(sessionFile)) {
       runtime.sessionId = (sessionFile as string).slice(HARNESS_SESSION_PREFIX.length);
       if (side) {
@@ -225,9 +225,7 @@ export class HarnessRuntimes {
     const runtime = this.runtimes.get(runtimeId);
     this.runtimes.delete(runtimeId);
     this.cancelLocalQuestions(runtimeId);
-    if (runtime?.streaming) {
-      this.refreshStreamingSnapshot();
-    }
+    if (runtime?.streaming) this.refreshStreamingSnapshot();
     if (runtime?.sessionId === undefined || this.connection === undefined) return;
     const stillWatched = [...this.runtimes.values()].some((other) => other.sessionId === runtime.sessionId);
     if (stillWatched) return;
@@ -330,14 +328,16 @@ export class HarnessRuntimes {
     }
   }
 
-  /** The session's transcript so far. */
+  /** The session's transcript so far, including any mid-turn stream or running tools. */
   async messages(runtimeId: string): Promise<UiMessage[]> {
     const runtime = this.runtime(runtimeId);
     if (runtime.sessionId === undefined) return [];
     const replay = await (await this.rpc()).call<SessionSubscribeResult>("session.subscribe", { sessionId: runtime.sessionId, afterSeq: 0 });
-    const messages = historyToUi(replay.events);
-    // A log that stops mid-turn while nothing runs it was cut off, by a crash for one.
-    return replay.status.running ? messages : interruptTurn(messages);
+    this.applyReplayWatermark(runtime, replay);
+    const { messages, translator, queueEvent } = replaySessionToUi(replay);
+    runtime.translator = translator;
+    if (queueEvent !== undefined) this.emit(runtime.id, [queueEvent]);
+    return messages;
   }
 
   thinkingLevels(model?: ModelInfo | null): string[] {
@@ -408,13 +408,12 @@ export class HarnessRuntimes {
     runtime.pendingPermission = undefined;
     runtime.pendingAgentMode = undefined;
     runtime.lastSeq = 0;
+    runtime.lastLiveSeq = 0;
     runtime.title = undefined;
     runtime.translator = new TranscriptTranslator();
     this.setRuntimeStreaming(runtime, false);
     if (previous !== undefined && this.connection !== undefined && this.runtimesOf(previous).length === 0) {
-      void this.connection
-        .then((rpc) => rpc.call("session.unsubscribe", { sessionId: previous }))
-        .catch(() => undefined);
+      void this.connection.then((rpc) => rpc.call("session.unsubscribe", { sessionId: previous })).catch(() => undefined);
     }
   }
 
@@ -443,11 +442,7 @@ export class HarnessRuntimes {
   async compact(runtimeId: string): Promise<void> {
     const runtime = this.runtime(runtimeId);
     if (runtime.sessionId !== undefined) {
-      await (await this.rpc()).call(
-        "session.compact",
-        { sessionId: runtime.sessionId },
-        { timeoutMs: 300_000 },
-      );
+      await (await this.rpc()).call("session.compact", { sessionId: runtime.sessionId }, { timeoutMs: 300_000 });
     }
   }
 
@@ -456,6 +451,7 @@ export class HarnessRuntimes {
     const previous = runtime.sessionId;
     runtime.sessionId = created.session.id;
     runtime.lastSeq = 0;
+    runtime.lastLiveSeq = 0;
     runtime.title = created.session.title;
     await this.attach(runtime);
     if (previous !== undefined && this.runtimesOf(previous).length === 0) await this.call("session.unsubscribe", { sessionId: previous }).catch(() => undefined);
@@ -664,7 +660,13 @@ export class HarnessRuntimes {
   private async attach(runtime: Runtime): Promise<void> {
     const rpc = await this.rpc();
     const replay = await rpc.call<SessionSubscribeResult>("session.subscribe", { sessionId: runtime.sessionId, afterSeq: runtime.lastSeq });
+    this.applyReplayWatermark(runtime, replay);
+    runtime.translator = seedTranslatorFromStatus(replay.status);
+  }
+
+  private applyReplayWatermark(runtime: Runtime, replay: SessionSubscribeResult): void {
     runtime.lastSeq = Math.max(runtime.lastSeq, replay.events.at(-1)?.seq ?? 0);
+    runtime.lastLiveSeq = Math.max(runtime.lastLiveSeq, replay.liveSeq ?? 0);
     this.setRuntimeStreaming(runtime, replay.status.running);
   }
 
@@ -727,10 +729,16 @@ export class HarnessRuntimes {
       if (runtime.sessionId === undefined) continue;
       try {
         const replay = await connection.call<SessionSubscribeResult>("session.subscribe", { sessionId: runtime.sessionId, afterSeq: runtime.lastSeq });
+        runtime.lastLiveSeq = replay.liveSeq ?? 0;
         for (const event of replay.events) this.deliver(runtime, event);
         const wasStreaming = runtime.streaming;
         this.setRuntimeStreaming(runtime, replay.status.running);
-        if (wasStreaming && !replay.status.running) {
+        if (replay.status.running) {
+          runtime.translator = new TranscriptTranslator();
+          const events = buildResumeEvents(replay.status, runtime.translator);
+          if (!wasStreaming) events.unshift({ type: "turn-start" });
+          if (events.length > 0) this.emit(runtime.id, events);
+        } else if (wasStreaming) {
           runtime.translator = new TranscriptTranslator();
           this.emit(runtime.id, [{ type: "turn-interrupted" }, { type: "turn-end" }]);
         }
@@ -753,19 +761,10 @@ export class HarnessRuntimes {
         if (runtime.streaming) next.push(runtime.id);
       }
     }
-    if (
-      next.length === this.streamingSnapshot.length &&
-      next.every((id, idx) => id === this.streamingSnapshot[idx])
-    ) {
-      return;
-    }
+    if (next.length === this.streamingSnapshot.length && next.every((id, idx) => id === this.streamingSnapshot[idx])) return;
     this.streamingSnapshot = next;
     for (const listener of [...this.streamingListeners]) {
-      try {
-        listener();
-      } catch (error) {
-        console.error("[harnessRuntime] streaming listener error:", error);
-      }
+      try { listener(); } catch (error) { console.error("[harnessRuntime] streaming listener error:", error); }
     }
   }
 
@@ -774,22 +773,14 @@ export class HarnessRuntimes {
     this.hostStatus = status;
     this.refreshStreamingSnapshot();
     for (const listener of [...this.statusListeners]) {
-      try {
-        listener(status);
-      } catch (error) {
-        console.error("[harnessRuntime] hostStatus listener error:", error);
-      }
+      try { listener(status); } catch (error) { console.error("[harnessRuntime] hostStatus listener error:", error); }
     }
   }
 
   private emit(runtimeId: string, events: TranscriptEvent[]): void {
     for (const event of events) {
       for (const listener of [...this.listeners]) {
-        try {
-          listener(runtimeId, event);
-        } catch (error) {
-          console.error("[harnessRuntime] runtime listener error:", error);
-        }
+        try { listener(runtimeId, event); } catch (error) { console.error("[harnessRuntime] runtime listener error:", error); }
       }
     }
   }
@@ -808,18 +799,18 @@ export class HarnessRuntimes {
 
   private notify(method: string, params: unknown): void {
     for (const listener of [...(this.notificationListeners.get(method) ?? [])]) {
-      try {
-        listener(params);
-      } catch (error) {
-        console.error(`[harnessRuntime] notification listener error (${method}):`, error);
-      }
+      try { listener(params); } catch (error) { console.error(`[harnessRuntime] notification listener error (${method}):`, error); }
     }
     if (method === "session/event") {
       const { sessionId, event } = params as SessionEventNotification;
       for (const runtime of this.runtimesOf(sessionId)) this.deliver(runtime, event as PersistedEvent);
     } else if (method === "session/delta") {
-      const { sessionId, delta } = params as SessionDeltaNotification;
+      const { sessionId, liveSeq, delta } = params as SessionDeltaNotification;
       for (const runtime of this.runtimesOf(sessionId)) {
+        if (typeof liveSeq === "number") {
+          if (liveSeq <= runtime.lastLiveSeq) continue;
+          runtime.lastLiveSeq = liveSeq;
+        }
         if (delta.type === "agent-start") this.setRuntimeStreaming(runtime, true);
         if (delta.type === "agent-end") this.setRuntimeStreaming(runtime, false);
         this.emit(runtime.id, runtime.translator.delta(delta));

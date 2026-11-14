@@ -20,7 +20,7 @@ import { ErrorCode, type SandboxConfigKind, type SandboxGenerateConfigResult } f
 import { RpcError } from "@qianji/rpc";
 import "@qianji/session";
 import { textOutput, type ToolDefinition } from "@qianji/tools";
-import { BackgroundProcessManager, bgProcessTool } from "./background.ts";
+import { BackgroundProcessManager, bgProcessTool, bindAsyncJobObjectDisposer } from "./background.ts";
 import {
   DEFAULT_TIMEOUT_SECONDS,
   MAX_BUFFER_BYTES,
@@ -39,7 +39,16 @@ import {
   inspectSelfKillCommand,
 } from "./sandbox.ts";
 
-export { BackgroundProcessManager, bgProcessTool, type BgProcessArgs, type BgProcessSnapshot, type BgStartOptions, type BgWaitResult } from "./background.ts";
+export {
+  BackgroundProcessManager,
+  bgProcessTool,
+  bindAsyncJobObjectDisposer,
+  type AsyncJobObjectBinding,
+  type BgProcessArgs,
+  type BgProcessSnapshot,
+  type BgStartOptions,
+  type BgWaitResult,
+} from "./background.ts";
 export * from "./sandbox.ts";
 
 declare module "@deepseek-ai/cordis" {
@@ -182,12 +191,26 @@ export function runCommand(
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let closeJob: (() => void) | undefined;
-    if (options.sandbox === true && child.pid !== undefined) {
-      void attachWindowsJobObject(child.pid).then((disposer) => {
-        closeJob = disposer;
-      });
-    }
+    let timedOut = false;
+    let aborted = false;
+    let settled = false;
+    let stopped = false;
+    let recordedExitCode: number | null = null;
+    let exitDrainTimer: ReturnType<typeof setTimeout> | undefined;
+    let killGraceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const childPid = child.pid;
+    const jobBinding = options.sandbox === true && childPid !== undefined
+      ? bindAsyncJobObjectDisposer(attachWindowsJobObject(childPid), {
+          isDisposed: () => settled || stopped,
+          isStopped: () => stopped,
+          onStoppedResolve: () => killTree(childPid),
+        })
+      : undefined;
+    const disposeJob = () => {
+      jobBinding?.dispose({ stopped });
+    };
+
     const chunks: Buffer[] = [];
     let buffered = 0;
     const collect = (chunk: Buffer) => {
@@ -201,19 +224,12 @@ export function runCommand(
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
 
-    let timedOut = false;
-    let aborted = false;
-    let settled = false;
-    let recordedExitCode: number | null = null;
-    let exitDrainTimer: ReturnType<typeof setTimeout> | undefined;
-    let killGraceTimer: ReturnType<typeof setTimeout> | undefined;
-
     const cleanup = () => {
       clearTimeout(timer);
       if (exitDrainTimer !== undefined) clearTimeout(exitDrainTimer);
       if (killGraceTimer !== undefined) clearTimeout(killGraceTimer);
       signal.removeEventListener("abort", onAbort);
-      closeJob?.();
+      disposeJob();
     };
 
     const finish = (exitCode: number | null) => {
@@ -226,7 +242,8 @@ export function runCommand(
     };
 
     const stop = () => {
-      closeJob?.();
+      stopped = true;
+      disposeJob();
       if (child.pid !== undefined) killTree(child.pid);
       child.stdout.destroy();
       child.stderr.destroy();

@@ -231,3 +231,15 @@ describe("diagnostics", () => {
     }]);
   });
 });
+
+describe("readOnly metadata", () => {
+  it("marks read-only FS tools as readOnly and mutating tools as non-readOnly", () => {
+    expect(read.readOnly).toBe(true);
+    expect(ls.readOnly).toBe(true);
+    expect(find.readOnly).toBe(true);
+    expect(grep.readOnly).toBe(true);
+    expect(diagnostics.readOnly).toBe(true);
+    expect(write.readOnly).not.toBe(true);
+    expect(edit.readOnly).not.toBe(true);
+  });
+});

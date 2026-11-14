@@ -42,6 +42,43 @@ export interface BgWaitResult {
   truncated: boolean;
 }
 
+export interface AsyncJobObjectBinding {
+  /** Idempotently dispose the Job Object handle, or mark it to dispose immediately upon resolution. */
+  dispose(options?: { stopped?: boolean }): void;
+  readonly settled: Promise<void>;
+}
+
+/** Binds an async Windows Job Object attachment to a process lifecycle so handles never leak on fast exit or stop. */
+export function bindAsyncJobObjectDisposer(
+  attachment: Promise<(() => void) | undefined>,
+  options: { isDisposed?: () => boolean; isStopped?: () => boolean; onStoppedResolve?: () => void } = {},
+): AsyncJobObjectBinding {
+  let closeJob: (() => void) | undefined;
+  let disposed = false;
+  let stopped = false;
+  const dispose = (disposeOptions?: { stopped?: boolean }): void => {
+    disposed = true;
+    if (disposeOptions?.stopped === true) stopped = true;
+    const handle = closeJob;
+    closeJob = undefined;
+    handle?.();
+  };
+  const settled = attachment.then(
+    (disposer) => {
+      const alreadyDisposed = disposed || (options.isDisposed?.() ?? false);
+      const alreadyStopped = stopped || (options.isStopped?.() ?? false);
+      if (alreadyDisposed || alreadyStopped) {
+        disposer?.();
+        if (alreadyStopped) options.onStoppedResolve?.();
+        return;
+      }
+      closeJob = disposer;
+    },
+    () => undefined,
+  );
+  return { dispose, settled };
+}
+
 interface BgEntry {
   id: string;
   sessionId: string;
@@ -51,6 +88,7 @@ interface BgEntry {
   endedAt?: string;
   child: ChildProcessByStdio<null, Readable, Readable>;
   status: "running" | "exited";
+  terminated?: boolean;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   chunks: Buffer[];
@@ -58,7 +96,7 @@ interface BgEntry {
   baseByteOffset: number;
   totalBytes: number;
   readByteOffset: number;
-  closeJob?: () => void;
+  jobBinding?: AsyncJobObjectBinding;
   drainTimer?: ReturnType<typeof setTimeout>;
   killTimer?: ReturnType<typeof setTimeout>;
   waiters: Set<() => void>;
@@ -135,9 +173,11 @@ export class BackgroundProcessManager {
     this.entries.set(id, entry);
 
     if (options.sandbox && child.pid !== undefined) {
-      void attachWindowsJobObject(child.pid).then((disposer) => {
-        if (entry.status === "exited") disposer?.();
-        else entry.closeJob = disposer;
+      const pid = child.pid;
+      entry.jobBinding = bindAsyncJobObjectDisposer(attachWindowsJobObject(pid), {
+        isDisposed: () => entry.status === "exited" || entry.terminated === true,
+        isStopped: () => entry.terminated === true,
+        onStoppedResolve: () => killTree(pid),
       });
     }
 
@@ -169,8 +209,7 @@ export class BackgroundProcessManager {
         clearTimeout(entry.killTimer);
         entry.killTimer = undefined;
       }
-      entry.closeJob?.();
-      entry.closeJob = undefined;
+      entry.jobBinding?.dispose();
       entry.child.stdout.destroy();
       entry.child.stderr.destroy();
       for (const wake of entry.waiters) wake();
@@ -319,8 +358,8 @@ export class BackgroundProcessManager {
 
   private terminateEntry(entry: BgEntry): void {
     if (entry.status === "exited") return;
-    entry.closeJob?.();
-    entry.closeJob = undefined;
+    entry.terminated = true;
+    entry.jobBinding?.dispose({ stopped: true });
     if (entry.child.pid !== undefined) killTree(entry.child.pid);
     entry.child.stdout.destroy();
     entry.child.stderr.destroy();

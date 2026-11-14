@@ -226,6 +226,63 @@ describe("LlmService", () => {
     dispose();
     expect(ctx.llm.listProviders()).toEqual([]);
   });
+
+  it("applies bounded deterministic jitter on backoff and bypasses jitter for Retry-After", async () => {
+    for (const [sample, attempt1Expected, attempt2Expected] of [
+      [0, 8, 16],
+      [0.5, 10, 20],
+      [1, 12, 24],
+    ] as const) {
+      const c = new Context();
+      await c.plugin(Credentials);
+      await c.plugin(LlmService, { maxAttempts: 3, baseDelayMs: 10, jitterRatio: 0.2, random: () => sample });
+      try {
+        expect(c.llm.retryDelay(1)).toBe(attempt1Expected);
+        expect(c.llm.retryDelay(2)).toBe(attempt2Expected);
+
+        const adapter = scripted(() => throws(overloaded), () => throws(overloaded), ok);
+        c.llm.registerAdapter(info, adapter);
+        const retries: Array<Extract<StreamChunk, { type: "retry" }>> = [];
+        for await (const chunk of c.llm.stream(request)) {
+          if (chunk.type === "retry") retries.push(chunk);
+        }
+        expect(retries.map((r) => r.delayMs)).toEqual([attempt1Expected, attempt2Expected]);
+      } finally {
+        await c.fiber.dispose();
+      }
+    }
+
+    const retryAfterCtx = new Context();
+    await retryAfterCtx.plugin(Credentials);
+    await retryAfterCtx.plugin(LlmService, { maxAttempts: 2, baseDelayMs: 500, jitterRatio: 0.5, random: () => 0 });
+    try {
+      expect(retryAfterCtx.llm.retryDelay(1, 15)).toBe(15);
+      expect(retryAfterCtx.llm.retryDelay(1, 120_000)).toBe(60_000);
+      expect(retryAfterCtx.llm.retryDelay(1, -10)).toBe(0);
+
+      const rateLimited = new LlmError({ kind: "rate-limit", message: "slow down", retryable: true, retryAfter: 0.015 });
+      retryAfterCtx.llm.registerAdapter(info, scripted(() => throws(rateLimited), ok));
+      const retries: Array<Extract<StreamChunk, { type: "retry" }>> = [];
+      for await (const chunk of retryAfterCtx.llm.stream(request)) {
+        if (chunk.type === "retry") retries.push(chunk);
+      }
+      expect(retries.map((r) => r.delayMs)).toEqual([15]);
+    } finally {
+      await retryAfterCtx.fiber.dispose();
+    }
+  });
+
+  it("does not reject LlmService.stream() when an llm/response listener throws", async () => {
+    const ctx = await setup();
+    ctx.llm.registerAdapter(info, scripted(ok));
+    ctx.on("llm/response", () => {
+      throw new Error("listener exploded");
+    });
+
+    const result = await assemble(ctx.llm.stream(request));
+    expect(result.reason).toBe("stop");
+    expect(result.message.content).toEqual([{ type: "text", text: "hello" }]);
+  });
 });
 
 describe("Credentials", () => {

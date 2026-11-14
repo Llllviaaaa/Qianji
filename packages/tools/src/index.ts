@@ -292,7 +292,15 @@ export class Tools extends Service {
     // and a `tools/execute` listener may replace `signal` for the calls below it.
     const callEnv: ToolEnv = { ...env, callId: call.id };
     const output = await this.run(call, callEnv);
-    this.ctx.emit("tools/result", call, callEnv, output);
+    try {
+      this.ctx.emit("tools/result", call, callEnv, output);
+    } catch (error) {
+      this.ctx.logger("tools").warn(
+        "tools/result listener failed for %s: %s",
+        call.name,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     return output;
   }
 

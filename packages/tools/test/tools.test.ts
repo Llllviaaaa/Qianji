@@ -66,6 +66,19 @@ describe("tools", () => {
     expect(await ctx.tools.execute({ id: "3", name: "boom", args: {} }, env())).toEqual(textOutput("boom failed: kaput", true));
   });
 
+  it("swallows errors from tools/result listeners without rejecting execute", async () => {
+    const ctx = await setup();
+    const observed: string[] = [];
+    ctx.on("tools/result", (call) => {
+      observed.push(call.name);
+    });
+    ctx.on("tools/result", () => {
+      throw new Error("listener crashed");
+    });
+    await expect(ctx.tools.execute({ id: "1", name: "shout", args: { text: "safe" } }, env())).resolves.toEqual(textOutput("SAFE"));
+    expect(observed).toEqual(["shout"]);
+  });
+
   it("refuses duplicate names and unregisters with the disposer", async () => {
     const ctx = await setup();
     expect(() => ctx.tools.register({ name: "shout", description: "", parameters: { type: "object" }, execute: () => textOutput("") })).toThrow("already registered");

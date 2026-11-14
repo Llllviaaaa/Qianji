@@ -97,15 +97,25 @@ export function parseLog(text: string): ParsedLog {
   const events: SessionEvent[] = [];
   let skipped = 0;
   for (const line of lines.slice(1)) {
-    let event: SessionEvent;
+    let parsed: unknown;
     try {
-      event = JSON.parse(line) as SessionEvent;
+      parsed = JSON.parse(line);
     } catch {
       skipped += 1;
       continue;
     }
-    const expected = (events.at(-1)?.seq ?? 0) + 1;
-    if (!isSessionEventType(event.type) || event.seq !== expected) {
+    if (parsed === null || typeof parsed !== "object") {
+      skipped += 1;
+      continue;
+    }
+    const event = parsed as SessionEvent;
+    const lastSeq = events.at(-1)?.seq ?? 0;
+    if (
+      !isSessionEventType(event.type)
+      || typeof event.seq !== "number"
+      || !Number.isInteger(event.seq)
+      || event.seq <= lastSeq
+    ) {
       skipped += 1;
       continue;
     }

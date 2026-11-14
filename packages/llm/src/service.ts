@@ -63,12 +63,18 @@ export interface LlmServiceConfig {
   maxAttempts?: number;
   /** First retry delay; doubles per retry. A provider's Retry-After wins. */
   baseDelayMs?: number;
+  /** Symmetric jitter ratio in `[0, 1]` applied to exponential backoff delays (default `0.2`, i.e. ±20%). */
+  jitterRatio?: number;
+  /** Random source in `[0, 1)` used for retry jitter (default `Math.random`). */
+  random?: () => number;
   /** Skip automatic retries when a pre-TTFB attempt hung with zero output for at least this long (default 45_000 ms). */
   maxRetryableAttemptMs?: number;
   /** Step down reasoning `effort` on retry when an active stream ran at least this long before dropping (default 60_000 ms). */
   longStreamStepDownMs?: number;
 }
 
+const DEFAULT_BASE_DELAY_MS = 1_000;
+const DEFAULT_JITTER_RATIO = 0.2;
 const MAX_RETRY_DELAY_MS = 60_000;
 const DEFAULT_MAX_RETRYABLE_ATTEMPT_MS = 45_000;
 const DEFAULT_LONG_STREAM_STEP_DOWN_MS = 60_000;
@@ -110,15 +116,36 @@ export class LlmService extends Service {
   private readonly protocols = new Map<string, LlmProtocolSpec>();
   private readonly maxAttempts: number;
   private readonly baseDelayMs: number;
+  private readonly jitterRatio: number;
+  private readonly random: () => number;
   private readonly maxRetryableAttemptMs: number;
   private readonly longStreamStepDownMs: number;
 
   constructor(ctx: Context, config: LlmServiceConfig = {}) {
     super(ctx, "llm");
     this.maxAttempts = Math.max(1, config.maxAttempts ?? 5);
-    this.baseDelayMs = Math.max(0, config.baseDelayMs ?? 1_000);
+    const rawBase = config.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+    this.baseDelayMs = Number.isFinite(rawBase) ? Math.max(0, rawBase) : DEFAULT_BASE_DELAY_MS;
+    const rawJitter = config.jitterRatio ?? DEFAULT_JITTER_RATIO;
+    this.jitterRatio = Number.isFinite(rawJitter) ? Math.min(1, Math.max(0, rawJitter)) : DEFAULT_JITTER_RATIO;
+    this.random = config.random ?? Math.random;
     this.maxRetryableAttemptMs = Math.max(1_000, config.maxRetryableAttemptMs ?? DEFAULT_MAX_RETRYABLE_ATTEMPT_MS);
     this.longStreamStepDownMs = Math.max(1_000, config.longStreamStepDownMs ?? DEFAULT_LONG_STREAM_STEP_DOWN_MS);
+  }
+
+  /** Compute the next retry delay in ms, honoring explicit `retryAfterMs` and applying bounded symmetric jitter otherwise. */
+  retryDelay(attempt: number, retryAfterMs?: number): number {
+    if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs)) {
+      return Math.min(Math.max(0, retryAfterMs), MAX_RETRY_DELAY_MS);
+    }
+    const base = this.baseDelayMs * 2 ** Math.max(0, attempt - 1);
+    if (base <= 0 || this.jitterRatio === 0) {
+      return Math.min(Math.max(0, base), MAX_RETRY_DELAY_MS);
+    }
+    const rawSample = this.random();
+    const sample = Number.isFinite(rawSample) ? Math.min(1, Math.max(0, rawSample)) : 0.5;
+    const factor = 1 - this.jitterRatio + 2 * this.jitterRatio * sample;
+    return Math.min(Math.max(0, Math.round(base * factor)), MAX_RETRY_DELAY_MS);
   }
 
   /** Register a wire-protocol factory (e.g. `"openai-compat"`, `"anthropic"`, or a custom protocol plugin). */
@@ -288,8 +315,8 @@ export class LlmService extends Service {
       }
       resetUsage(usage);
       const retryAfter = failure?.retryAfter;
-      const rawDelay = retryAfter !== undefined ? retryAfter * 1000 : this.baseDelayMs * 2 ** (attempts - 1);
-      const delay = Math.min(rawDelay, MAX_RETRY_DELAY_MS);
+      const retryAfterMs = retryAfter === undefined ? undefined : retryAfter * 1000;
+      const delay = this.retryDelay(attempts, retryAfterMs);
       this.ctx.logger("llm").warn(
         "%s/%s attempt %d failed after %dms (%s); retrying in %d ms%s",
         request.provider,
@@ -315,15 +342,22 @@ export class LlmService extends Service {
 
     const final = finish ?? { type: "finish" as const, reason: "aborted" as const };
     yield final;
-    this.ctx.emit("llm/response", {
-      provider: request.provider,
-      model: request.model,
-      usage,
-      reason: final.reason,
-      ...(final.error === undefined ? {} : { error: final.error }),
-      attempts,
-      durationMs: Date.now() - started,
-    });
+    try {
+      this.ctx.emit("llm/response", {
+        provider: request.provider,
+        model: request.model,
+        usage,
+        reason: final.reason,
+        ...(final.error === undefined ? {} : { error: final.error }),
+        attempts,
+        durationMs: Date.now() - started,
+      });
+    } catch (emitError) {
+      this.ctx.logger("llm").warn(
+        "llm/response listener failed: %s",
+        emitError instanceof Error ? emitError.message : String(emitError),
+      );
+    }
     this.ctx.logger("llm").info(
       "%s/%s %s in %d out %d cache %d/%d %dms%s",
       request.provider, request.model, final.reason, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens,

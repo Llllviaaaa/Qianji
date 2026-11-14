@@ -22,9 +22,11 @@ import {
 import { BlockAssembler, type LlmRequest, type Message, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
 import { CONTINUATION_NAMESPACE, compactionPoint, deriveState, slidingCompactionPoint, type EventOf, type ModelRef, type Session } from "@qianji/session";
 import "@qianji/system-prompt";
-import "@qianji/tools";
+import { ACTIVATE_TOOLS_NAME, textOutput, type ToolOutput } from "@qianji/tools";
+import { buildCompactionWorkingSetAddendum } from "./rehydrate.ts";
 import { SUMMARY_CLIP_LEVELS, shrinkForSummary } from "./summary-input.ts";
 
+export { buildCompactionWorkingSetAddendum } from "./rehydrate.ts";
 export { SUMMARY_CLIP_LEVELS, shrinkForSummary } from "./summary-input.ts";
 
 export interface AgentLoopConfig {
@@ -322,21 +324,58 @@ export class AgentLoop extends Service implements Agents {
     return assembler.result();
   }
 
+  private isConcurrencySafeTool(name: string): boolean {
+    return name === ACTIVATE_TOOLS_NAME || this.ctx.tools.get(name)?.readOnly === true;
+  }
+
   private async runTools(session: Session, run: Run, calls: ToolCallBlock[], signal: AbortSignal): Promise<void> {
     const env = { sessionId: session.id, cwd: session.header.cwd, signal };
-    const pending = calls.map((call) => {
+    for (const call of calls) {
       session.append("tool-call", { callId: call.id, name: call.name, args: call.arguments });
-      run.runningTools.set(call.id, call.name);
-      this.delta(session, { type: "tool-start", callId: call.id, name: call.name });
-      return this.ctx.tools.execute({ id: call.id, name: call.name, args: { ...call.arguments } }, env);
-    });
-    // Parallel execution, results appended in call order for a deterministic log.
+    }
+
+    type IndexedCall = { call: ToolCallBlock; index: number };
+    const batches: IndexedCall[][] = [];
+    let currentConcurrent: IndexedCall[] | undefined;
     for (const [index, call] of calls.entries()) {
-      const output = await pending[index];
-      if (output === undefined) continue;
-      session.append("tool-result", { callId: call.id, name: call.name, content: output.content, isError: output.isError === true });
-      run.runningTools.delete(call.id);
-      this.delta(session, { type: "tool-end", callId: call.id, isError: output.isError === true });
+      const item: IndexedCall = { call, index };
+      if (this.isConcurrencySafeTool(call.name)) {
+        if (currentConcurrent === undefined) {
+          currentConcurrent = [item];
+          batches.push(currentConcurrent);
+        } else {
+          currentConcurrent.push(item);
+        }
+      } else {
+        currentConcurrent = undefined;
+        batches.push([item]);
+      }
+    }
+
+    const outputs: Array<ToolOutput | undefined> = new Array(calls.length);
+    try {
+      for (const batch of batches) {
+        await Promise.all(batch.map(async ({ call, index }) => {
+          run.runningTools.set(call.id, call.name);
+          this.delta(session, { type: "tool-start", callId: call.id, name: call.name });
+          try {
+            outputs[index] = await this.ctx.tools.execute({ id: call.id, name: call.name, args: { ...call.arguments } }, env);
+          } catch (error) {
+            const msg = signal.aborted ? "Aborted." : `${call.name} failed: ${error instanceof Error ? error.message : String(error)}`;
+            outputs[index] = textOutput(msg, true);
+          } finally {
+            run.runningTools.delete(call.id);
+          }
+        }));
+      }
+    } finally {
+      // Deterministic log order: every tool-call gets a matching tool-result even on failure/interruption.
+      for (const [index, call] of calls.entries()) {
+        const output = outputs[index] ?? textOutput(signal.aborted ? "Aborted." : "Tool execution interrupted.", true);
+        session.append("tool-result", { callId: call.id, name: call.name, content: output.content, isError: output.isError === true });
+        run.runningTools.delete(call.id);
+        this.delta(session, { type: "tool-end", callId: call.id, isError: output.isError === true });
+      }
     }
   }
 
@@ -412,12 +451,14 @@ export class AgentLoop extends Service implements Agents {
       if (response.reason !== "error" || response.error?.kind !== "context-length" || signal.aborted) break;
       response = await ask(shrinkForSummary(head.messages, level));
     }
-    const summary = response.message.content
+    const rawSummary = response.message.content
       .flatMap((block) => (block.type === "text" ? [block.text] : []))
       .join("")
       .trim();
-    const ok = response.reason !== "error" && response.reason !== "aborted" && summary !== "";
+    const ok = response.reason !== "error" && response.reason !== "aborted" && rawSummary !== "";
     if (!ok) this.ctx.logger("agent").warn("compacting %s failed: %s", session.id, response.error?.message ?? response.reason);
+    const addendum = ok ? buildCompactionWorkingSetAddendum(session.events, throughSeq) : "";
+    const summary = addendum !== "" ? `${rawSummary}\n\n${addendum}` : rawSummary;
     const event = ok ? session.append("compaction", { throughSeq, summary }) : undefined;
     this.delta(session, { type: "compaction-end", ok });
     return event;

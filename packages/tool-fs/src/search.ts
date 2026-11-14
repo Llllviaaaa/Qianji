@@ -24,6 +24,7 @@ export function findRipgrep(): string | undefined {
 
 export const find: ToolDefinition<{ pattern: string; path?: string }> = {
   name: "find",
+  readOnly: true,
   description: `Find files by glob, e.g. "*.ts" (any depth) or "src/**/*.test.ts". Skips .git and node_modules. At most ${MAX_FIND_RESULTS} paths.`,
   parameters: {
     type: "object",
@@ -215,6 +216,7 @@ export function grepWithRipgrep(
 
 export const grep: ToolDefinition<GrepParams> = {
   name: "grep",
+  readOnly: true,
   description: `Search file contents for a regular expression (or literal text). Prints "path:line: text". Skips .git, node_modules and binary files. At most ${MAX_GREP_MATCHES} matches unless \`limit\` says otherwise.`,
   parameters: {
     type: "object",
