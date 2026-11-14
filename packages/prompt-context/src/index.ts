@@ -1,17 +1,55 @@
 /**
  * The built-in system prompt sections: who the agent is, how it works,
- * the project's context files (AGENTS.md, else CLAUDE.md), the available
- * skills (`<dir>/<skill>/SKILL.md`) and the environment.
+ * the project's context files (AGENTS.md, else CLAUDE.md, plus .local overrides
+ * and safe @path imports), path-scoped rules, available skills
+ * (`<dir>/<skill>/SKILL.md`), `/init`, and the environment.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, parse, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import type { Context } from "@deepseek-ai/cordis";
 import type { CommandDefinition } from "@qianji/commands";
 import "@qianji/protocol";
 import "@qianji/rpc";
 import { SectionOrder, type PromptEnv } from "@qianji/system-prompt";
+import {
+  contextFiles,
+  expandContextImports,
+  findProjectBoundary,
+  isPathInside,
+} from "./context-files.ts";
+import { createInitCommand } from "./init-command.ts";
+import {
+  discoverRules,
+  registerScopedRuleInjector,
+  renderAlwaysRules,
+  renderScopedRulesIndex,
+} from "./rules.ts";
 import { findSkills, readDisabledSkillKeys, registerSkillRpc, skillDirs } from "./skills.ts";
 
+export {
+  contextFiles,
+  expandContextImports,
+  findProjectBoundary,
+  isPathInside,
+  LOCAL_CONTEXT_FILES,
+  MAX_IMPORT_BYTES,
+  MAX_IMPORT_DEPTH,
+  nestedContextFiles,
+  SHARED_CONTEXT_FILES,
+  type ExpandImportsOptions,
+} from "./context-files.ts";
+export { createInitCommand } from "./init-command.ts";
+export {
+  discoverRules,
+  globToRegExp,
+  matchesRuleGlobs,
+  parseRuleFile,
+  registerScopedRuleInjector,
+  renderAlwaysRules,
+  renderScopedRulesIndex,
+  type ParsedRuleFile,
+  type ProjectRule,
+  type RuleMode,
+} from "./rules.ts";
 export {
   discoverSkillEntries,
   findSkills,
@@ -30,13 +68,13 @@ export const name = "qianji-prompt-context";
 export const inject = ["systemPrompt"];
 
 export interface Config {
-  /** The user's data directory (`~/.qianji`): its AGENTS.md and skills/ apply everywhere. */
+  /** The user's data directory (`~/.qianji`): its AGENTS.md, rules/, and skills/ apply everywhere. */
   dataDir: string;
   /** Optional read-only built-in skill directories (`resources/harness/bundled-skills` or repo `skills/`). */
   bundledSkillsDirs?: readonly string[] | (() => readonly string[]);
   /** Override for "today", for tests. */
   now?: () => Date;
-  /** Include AGENTS.md / CLAUDE.md. Default true. */
+  /** Include AGENTS.md / CLAUDE.md, .local overrides, and rules/. Default true. */
   contextFiles?: boolean;
   /** The user's own instructions (personality, custom instructions), after the guidelines. */
   instructions?: string;
@@ -52,28 +90,6 @@ export const GUIDELINES = `Guidelines:
 - Run the project's tests, typecheck, or build after changes when you can, fix issues your changes introduced, and report any remaining failures honestly.
 - When the task is done, reply with a concise summary of what changed.`;
 
-const CONTEXT_FILES = ["AGENTS.md", "CLAUDE.md"];
-
-/** The context files that apply in `cwd`: global first, then from the root down. One per directory. */
-export function contextFiles(dataDir: string, cwd: string): string[] {
-  const files: string[] = [];
-  const global = join(dataDir, "AGENTS.md");
-  if (existsSync(global)) files.push(global);
-  const dirs: string[] = [];
-  let dir = resolve(cwd);
-  const root = parse(dir).root;
-  for (;;) {
-    dirs.unshift(dir);
-    if (dir === root) break;
-    dir = dirname(dir);
-  }
-  for (const each of dirs) {
-    const found = CONTEXT_FILES.map((file) => join(each, file)).find((file) => existsSync(file));
-    if (found !== undefined && found !== global) files.push(found);
-  }
-  return files;
-}
-
 export function apply(ctx: Context, config: Config): void {
   const now = config.now ?? (() => new Date());
 
@@ -88,12 +104,36 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => ctx.systemPrompt.section("context-files", ({ cwd }: PromptEnv) => {
     if (config.contextFiles === false) return undefined;
     const files = contextFiles(config.dataDir, cwd);
-    if (files.length === 0) return undefined;
+    const rules = discoverRules(config.dataDir, cwd);
+    const boundary = findProjectBoundary(cwd);
+
+    const contextBlocks: string[] = [];
+    for (const file of files) {
+      const raw = readFileSync(file, "utf8").trim();
+      if (raw === "") continue;
+      const expanded = expandContextImports(raw, file, {
+        dataDir: config.dataDir,
+        boundaryDir: isPathInside(file, config.dataDir) ? config.dataDir : boundary,
+      });
+      if (expanded !== "") {
+        contextBlocks.push(`<context-file path="${file}">\n${expanded}\n</context-file>`);
+      }
+    }
+
+    const alwaysRuleBlocks = renderAlwaysRules(rules, config.dataDir);
+    if (contextBlocks.length === 0 && alwaysRuleBlocks.length === 0) return undefined;
+
     return [
-      "Project instructions from context files. Follow them; more specific (deeper) files win over general ones.",
-      ...files.map((file) => `<context-file path="${file}">\n${readFileSync(file, "utf8").trim()}\n</context-file>`),
+      "Project instructions from context files. Follow them; more specific (deeper) files and .local overrides win over general ones.",
+      ...contextBlocks,
+      ...alwaysRuleBlocks,
     ].join("\n\n");
   }, { order: SectionOrder.contextFiles }), `${name}: context-files`);
+
+  ctx.effect(() => ctx.systemPrompt.section("scoped-rules", ({ cwd }: PromptEnv) => {
+    if (config.contextFiles === false) return undefined;
+    return renderScopedRulesIndex(discoverRules(config.dataDir, cwd));
+  }, { order: SectionOrder.contextFiles + 20 }), `${name}: scoped-rules`);
 
   ctx.effect(() => ctx.systemPrompt.section("skills", ({ cwd, tools }: PromptEnv) => {
     if (!tools.some((tool) => tool.name === "read")) return undefined;
@@ -115,7 +155,12 @@ export function apply(ctx: Context, config: Config): void {
     `- Date: ${now().toISOString().slice(0, 10)}`,
   ].join("\n"), { order: SectionOrder.environment }), `${name}: environment`);
 
+  ctx.inject(["tools"], (toolsCtx) => {
+    registerScopedRuleInjector(toolsCtx, config);
+  });
+
   ctx.inject(["commands"], (inner) => {
+    inner.effect(() => inner.commands.register(createInitCommand()), `${name}: /init`);
     inner.effect(() => inner.commands.registerProvider((cwd) => {
       const targetCwd = cwd && cwd.trim() !== "" ? cwd : process.cwd();
       const disabled = readDisabledSkillKeys(config.dataDir);

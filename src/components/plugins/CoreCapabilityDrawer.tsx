@@ -234,7 +234,7 @@ export function CoreCapabilityDrawer({
         <div className="plugin-structured-row">
           <div className="plugin-structured-copy">
             <strong>项目上下文指令 (AGENTS.md / CLAUDE.md)</strong>
-            <small>进入工作区时自动注入项目根目录下的架构规范与构建约定文档</small>
+            <small>自动注入 AGENTS.md / CLAUDE.md（支持 .local 本地覆盖与 @path 引用）及 rules 路径规则，支持 /init 生成</small>
           </div>
           <div className="plugin-structured-control">
             <button

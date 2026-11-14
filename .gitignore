@@ -66,3 +66,5 @@ release/
 
 # Local AI-assistant overrides
 /CLAUDE.md
+AGENTS.local.md
+CLAUDE.local.md
