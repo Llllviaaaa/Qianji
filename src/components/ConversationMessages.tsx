@@ -3,7 +3,7 @@ import { ChevronUp } from "lucide-react";
 import { useAppStore } from "../store";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import type { UiMessage } from "../types";
-import { deriveTurnPlans } from "../lib/envSources";
+import { deriveTurnPlanState } from "../lib/envSources";
 import { deriveSessionIntelligentUis } from "../lib/intelligentUi";
 import { normalizeTranscriptDensity, type TranscriptDensity } from "../lib/transcriptDensity";
 import { groupTranscriptMessages } from "../lib/transcriptTurns";
@@ -61,14 +61,10 @@ export function ConversationMessages({
     () => (intelligentUiEnabled ? deriveSessionIntelligentUis(displayMessages) : null),
     [displayMessages, intelligentUiEnabled],
   );
-  const { turnPlans, latestPlanMessageId } = useMemo(() => {
-    const allPlans = deriveTurnPlans(displayMessages);
-    return {
-      turnPlans: isStreaming ? deriveTurnPlans(displayMessages, true) : allPlans,
-      // The side panel shows the newest plan, so only the turn that holds it links there.
-      latestPlanMessageId: [...allPlans.keys()].pop(),
-    };
-  }, [displayMessages, isStreaming]);
+  const { turnPlans, latestPlanMessageId } = useMemo(
+    () => deriveTurnPlanState(displayMessages, isStreaming),
+    [displayMessages, isStreaming],
+  );
   const [visibleCount, setVisibleCount] = useState(120);
   const firstVisibleIndex = Math.max(0, displayMessages.length - visibleCount);
   const visibleMessages = useMemo(

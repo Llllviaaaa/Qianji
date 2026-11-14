@@ -1,0 +1,11 @@
+/*
+ * Settled conversation turn CSS virtualization.
+ *
+ * Applies content-visibility: auto to settled assistant turns in the main
+ * transcript while excluding actively streaming, nav-landed, or focused turns.
+ */
+
+.codex-shot .conversation article.dshc-turn:not([data-turn-open]):not([data-dsh-claude-turn-nav-landed]):not(:focus-within):not(:has(.dshc-answer[data-streaming])) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}

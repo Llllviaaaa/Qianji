@@ -188,7 +188,7 @@ export const Message = memo(function Message({
     if (segment.kind === "text") {
       return (
         <div key={segment.key} className="dshc-process-text dshc-md dshc-md-prose" data-chat-group-part="response">
-          <Markdown content={segment.text} />
+          <Markdown content={segment.text} isStreaming={working && position === segments.length - 1 && !hasContent} />
         </div>
       );
     }
@@ -284,7 +284,7 @@ export const Message = memo(function Message({
       ) : (
         <div className="dshc-answer" data-streaming={working || undefined}>
           <div className="dshc-md dshc-md-prose">
-            <Markdown content={assistantContent} allowRichContent={allowRichContent && !working} />
+            <Markdown content={assistantContent} allowRichContent={allowRichContent && !working} isStreaming={working} />
           </div>
         </div>
       ))}

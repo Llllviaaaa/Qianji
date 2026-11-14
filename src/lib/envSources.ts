@@ -306,27 +306,103 @@ export function deriveLiveTaskPlan(messages: UiMessage[]): TaskPlanSummary | nul
   return latestPlanIn(messages.slice(openTurnStart(messages)));
 }
 
-/**
- * Map each turn's final plan to the message that last updated it, so the plan
- * renders inside the turn that made it instead of trailing every later turn.
- * The open turn is skipped while it streams; its plan shows above the composer.
- */
-export function deriveTurnPlans(messages: UiMessage[], skipOpenTurn = false): Map<string, TaskPlanSummary> {
-  const plans = new Map<string, TaskPlanSummary>();
-  const end = skipOpenTurn ? openTurnStart(messages) : messages.length;
+export interface TurnPlanState {
+  turnPlans: Map<string, TaskPlanSummary>;
+  latestPlanMessageId: string | undefined;
+}
+interface TurnPlanPrefixEntry {
+  settledCount: number;
+  prefix: readonly UiMessage[];
+  plans: Map<string, TaskPlanSummary>;
+  latestId: string | undefined;
+  lastStreaming?: boolean;
+  lastResult?: TurnPlanState;
+}
+const EMPTY_TURN_PLANS = new Map<string, TaskPlanSummary>();
+const EMPTY_TURN_PLAN_STATE: TurnPlanState = { turnPlans: EMPTY_TURN_PLANS, latestPlanMessageId: undefined };
+const turnPlanByArrayCache = new WeakMap<readonly UiMessage[], { streaming?: TurnPlanState; settled?: TurnPlanState }>();
+let lastPlanPrefix: TurnPlanPrefixEntry | null = null;
+
+function scanSettledPlans(
+  messages: readonly UiMessage[],
+  start: number,
+  end: number,
+  basePlans: Map<string, TaskPlanSummary>,
+  baseLatestId: string | undefined,
+): { plans: Map<string, TaskPlanSummary>; latestId: string | undefined } {
+  let plans: Map<string, TaskPlanSummary> | null = null;
+  let latestId = baseLatestId;
   let turnPlan: { messageId: string; plan: TaskPlanSummary } | null = null;
-  for (let index = 0; index < end; index += 1) {
+  for (let index = start; index < end; index += 1) {
     const message = messages[index];
     if (message.role === "user") {
-      if (turnPlan) plans.set(turnPlan.messageId, turnPlan.plan);
+      if (turnPlan) {
+        plans ??= new Map(basePlans);
+        plans.set(turnPlan.messageId, turnPlan.plan);
+        latestId = turnPlan.messageId;
+      }
       turnPlan = null;
-      continue;
+    } else {
+      const plan = latestPlanInMessage(message);
+      if (plan) turnPlan = { messageId: message.id, plan };
     }
-    const plan = latestPlanInMessage(message);
-    if (plan) turnPlan = { messageId: message.id, plan };
   }
-  if (turnPlan) plans.set(turnPlan.messageId, turnPlan.plan);
-  return plans;
+  return { plans: plans ?? basePlans, latestId };
+}
+
+function getSettledPlanPrefix(messages: readonly UiMessage[], settledCount: number): TurnPlanPrefixEntry | null {
+  if (settledCount <= 0) return null;
+  const cached = lastPlanPrefix;
+  if (cached && settledCount >= cached.settledCount && cached.prefix.every((item, idx) => messages[idx] === item)) {
+    if (settledCount > cached.settledCount) {
+      const adv = scanSettledPlans(messages, cached.settledCount, settledCount, cached.plans, cached.latestId);
+      Object.assign(cached, { settledCount, prefix: messages.slice(0, settledCount), plans: adv.plans, latestId: adv.latestId, lastResult: undefined });
+    }
+    return cached;
+  }
+  const built = scanSettledPlans(messages, 0, settledCount, EMPTY_TURN_PLANS, undefined);
+  return (lastPlanPrefix = { settledCount, prefix: messages.slice(0, settledCount), plans: built.plans, latestId: built.latestId });
+}
+
+/** Single-pass cached derivation of per-turn plans and the newest plan message ID. */
+export function deriveTurnPlanState(messages: UiMessage[], isStreaming = false): TurnPlanState {
+  const arrayCached = turnPlanByArrayCache.get(messages);
+  const hit = isStreaming ? arrayCached?.streaming : arrayCached?.settled;
+  if (hit) return hit;
+
+  const settledCount = openTurnStart(messages);
+  const entry = getSettledPlanPrefix(messages, settledCount);
+  const prefixPlans = entry ? entry.plans : EMPTY_TURN_PLANS;
+  let openPlan: { messageId: string; plan: TaskPlanSummary } | null = null;
+  for (let index = settledCount; index < messages.length; index += 1) {
+    const plan = latestPlanInMessage(messages[index]);
+    if (plan) openPlan = { messageId: messages[index].id, plan };
+  }
+
+  let result: TurnPlanState;
+  if (isStreaming || !openPlan) {
+    const latestPlanMessageId = openPlan ? openPlan.messageId : entry?.latestId;
+    if (prefixPlans === EMPTY_TURN_PLANS && latestPlanMessageId === undefined) result = EMPTY_TURN_PLAN_STATE;
+    else if (entry?.lastResult && entry.lastStreaming === isStreaming && entry.lastResult.turnPlans === prefixPlans && entry.lastResult.latestPlanMessageId === latestPlanMessageId) result = entry.lastResult;
+    else result = { turnPlans: prefixPlans, latestPlanMessageId };
+  } else {
+    const turnPlans = new Map(prefixPlans);
+    turnPlans.set(openPlan.messageId, openPlan.plan);
+    result = { turnPlans, latestPlanMessageId: openPlan.messageId };
+  }
+
+  if (entry) { entry.lastStreaming = isStreaming; entry.lastResult = result; }
+  turnPlanByArrayCache.set(messages, isStreaming ? { ...arrayCached, streaming: result } : { ...arrayCached, settled: result });
+  return result;
+}
+
+export function findLatestTurnPlanMessageId(messages: UiMessage[]): string | undefined {
+  return deriveTurnPlanState(messages, false).latestPlanMessageId;
+}
+
+/** Map each turn's final plan to the message that last updated it; skips open turn while streaming. */
+export function deriveTurnPlans(messages: UiMessage[], skipOpenTurn = false): Map<string, TaskPlanSummary> {
+  return deriveTurnPlanState(messages, skipOpenTurn).turnPlans;
 }
 
 /** The step a plan is on: the first in progress, else the first pending, else the last. */

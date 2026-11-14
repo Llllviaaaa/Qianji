@@ -66,6 +66,62 @@ export function workStepsFromMessages(
 const turnMergeCache = new WeakMap<UiMessage, { inputs: readonly UiMessage[]; merged: UiMessage }>();
 const groupedTranscriptCache = new WeakMap<readonly UiMessage[], UiMessage[]>();
 
+interface TranscriptPrefixCacheEntry {
+  settledMsgCount: number;
+  prefix: readonly UiMessage[];
+  settledTurns: readonly UiMessage[];
+}
+
+const MAX_PREFIX_CACHE_ENTRIES = 4;
+const transcriptPrefixCache: TranscriptPrefixCacheEntry[] = [];
+
+function findMatchingPrefixEntry(messages: readonly UiMessage[]): TranscriptPrefixCacheEntry | null {
+  for (let entryIdx = transcriptPrefixCache.length - 1; entryIdx >= 0; entryIdx -= 1) {
+    const entry = transcriptPrefixCache[entryIdx];
+    if (messages.length < entry.settledMsgCount || messages[0] !== entry.prefix[0]) continue;
+    let matched = true;
+    for (let index = 1; index < entry.settledMsgCount; index += 1) {
+      if (messages[index] !== entry.prefix[index]) {
+        matched = false;
+        break;
+      }
+    }
+    if (!matched) continue;
+    if (entryIdx !== transcriptPrefixCache.length - 1) {
+      transcriptPrefixCache.splice(entryIdx, 1);
+      transcriptPrefixCache.push(entry);
+    }
+    return entry;
+  }
+  return null;
+}
+
+function updatePrefixCache(
+  messages: readonly UiMessage[],
+  settledMsgCount: number,
+  out: readonly UiMessage[],
+  settledTurnCount: number,
+): void {
+  const firstMessage = messages[0];
+  if (!firstMessage) return;
+  const existingIdx = transcriptPrefixCache.findIndex((entry) => entry.prefix[0] === firstMessage);
+  if (settledMsgCount <= 0) {
+    if (existingIdx >= 0) transcriptPrefixCache.splice(existingIdx, 1);
+    return;
+  }
+  const nextEntry: TranscriptPrefixCacheEntry = {
+    settledMsgCount,
+    prefix: messages.slice(0, settledMsgCount),
+    settledTurns: out.slice(0, settledTurnCount),
+  };
+  if (existingIdx >= 0) {
+    transcriptPrefixCache.splice(existingIdx, 1);
+  } else if (transcriptPrefixCache.length >= MAX_PREFIX_CACHE_ENTRIES) {
+    transcriptPrefixCache.shift();
+  }
+  transcriptPrefixCache.push(nextEntry);
+}
+
 export function mergeAssistantTurn(messages: UiMessage[]): UiMessage {
   const firstRaw = messages[0];
   if (firstRaw) {
@@ -107,22 +163,35 @@ export function mergeAssistantTurn(messages: UiMessage[]): UiMessage {
 export function groupTranscriptMessages(messages: UiMessage[]): UiMessage[] {
   const cached = groupedTranscriptCache.get(messages);
   if (cached) return cached;
-  const out: UiMessage[] = [];
+
+  const matchedEntry = findMatchingPrefixEntry(messages);
+  const out: UiMessage[] = matchedEntry ? matchedEntry.settledTurns.slice() : [];
+  const startIndex = matchedEntry ? matchedEntry.settledMsgCount : 0;
+  let settledMsgCount = startIndex;
+  let settledTurnCount = out.length;
+
   let bucket: UiMessage[] = [];
   const flush = () => {
     if (!bucket.length) return;
     out.push(mergeAssistantTurn(bucket));
     bucket = [];
   };
-  for (const message of messages) {
+  for (let index = startIndex; index < messages.length; index += 1) {
+    const message = messages[index];
     if (message.role === "assistant") {
       bucket.push(message);
       continue;
     }
     flush();
     out.push(message);
+    settledMsgCount = index + 1;
+    settledTurnCount = out.length;
   }
   flush();
+
+  if (!matchedEntry || settledMsgCount > matchedEntry.settledMsgCount) {
+    updatePrefixCache(messages, settledMsgCount, out, settledTurnCount);
+  }
   groupedTranscriptCache.set(messages, out);
   return out;
 }

@@ -27,6 +27,7 @@
 @import "./ui-primitives.css" layer(components);
 @import "./composer-menus.css" layer(components);
 @import "./motion.css" layer(components);
+@import "./conversation-perf.css" layer(components);
 @import "./plugin-extensions.css" layer(components);
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
