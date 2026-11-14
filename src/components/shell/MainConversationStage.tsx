@@ -1,9 +1,10 @@
 import { lazy, Suspense } from "react";
-import { Code2, GitCompare, Globe2, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import type { ClientContributionsSnapshot } from "../../lib/clientContributions";
 import type { CodeReviewScope } from "../../lib/codeReview";
 import type { TranscriptDensity } from "../../lib/transcriptDensity";
 import { useAppStore } from "../../store";
+import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
 import type { UiSlice } from "../../store/types";
 import type {
   AppSettings,
@@ -12,7 +13,6 @@ import type {
   ModelInfo,
   UiMessage,
 } from "../../types";
-import { ActiveGoalBar } from "../ActiveGoalBar";
 import { RegionErrorBoundary, SlotEntryHost } from "../common/ErrorBoundary";
 import { ConversationMessages } from "../ConversationMessages";
 import { ExtensionDialog } from "../ExtensionDialog";
@@ -30,13 +30,13 @@ const ScheduledTasksPage = lazy(() =>
 export interface MainConversationStageProps {
   workspaceCwd: string;
   cwd: string;
-  draftWorkspace: string;
+  draftWorkspace?: string;
   defaultWorkspaceDir: string;
   workspaceOptions: string[];
   sessionFile: string | null;
   runtimeId: string | null;
   hubView: HubView | null;
-  setHubView: (next: HubView | null) => void;
+  setHubView?: (next: HubView | null) => void;
   newTask: boolean;
   transcriptDensity: TranscriptDensity;
   homeHeadline: string;
@@ -76,13 +76,11 @@ export interface MainConversationStageProps {
 export function MainConversationStage({
   workspaceCwd,
   cwd,
-  draftWorkspace,
   defaultWorkspaceDir,
   workspaceOptions,
   sessionFile,
   runtimeId,
   hubView,
-  setHubView,
   newTask,
   transcriptDensity,
   homeHeadline,
@@ -118,6 +116,7 @@ export function MainConversationStage({
   layoutScale,
   contributions,
 }: MainConversationStageProps) {
+  const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
   return (
     <>
       <div className="work-body">
@@ -135,40 +134,11 @@ export function MainConversationStage({
                 onOpenSession={(workspace, file) => navigateTo({ kind: "session", cwd: workspace, file })}
                 onError={showErrorToast}
               />
-            ) : hubView === "sites" ? (
-              <div className="feature-hub">
-                <div className="feature-hub-heading">
-                  <span className="feature-hub-icon"><Globe2 size={22} /></span>
-                  <div>
-                    <h1>站点快捷方式</h1>
-                    <p>识别当前项目中的 Web 应用并在本地启动检查。</p>
-                  </div>
-                </div>
-                <div className="feature-hub-card">
-                  <div className="feature-hub-stat">
-                    <strong>{draftWorkspace.split(/[\\/]/).filter(Boolean).pop() || "选择一个项目"}</strong>
-                    <span>本地 Web 工作区</span>
-                  </div>
-                  <div className="feature-hub-actions">
-                    <button
-                      className="primary-button"
-                      onClick={() => {
-                        setHubView(null);
-                        void sendFromComposer(
-                          "识别这个项目中的 Web 应用，启动本地开发服务器，检查首页是否可用，并把预览地址告诉我。若启动失败，请直接修复。",
-                          undefined,
-                        );
-                      }}
-                    >
-                      启动并检查
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : hubView?.startsWith("plugin:") ? (
+            ) : hubView === "sites" || hubView?.startsWith("plugin:") ? (
               <div className="pid-plugin-page-stage">
                 {(() => {
-                  const activePluginPage = contributions.pages.find((page) => `plugin:${page.id}` === hubView);
+                  const targetPageId = hubView === "sites" ? "sites" : hubView.slice("plugin:".length);
+                  const activePluginPage = contributions.pages.find((page) => page.id === targetPageId);
                   if (!activePluginPage) return null;
                   return (
                     <SlotEntryHost
@@ -198,77 +168,55 @@ export function MainConversationStage({
                           <div className="dsh-claude-home-composer-wrap">
                             {renderComposer("task-start")}
                           </div>
-                          <div className="dsh-home-starters" aria-label="快捷指令建议">
-                            <button
-                              type="button"
-                              className="dsh-home-starter-pill"
-                              onClick={() => useAppStore.setState({ composerPrefill: "梳理当前项目的核心目录架构，指出值得优先优化的模块。" })}
-                            >
-                              <Code2 size={13} strokeWidth={1.8} />
-                              <span>梳理项目架构</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="dsh-home-starter-pill"
-                              onClick={() => useAppStore.setState({ composerPrefill: "排查当前项目里值得优先修复的潜在缺陷或边界情况，并给出修复建议。" })}
-                            >
-                              <Sparkles size={13} strokeWidth={1.8} />
-                              <span>排查潜在缺陷</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="dsh-home-starter-pill"
-                              onClick={() => useAppStore.setState({ composerPrefill: "检查当前工作区的 Git 未提交变更，总结风险点并给出改进建议。" })}
-                            >
-                              <GitCompare size={13} strokeWidth={1.8} />
-                              <span>审查未提交变更</span>
-                            </button>
-                            {contributions.homeQuickActions.map((item) => {
-                              const quickCtx = {
-                                cwd: workspaceCwd || cwd,
-                                sessionFile,
-                                prefillComposer: (prompt: string) => {
-                                  useAppStore.setState({ composerPrefill: prompt });
-                                },
-                                sendPrompt: (prompt: string) => {
-                                  void sendFromComposer(prompt, undefined);
-                                },
-                              };
-                              if (typeof item.render === "function") {
+                          {contributions.homeQuickActions.length > 0 && (
+                            <div className="dsh-home-starters" aria-label="快捷指令建议">
+                              {contributions.homeQuickActions.map((item) => {
+                                const quickCtx = {
+                                  cwd: workspaceCwd || cwd,
+                                  sessionFile,
+                                  prefillComposer: (prompt: string) => {
+                                    useAppStore.setState({ composerPrefill: prompt });
+                                  },
+                                  sendPrompt: (prompt: string) => {
+                                    void sendFromComposer(prompt, undefined);
+                                  },
+                                };
+                                if (typeof item.render === "function") {
+                                  return (
+                                    <SlotEntryHost
+                                      key={item.id}
+                                      entry={{ id: item.id, pluginId: item.pluginId, render: item.render }}
+                                      context={quickCtx}
+                                      slotName="home.quickActions"
+                                      compact
+                                    />
+                                  );
+                                }
                                 return (
-                                  <SlotEntryHost
+                                  <button
                                     key={item.id}
-                                    entry={{ id: item.id, pluginId: item.pluginId, render: item.render }}
-                                    context={quickCtx}
-                                    slotName="home.quickActions"
-                                    compact
-                                  />
-                                );
-                              }
-                              return (
-                                <button
-                                  key={item.id}
-                                  type="button"
-                                  className="dsh-home-starter-pill"
-                                  data-qj-plugin={item.pluginId ?? "builtin"}
-                                  onClick={() => {
-                                    try {
-                                      if (typeof item.onSelect === "function") {
-                                        item.onSelect(quickCtx);
-                                      } else if (typeof item.prompt === "string" && item.prompt.trim() !== "") {
-                                        quickCtx.prefillComposer(item.prompt);
+                                    type="button"
+                                    className="dsh-home-starter-pill"
+                                    data-qj-plugin={item.pluginId ?? "builtin"}
+                                    onClick={() => {
+                                      try {
+                                        if (typeof item.onSelect === "function") {
+                                          item.onSelect(quickCtx);
+                                        } else if (typeof item.prompt === "string" && item.prompt.trim() !== "") {
+                                          quickCtx.prefillComposer(item.prompt);
+                                        }
+                                      } catch (error) {
+                                        console.error(`[qianji-client-plugins] homeQuickAction "${item.id}" failed:`, error);
                                       }
-                                    } catch (error) {
-                                      console.error(`[qianji-client-plugins] homeQuickAction "${item.id}" failed:`, error);
-                                    }
-                                  }}
-                                >
-                                  {item.icon ?? <Sparkles size={13} strokeWidth={1.8} />}
-                                  <span>{item.label ?? item.id}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
+                                    }}
+                                  >
+                                    {item.icon ?? <Sparkles size={13} strokeWidth={1.8} />}
+                                    <span>{item.label ?? item.id}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -280,7 +228,7 @@ export function MainConversationStage({
                           statusText={statusText}
                           editingMessageId={editingMessageId}
                           onEdit={editUserMessage}
-                          onRewind={rewindUserMessage}
+                          onRewind={contributions.rewindHandlers.length > 0 ? rewindUserMessage : undefined}
                           onCancelEdit={cancelMessageEdit}
                           onSubmitEdit={submitMessageEdit}
                           scrollerRef={conversationScrollRef}
@@ -295,7 +243,7 @@ export function MainConversationStage({
                               stats={sessionFileStats}
                               onOpenFile={openPreviewFile}
                               onRestore={() => void restoreGitFiles(sessionChanges.map((file) => file.path))}
-                              onReview={() => void requestReview({ mode: "uncommitted" })}
+                              onReview={codeReviewEnabled ? () => void requestReview({ mode: "uncommitted" }) : undefined}
                             />
                           ) : undefined}
                         />
@@ -320,7 +268,6 @@ export function MainConversationStage({
                 {!newTask && !hubView && (
                   <div className="composer-dock">
                     <LivePlanBar />
-                    <ActiveGoalBar />
                     {renderComposer("follow-up")}
                   </div>
                 )}

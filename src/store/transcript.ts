@@ -2,6 +2,7 @@
 import { describeError } from "../lib/errors";
 import { clientContributions } from "../lib/clientContributions";
 import { buildPromptPayload, harnessRuntimes, parseLeadingSlashCommand } from "../lib/harnessRuntime";
+import { requestOpenSettings } from "../lib/shellBridge";
 import { appendManagedQueue, insertManagedQueueItem, moveManagedQueueItem, removeManagedQueueItem } from "../lib/managedQueue";
 import { completionNotification, isSilentUiRequest, uiRequestNotification } from "../lib/eventNotifications";
 import { agentBrowserFromResult, computerFromResult, isGrokBrowserTool, isGrokComputerTool } from "../lib/toolPanels";
@@ -188,6 +189,9 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
         const slash = parseLeadingSlashCommand(payload.message);
         if (slash !== null) {
           try {
+            if (slash.rawArgs.trim() === "" && (slash.name === "mcp" || slash.name === "skills")) {
+              if (requestOpenSettings(slash.name)) return true;
+            }
             const handledByClient = await clientContributions.tryHandleSlashCommand(
               slash.name,
               slash.rawArgs,

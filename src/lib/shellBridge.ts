@@ -10,7 +10,14 @@ import type { BuiltinSettingsPageId } from "./clientContributionTypes";
 /** A Settings category: built-in, or `plugin:<id>` for a page from `registerSettingsPage`. */
 export type SettingsPageId = BuiltinSettingsPageId | `plugin:${string}`;
 
-export const BUILTIN_SETTINGS_PAGES: readonly BuiltinSettingsPageId[] = ["general", "appearance", "providers", "plugins"];
+export const BUILTIN_SETTINGS_PAGES: readonly BuiltinSettingsPageId[] = [
+  "general",
+  "appearance",
+  "providers",
+  "mcp",
+  "skills",
+  "plugins",
+];
 
 export function isBuiltinSettingsPage(value: string): value is BuiltinSettingsPageId {
   return (BUILTIN_SETTINGS_PAGES as readonly string[]).includes(value);

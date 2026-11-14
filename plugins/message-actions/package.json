@@ -1,0 +1,36 @@
+{
+  "name": "message-actions",
+  "version": "0.1.0",
+  "description": "助手消息操作扩展：一键分享回复、复制消息定位锚点与引用摘录追问。",
+  "qianji": {
+    "id": "message-actions",
+    "name": "消息快捷操作与分享",
+    "description": "为助手消息操作栏挂载分享回复、锚点定位高亮与引用追问按钮，每项操作均可独立开关。",
+    "client": "./client.tsx",
+    "contributes": {
+      "slots": ["message.actions"]
+    },
+    "defaultConfig": {
+      "enableShare": true,
+      "enablePermalink": true,
+      "enableQuoteReply": true
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "enableShare": {
+          "type": "boolean",
+          "description": "显示「分享回复」按钮（调用系统分享或复制正文）"
+        },
+        "enablePermalink": {
+          "type": "boolean",
+          "description": "显示「定位此消息」锚点按钮"
+        },
+        "enableQuoteReply": {
+          "type": "boolean",
+          "description": "显示「引用追问」按钮，一键将回复摘录为引用块填回输入框"
+        }
+      }
+    }
+  }
+}

@@ -41,7 +41,7 @@ export function ConversationMessages({
   editingMessageId?: string;
   density?: TranscriptDensity;
   onEdit: (message: UiMessage) => void;
-  onRewind: (message: UiMessage) => Promise<boolean>;
+  onRewind?: (message: UiMessage) => Promise<boolean>;
   onCancelEdit: () => void;
   onSubmitEdit: (message: UiMessage, text: string) => Promise<boolean>;
   onOpenPlan?: () => void;

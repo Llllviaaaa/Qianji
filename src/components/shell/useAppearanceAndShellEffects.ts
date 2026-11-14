@@ -12,6 +12,7 @@ import { applyUiScale } from "../../lib/panelLayout";
 import { installPluginKeybindings } from "../../lib/pluginKeybindings";
 import { scheduleClient } from "../../lib/scheduleClient";
 import { useAppStore } from "../../store";
+import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
 import { bindWorkbenchNotifications } from "../../stores/workbenchStore";
 import type { AppSettings, ConnectionState } from "../../types";
 import type { AppMenu, HubView } from "./shellTypes";
@@ -275,7 +276,7 @@ export function useAppearanceAndShellEffects({
         toggleWorkspaceSidebar();
         return;
       }
-      if (ctrl && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "t" && !inTerminal && !settingsOpen) {
+      if (ctrl && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "t" && !inTerminal && !settingsOpen && useBuiltinPluginGatesStore.getState().webPreviewEnabled) {
         event.preventDefault();
         openBrowserAt();
         return;
@@ -291,7 +292,7 @@ export function useAppearanceAndShellEffects({
         event.preventDefault();
         setSettingsOpen(false);
         toggleBottomPanel();
-      } else if (shortcut === normalize(shortcuts.changes) && !inTerminal) {
+      } else if (shortcut === normalize(shortcuts.changes) && !inTerminal && useBuiltinPluginGatesStore.getState().codeReviewEnabled) {
         event.preventDefault();
         setSettingsOpen(false);
         openReview();

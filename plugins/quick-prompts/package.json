@@ -1,0 +1,51 @@
+{
+  "name": "quick-prompts",
+  "version": "0.1.0",
+  "description": "新会话首页快捷指令胶囊：提供架构梳理、缺陷排查、Git 变更审查及可自定义的开场提示词。",
+  "qianji": {
+    "id": "quick-prompts",
+    "name": "首页快捷指令",
+    "description": "可开关与自定义的新会话首页快捷指令胶囊，支持「点击回填」或「一键立即发送」。",
+    "client": "./client.tsx",
+    "contributes": {
+      "slots": ["home.quickActions"]
+    },
+    "defaultConfig": {
+      "sendImmediately": false,
+      "showArchitecture": true,
+      "showBugHunt": true,
+      "showGitReview": true,
+      "customLabel": "",
+      "customPrompt": ""
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "sendImmediately": {
+          "type": "boolean",
+          "description": "点击快捷胶囊后直接发起对话（关闭则回填到输入框待你补充）"
+        },
+        "showArchitecture": {
+          "type": "boolean",
+          "description": "显示「梳理项目架构」预设胶囊"
+        },
+        "showBugHunt": {
+          "type": "boolean",
+          "description": "显示「排查潜在缺陷」预设胶囊"
+        },
+        "showGitReview": {
+          "type": "boolean",
+          "description": "显示「审查未提交变更」预设胶囊"
+        },
+        "customLabel": {
+          "type": "string",
+          "description": "自定义快捷胶囊按钮标题（留空则不显示）"
+        },
+        "customPrompt": {
+          "type": "string",
+          "description": "自定义快捷胶囊对应的提示词模板"
+        }
+      }
+    }
+  }
+}

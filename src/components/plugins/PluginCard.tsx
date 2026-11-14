@@ -18,6 +18,7 @@ import {
   cleanDisplayName,
   coreOperationalChips,
   iconAccentTone,
+  isBundledFeaturePlugin,
   originLabel,
   PLUGIN_TO_APP_SETTING,
   PluginCategoryIcon,
@@ -82,14 +83,17 @@ export function PluginCard({
   const cannotDisable = plugin.canDisable === false;
   const switchDisabled = busy || plugin.status === "untrusted" || cannotDisable;
   const isExternal = plugin.tier === "user" || plugin.tier === "workspace";
+  const isBundled = isBundledFeaturePlugin(plugin);
+  const isDiskPlugin = isExternal || isBundled;
   const title = cleanDisplayName(plugin);
   const opChips = compactSystem ? [] : coreOperationalChips(plugin, form, mcpStatuses);
   const scopeWorkspace = plugin.tier === "workspace" ? (plugin.workspace ?? cwd) : undefined;
 
   const extCapabilities: string[] = [];
-  if (isExternal && channel !== null) extCapabilities.push(channel);
-  if (isExternal && plugin.hasHost) extCapabilities.push("后端 Host");
-  if (isExternal && plugin.hasClient) extCapabilities.push("前端 UI");
+  if (isBundled) extCapabilities.push("官方插件");
+  else if (isExternal && channel !== null) extCapabilities.push(channel);
+  if (isDiskPlugin && plugin.hasHost) extCapabilities.push("后端 Host");
+  if (isDiskPlugin && plugin.hasClient) extCapabilities.push("前端 UI");
 
   return (
     <article
@@ -244,7 +248,7 @@ export function PluginCard({
                 </button>
               )}
 
-              {plugin.dir !== undefined && isTauri && isExternal && (
+              {plugin.dir !== undefined && isTauri && isDiskPlugin && (
                 <button
                   type="button"
                   className="plugin-ghost-btn icon-only"
@@ -256,7 +260,7 @@ export function PluginCard({
                 </button>
               )}
 
-              {isExternal && (
+              {isDiskPlugin && (
                 <button
                   type="button"
                   className="plugin-ghost-btn icon-only"

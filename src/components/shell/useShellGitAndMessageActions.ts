@@ -1,10 +1,8 @@
 import { useCallback, useState } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { agent } from "../../lib/agent";
 import { clientContributions } from "../../lib/clientContributions";
 import type { CodeReviewScope } from "../../lib/codeReview";
 import { describeError } from "../../lib/errors";
-import { rewindController } from "../../lib/rewindController";
 import { useAppStore } from "../../store";
 import type { CommitOutcome } from "../CommitDialog";
 import type { AppSettings, AttachmentPayload, GitSnapshot, UiMessage } from "../../types";
@@ -75,32 +73,12 @@ export function useShellGitAndMessageActions({
       current.showToast("请等待当前回复完成后再回退消息", "warning");
       return false;
     }
-    if (clientContributions.hasRewindHandler()) {
-      const handled = await clientContributions.tryHandleRewind(message);
-      if (handled) setEditingMessage(null);
-      return handled;
-    }
-    const inspected = await rewindController.inspectMessage(message.id);
-    if (!inspected) {
-      current.showToast("无法定位这条消息的会话检查点", "warning");
+    if (!clientContributions.hasRewindHandler()) {
       return false;
     }
-    const detail = inspected.changed
-      ? `将回退此消息之后的对话，并将 ${inspected.files.length || 1} 个文件恢复到该消息发送前的快照状态。原消息会自动放回输入框供你修改重发。`
-      : "将回退此消息之后的对话，并将原消息放回输入框供你重新编辑发送。已有对话分支仍可从会话树切回。";
-    const accepted = await confirm(
-      detail,
-      { title: "回退消息并重新编辑？", kind: "warning", okLabel: "回退并编辑", cancelLabel: "取消" },
-    );
-    if (!accepted) return false;
-    const outcome = await rewindController.performRewind({
-      message,
-      entryId: inspected.entryId,
-      mode: "both",
-      protectDraft: false,
-    });
-    if (outcome) setEditingMessage(null);
-    return Boolean(outcome);
+    const handled = await clientContributions.tryHandleRewind(message);
+    if (handled) setEditingMessage(null);
+    return handled;
   }, []);
 
   const cancelMessageEdit = useCallback(() => setEditingMessage(null), []);

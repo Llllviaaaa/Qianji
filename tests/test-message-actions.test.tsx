@@ -380,4 +380,36 @@ test("message actions", async () => {
   // Same-file edits read as one row whose stats are the edits' sum (dsh-claude-style D62).
   assert.equal((mergedSameFileEdits.match(/class="dshc-tool"/g) ?? []).length, 1);
   assert.match(words(mergedSameFileEdits), /编辑 src\/App\.tsx \+3 -2/);
+
+  // A settled turn with executed tools but zero final prose auto-expands its steps and surfaces a hint.
+  const emptyProseTools = renderToStaticMarkup(createElement(Message, {
+    message: {
+      id: "assistant-empty-prose-tools",
+      timestamp: 0,
+      role: "assistant",
+      content: "",
+      durationMs: 257_000,
+      toolCalls: [
+        { id: "r1", name: "read", args: { path: "types.ts" }, running: false },
+        { id: "e1", name: "edit", args: { path: "memory-engine.ts", old_string: "a", new_string: "b" }, running: false },
+      ],
+    },
+  }));
+  assert.match(emptyProseTools, /aria-expanded="true"/);
+  assert.match(emptyProseTools, /aria-label="收起工作过程"/);
+  assert.match(words(emptyProseTools), /读取 1 个文件，编辑 1 个文件/);
+  assert.match(emptyProseTools, /class="dshc-hint"[^>]*>模型未输出总结回复，已展开本轮执行步骤（可输入「继续」接着执行）</);
+
+  const emptyTelemetryOnly = renderToStaticMarkup(createElement(Message, {
+    message: {
+      id: "assistant-empty-telemetry",
+      timestamp: 0,
+      role: "assistant",
+      content: "",
+      durationMs: 32_000,
+      usage: { input: 1000, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1000 },
+    },
+  }));
+  assert.match(words(emptyTelemetryOnly), /已完成，用时 32 秒/);
+  assert.match(emptyTelemetryOnly, /模型返回了空响应（可重试、执行 \/compact 压缩上下文或调低推理强度）/);
 });

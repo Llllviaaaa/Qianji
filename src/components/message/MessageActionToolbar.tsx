@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Info, Link2, Share2, Terminal } from "lucide-react";
+import { Info, Terminal } from "lucide-react";
 import type { TranscriptDensity } from "../../lib/transcriptDensity";
-import { showToast } from "../../notifications";
 import type { UiMessage } from "../../types";
 import { PluginSlot } from "../common/PluginSlot";
 import { IconCheck, IconCopy } from "../DshIcons";
@@ -109,37 +108,11 @@ export function AssistantExtraActions({
   slotCwd: string;
   slotSessionFile: string | null;
 }) {
-  const shareContent = () => {
-    const share = (navigator as Navigator & { share?: (data: ShareData) => Promise<void> }).share;
-    if (typeof share === "function") {
-      void share({ text: assistantContent }).catch(() => {
-        void navigator.clipboard.writeText(assistantContent).then(() => showToast("已复制回复，可粘贴分享", "info"));
-      });
-      return;
-    }
-    void navigator.clipboard.writeText(assistantContent).then(() => showToast("已复制回复，可粘贴分享", "info")).catch(() => undefined);
-  };
-
-  const anchorMessage = () => {
-    const node = document.getElementById(`message-${message.id}`);
-    node?.scrollIntoView({ behavior: "smooth", block: "center" });
-    const url = `${window.location.href.split("#")[0]}#message-${message.id}`;
-    void navigator.clipboard.writeText(url).then(() => showToast("已复制消息定位", "info")).catch(() => undefined);
-  };
-
   return (
-    <>
-      <button type="button" className="dshc-action" title="分享" aria-label="分享" onClick={shareContent}>
-        <Share2 size={15} strokeWidth={1.25} />
-      </button>
-      <button type="button" className="dshc-action" title="定位此消息" aria-label="定位此消息" onClick={anchorMessage}>
-        <Link2 size={15} strokeWidth={1.25} />
-      </button>
-      <PluginSlot
-        name="message.actions"
-        messageRole="assistant"
-        context={{ cwd: slotCwd, sessionFile: slotSessionFile, message, contentText: assistantContent }}
-      />
-    </>
+    <PluginSlot
+      name="message.actions"
+      messageRole="assistant"
+      context={{ cwd: slotCwd, sessionFile: slotSessionFile, message, contentText: assistantContent }}
+    />
   );
 }

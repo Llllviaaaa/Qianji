@@ -8,6 +8,8 @@ import { ModelsPage } from "./ModelsPage";
 import { PluginsSettingsPanel } from "./PluginsSettingsPanel";
 import { AppearancePage } from "./settings/AppearanceSettingsPage";
 import { GeneralPage } from "./settings/GeneralSettingsPage";
+import { McpSettingsPage } from "./settings/McpSettingsPage";
+import { SkillsSettingsPage } from "./settings/SkillsSettingsPage";
 import {
   BUILTIN_SETTINGS_NAV,
   PluginSettingsContent,
@@ -284,6 +286,8 @@ export function SettingsModal({
                 {shownPage === "general" && <GeneralPage form={form} update={update} />}
                 {shownPage === "appearance" && <AppearancePage form={form} update={update} catalog={appearanceCatalog} />}
                 {shownPage === "providers" && <ModelsPage form={form} update={update} />}
+                {shownPage === "mcp" && <McpSettingsPage cwd={cwd} form={form} update={update} onCloseSettings={closeSettings} />}
+                {shownPage === "skills" && <SkillsSettingsPage cwd={cwd} onCloseSettings={closeSettings} />}
                 {shownPage === "plugins" && <PluginsSettingsPanel cwd={cwd} form={form} onSyncAppSetting={update} />}
                 <PluginSettingsContent page={activeMeta} sections={settingsSections} context={slotContext} />
               </motion.div>

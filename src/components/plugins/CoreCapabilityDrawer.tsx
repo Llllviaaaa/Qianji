@@ -1,5 +1,6 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { McpServerStatus, PluginInfo } from "@qianji/protocol";
+import { requestOpenSettings } from "../../lib/shellBridge";
 import type { AppSettings } from "../../types";
 import { HooksCapabilityDrawer } from "./HooksCapabilityDrawer";
 import { McpCapabilityDrawer } from "./McpCapabilityDrawer";
@@ -32,16 +33,24 @@ export function CoreCapabilityDrawer({
 }: CoreCapabilityDrawerProps) {
   if (plugin.id === "mcp") {
     return (
-      <McpCapabilityDrawer
-        cwd={cwd}
-        form={form}
-        onSyncAppSetting={onSyncAppSetting}
-        mcpStatuses={mcpStatuses}
-        mcpReconnecting={mcpReconnecting}
-        onReconnectMcp={onReconnectMcp}
-        onMcpServersUpdated={onMcpServersUpdated}
-        onNotify={onNotify}
-      />
+      <>
+        <div className="plugin-mcp-open-page-bar">
+          <span>MCP 服务编排、工具开关以及 Resources / Prompts 检验已升级为独立管理页</span>
+          <button type="button" className="plugin-ghost-btn" onClick={() => requestOpenSettings("mcp")}>
+            前往 MCP 管理页 →
+          </button>
+        </div>
+        <McpCapabilityDrawer
+          cwd={cwd}
+          form={form}
+          onSyncAppSetting={onSyncAppSetting}
+          mcpStatuses={mcpStatuses}
+          mcpReconnecting={mcpReconnecting}
+          onReconnectMcp={onReconnectMcp}
+          onMcpServersUpdated={onMcpServersUpdated}
+          onNotify={onNotify}
+        />
+      </>
     );
   }
 

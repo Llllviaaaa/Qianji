@@ -83,6 +83,7 @@ export function Sidebar({
         newChatShortcut={newChatShortcut}
         onNewSession={onNewSession}
         onOpenScheduled={onOpenScheduled}
+        onOpenSettings={onOpenSettings}
         workspaceView={state.workspaceView}
         setWorkspaceView={state.setWorkspaceView}
         groupMode={state.groupMode}

@@ -1,31 +1,14 @@
 import {
-  Suspense,
-  lazy,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
+  Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState,
+  type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent,
 } from "react";
 import { LayoutGroup, motion } from "motion/react";
 import {
-  Activity,
-  FileCode2,
-  FolderTree,
-  GitCompare,
-  Globe,
-  Maximize2,
-  MessageSquare,
-  Minimize2,
-  PanelBottom,
-  PanelRight,
-  X,
+  Activity, FileCode2, FolderTree, GitCompare, Globe, Maximize2, MessageSquare, Minimize2, PanelBottom, PanelRight, X,
 } from "lucide-react";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import { useClientContributions } from "../../lib/clientContributions";
+import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
 import { matchesWorkbenchFileCwd, useWorkbenchStore } from "../../stores/workbenchStore";
 import type { GitSnapshot } from "../../types";
 import { SideChatTab } from "../SideChatTab";
@@ -124,6 +107,9 @@ export function RightWorkbench({
   const openTab = useWorkbenchStore((state) => state.openTab);
   const setRightOpen = useWorkbenchStore((state) => state.setRightOpen);
   const toggleRightMaximized = useWorkbenchStore((state) => state.toggleRightMaximized);
+  const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
+  const webPreviewEnabled = useBuiltinPluginGatesStore((state) => state.webPreviewEnabled);
+  const sideChatEnabled = useBuiltinPluginGatesStore((state) => state.sideChatEnabled);
   const contributions = useClientContributions();
 
   const [sideChatVisited, setSideChatVisited] = useState(false);
@@ -246,33 +232,37 @@ export function RightWorkbench({
               <span>编辑器</span>
               {openFilesCount > 0 && <em className="pid-wb-tab-count">{openFilesCount}</em>}
             </button>
-            <button
-              type="button"
-              role="tab"
-              data-wb-tab="review"
-              aria-selected={activeTab === "review"}
-              className={`pid-wb-tab-btn${activeTab === "review" ? " active" : ""}`}
-              onClick={() => openTab("review")}
-              title="代码变更与审查"
-            >
-              {activeTab === "review" && <motion.span layoutId="pid-wb-active-pill" className="pid-wb-tab-pill" transition={{ type: "spring", stiffness: 520, damping: 38 }} />}
-              <GitCompare size={13} />
-              <span>审查</span>
-              {reviewCount > 0 && <em className="pid-wb-tab-count">{reviewCount}</em>}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              data-wb-tab="preview"
-              aria-selected={activeTab === "preview"}
-              className={`pid-wb-tab-btn${activeTab === "preview" ? " active" : ""}`}
-              onClick={() => openTab("preview")}
-              title="Web 与浏览器预览 (Ctrl+T)"
-            >
-              {activeTab === "preview" && <motion.span layoutId="pid-wb-active-pill" className="pid-wb-tab-pill" transition={{ type: "spring", stiffness: 520, damping: 38 }} />}
-              <Globe size={13} />
-              <span>预览</span>
-            </button>
+            {codeReviewEnabled && (
+              <button
+                type="button"
+                role="tab"
+                data-wb-tab="review"
+                aria-selected={activeTab === "review"}
+                className={`pid-wb-tab-btn${activeTab === "review" ? " active" : ""}`}
+                onClick={() => openTab("review")}
+                title="代码变更与审查"
+              >
+                {activeTab === "review" && <motion.span layoutId="pid-wb-active-pill" className="pid-wb-tab-pill" transition={{ type: "spring", stiffness: 520, damping: 38 }} />}
+                <GitCompare size={13} />
+                <span>审查</span>
+                {reviewCount > 0 && <em className="pid-wb-tab-count">{reviewCount}</em>}
+              </button>
+            )}
+            {webPreviewEnabled && (
+              <button
+                type="button"
+                role="tab"
+                data-wb-tab="preview"
+                aria-selected={activeTab === "preview"}
+                className={`pid-wb-tab-btn${activeTab === "preview" ? " active" : ""}`}
+                onClick={() => openTab("preview")}
+                title="Web 与浏览器预览 (Ctrl+T)"
+              >
+                {activeTab === "preview" && <motion.span layoutId="pid-wb-active-pill" className="pid-wb-tab-pill" transition={{ type: "spring", stiffness: 520, damping: 38 }} />}
+                <Globe size={13} />
+                <span>预览</span>
+              </button>
+            )}
             {contributions.rightWorkbenchTabs
               .filter((tab) => (tab.order ?? 100) < 20)
               .map((tab) => (
@@ -303,19 +293,21 @@ export function RightWorkbench({
               <Activity size={13} />
               <span>摘要</span>
             </button>
-            <button
-              type="button"
-              role="tab"
-              data-wb-tab="side-chat"
-              aria-selected={activeTab === "side-chat"}
-              className={`pid-wb-tab-btn${activeTab === "side-chat" ? " active" : ""}`}
-              onClick={() => openTab("side-chat")}
-              title="基于当前会话分叉的独立侧边对话"
-            >
-              {activeTab === "side-chat" && <motion.span layoutId="pid-wb-active-pill" className="pid-wb-tab-pill" transition={{ type: "spring", stiffness: 520, damping: 38 }} />}
-              <MessageSquare size={13} />
-              <span>侧边对话</span>
-            </button>
+            {sideChatEnabled && (
+              <button
+                type="button"
+                role="tab"
+                data-wb-tab="side-chat"
+                aria-selected={activeTab === "side-chat"}
+                className={`pid-wb-tab-btn${activeTab === "side-chat" ? " active" : ""}`}
+                onClick={() => openTab("side-chat")}
+                title="基于当前会话分叉的独立侧边对话"
+              >
+                {activeTab === "side-chat" && <motion.span layoutId="pid-wb-active-pill" className="pid-wb-tab-pill" transition={{ type: "spring", stiffness: 520, damping: 38 }} />}
+                <MessageSquare size={13} />
+                <span>侧边对话</span>
+              </button>
+            )}
             {contributions.rightWorkbenchTabs
               .filter((tab) => (tab.order ?? 100) >= 20)
               .map((tab) => (
@@ -365,7 +357,7 @@ export function RightWorkbench({
               <LazyCodeEditorTab cwd={cwd} />
             </Suspense>
           )}
-          {activeTab === "review" && (
+          {codeReviewEnabled && activeTab === "review" && (
             <ReviewDiffTab
               cwd={cwd}
               git={git}
@@ -374,13 +366,13 @@ export function RightWorkbench({
               onRequestReview={onRequestReview}
             />
           )}
-          {activeTab === "preview" && (
+          {webPreviewEnabled && activeTab === "preview" && (
             <BrowserPreviewTab cwd={cwd} />
           )}
           {activeTab === "summary" && (
             <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />
           )}
-          {mountSideChat && (
+          {sideChatEnabled && mountSideChat && (
             <div className="pid-wb-sidechat-host" hidden={activeTab !== "side-chat"}>
               <SideChatTab
                 key={sessionFile ?? "draft"}

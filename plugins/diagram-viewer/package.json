@@ -1,0 +1,31 @@
+{
+  "name": "diagram-viewer",
+  "version": "0.1.0",
+  "description": "Mermaid 与 PlantUML 图表渲染插件：控制对话 Markdown 图表渲染及 .mmd / .puml 图表文件可视化预览。",
+  "qianji": {
+    "id": "diagram-viewer",
+    "name": "Mermaid & PlantUML 图表渲染",
+    "description": "在对话 Markdown 中将 mermaid / plantuml 代码块渲染为可缩放交互图表，并在工作区编辑器中预览 .mmd / .mermaid / .puml / .plantuml 文件。",
+    "client": "./client.tsx",
+    "contributes": {
+      "slots": ["file.viewer"]
+    },
+    "defaultConfig": {
+      "enableMermaid": true,
+      "enablePlantUml": true
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "enableMermaid": {
+          "type": "boolean",
+          "description": "启用 Mermaid（流程图、时序图、类图等）交互式图表渲染"
+        },
+        "enablePlantUml": {
+          "type": "boolean",
+          "description": "启用 PlantUML（UML 时序图、组件图、架构图等）渲染"
+        }
+      }
+    }
+  }
+}

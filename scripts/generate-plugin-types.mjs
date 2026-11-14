@@ -94,9 +94,13 @@ export interface HTMLAttributes<T = Element> {
   dangerouslySetInnerHTML?: { __html: string };
   onClick?: (event: any) => void;
   onDoubleClick?: (event: any) => void;
+  onContextMenu?: (event: any) => void;
+  onMouseDown?: (event: any) => void;
+  onMouseUp?: (event: any) => void;
   onMouseEnter?: (event: any) => void;
   onMouseLeave?: (event: any) => void;
   onPointerDown?: (event: any) => void;
+  onPointerUp?: (event: any) => void;
   onKeyDown?: (event: any) => void;
   onKeyUp?: (event: any) => void;
   onFocus?: (event: any) => void;
@@ -293,10 +297,17 @@ export const AlertTriangle: LucideIcon;
 export const Activity: LucideIcon;
 export const ArrowRight: LucideIcon;
 export const Blocks: LucideIcon;
+export const BookOpen: LucideIcon;
+export const Bot: LucideIcon;
+export const ChartPie: LucideIcon;
 export const Check: LucideIcon;
+export const CheckCircle2: LucideIcon;
 export const ChevronDown: LucideIcon;
 export const ChevronRight: LucideIcon;
+export const CircleAlert: LucideIcon;
+export const Clock: LucideIcon;
 export const Code2: LucideIcon;
+export const Compass: LucideIcon;
 export const Copy: LucideIcon;
 export const Database: LucideIcon;
 export const ExternalLink: LucideIcon;
@@ -304,20 +315,33 @@ export const Eye: LucideIcon;
 export const FileCode2: LucideIcon;
 export const FileText: LucideIcon;
 export const Folder: LucideIcon;
+export const GitBranch: LucideIcon;
+export const GitCompare: LucideIcon;
 export const Globe: LucideIcon;
 export const History: LucideIcon;
+export const Image: LucideIcon;
 export const Info: LucideIcon;
 export const Layers: LucideIcon;
+export const Link2: LucideIcon;
+export const ListChecks: LucideIcon;
 export const LoaderCircle: LucideIcon;
+export const MessageSquare: LucideIcon;
+export const MessageSquareReply: LucideIcon;
 export const Play: LucideIcon;
+export const Plug: LucideIcon;
 export const Plus: LucideIcon;
+export const Quote: LucideIcon;
 export const RefreshCw: LucideIcon;
 export const RotateCcw: LucideIcon;
 export const Search: LucideIcon;
 export const Settings2: LucideIcon;
+export const Share2: LucideIcon;
 export const Sparkles: LucideIcon;
+export const Target: LucideIcon;
 export const Terminal: LucideIcon;
 export const Trash2: LucideIcon;
+export const Undo2: LucideIcon;
+export const Workflow: LucideIcon;
 export const Wrench: LucideIcon;
 export const X: LucideIcon;
 export const Zap: LucideIcon;
@@ -437,6 +461,32 @@ export interface Events {
   "pricing/recorded"(record: PricingCallRecord): void;
 }
 
+export interface LoggerMessage {
+  sn: number;
+  ts: number;
+  name: string;
+  type: "error" | "info" | "warn" | "debug";
+  level: number;
+  args: unknown[];
+  fiber?: WeakRef<Fiber>;
+}
+
+export interface Exporter {
+  colors?: number | false;
+  maxLength?: number;
+  levels?: Record<string, number>;
+  formatters?: Record<string, (value: unknown, exporter: Exporter, message: LoggerMessage) => unknown>;
+  export(message: LoggerMessage): void;
+}
+
+export interface Logger {
+  exporter(exporter: Exporter): () => void;
+}
+
+export declare namespace Logger {
+  function format(exporter: Exporter, message: LoggerMessage): string;
+}
+
 export interface Context {
   tools: Tools;
   commands: Commands;
@@ -525,21 +575,38 @@ export interface UiToolCall {
   endedAt?: number;
 }
 
+export interface ImageContent {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
 export interface UiMessage {
   id: string;
+  entryId?: string;
   role: "user" | "assistant" | "terminal" | "notice";
   content: string;
+  noticeKind?: "compaction" | "branch";
+  images?: ImageContent[];
   timestamp: number;
   thinking?: string;
+  model?: string;
   isError?: boolean;
+  isAborted?: boolean;
   isStreaming?: boolean;
+  durationMs?: number;
   toolCalls?: UiToolCall[];
 }
 
 export interface AttachmentPayload {
+  path?: string;
+  fileName?: string;
   name?: string;
   mimeType: string;
-  data: string;
+  size?: number;
+  kind?: "image" | "text" | "file";
+  data?: string;
+  text?: string;
 }
 
 export interface SessionStats {
@@ -582,7 +649,7 @@ export interface HomeQuickActionSlotContext extends WorkbenchSlotContext {
   sendPrompt: (prompt: string) => void;
 }
 
-export type BuiltinSettingsPageId = "general" | "appearance" | "providers" | "plugins";
+export type BuiltinSettingsPageId = "general" | "appearance" | "providers" | "mcp" | "skills" | "plugins";
 
 export interface SettingsSlotContext extends WorkbenchSlotContext {
   page: string;
@@ -938,6 +1005,87 @@ export declare function openSettingsPage(pageId?: string): boolean;
 export declare function openPluginPage(pageId: string): boolean;
 export declare function useClientContributions(): Record<string, readonly unknown[]>;
 export declare const clientContributions: ClientContributionService;
+
+export type RewindMode = "both" | "conversation" | "code";
+
+export interface RewindInspection {
+  entryId: string;
+  sessionId: string;
+  userSeq: number;
+  hasCheckpoint: boolean;
+  changed: boolean;
+  files: string[];
+}
+
+export interface RewindExecutionResult {
+  ok: boolean;
+  mode: RewindMode;
+  sessionId: string;
+  toSeq: number;
+  rewindSeq?: number;
+  restoredFiles: string[];
+}
+
+export interface ComposerDraftSnapshot {
+  text: string;
+  attachments: AttachmentPayload[];
+}
+
+export interface RewindTurnSummary {
+  message: UiMessage;
+  turnNumber: number;
+  totalTurns: number;
+  subsequentMessageCount: number;
+}
+
+export interface RewindTargetSummary extends RewindTurnSummary {
+  entryId: string;
+  sessionId: string;
+  userSeq: number;
+  hasCheckpoint: boolean;
+  changed: boolean;
+  files: string[];
+}
+
+export interface PerformedRewindResult {
+  ok: true;
+  mode: RewindMode;
+  entryId: string;
+  sessionId: string;
+  turnNumber: number;
+  totalTurns: number;
+  toSeq: number;
+  rewindSeq?: number;
+  restoredFiles: string[];
+  refilledText: string;
+  refilledAttachments: AttachmentPayload[];
+  stashedDraft: ComposerDraftSnapshot | null;
+}
+
+export interface RewindControllerApi {
+  onDraftSent(listener: () => void): () => void;
+  getComposerDraft(): ComposerDraftSnapshot;
+  setComposerDraft(options: { text: string; attachments?: AttachmentPayload[]; focus?: boolean }): void;
+  listRewindableTurns(): RewindTurnSummary[];
+  inspectMessage(messageId: string): Promise<RewindTargetSummary | null>;
+  performRewind(params: {
+    message: UiMessage;
+    entryId?: string;
+    mode?: RewindMode;
+    protectDraft?: boolean;
+  }): Promise<PerformedRewindResult | null>;
+  undoBranchRewind(params: {
+    sessionId: string;
+    rewindSeq: number;
+    restoreDraft?: ComposerDraftSnapshot | null;
+  }): Promise<boolean>;
+}
+
+export declare function messageImagesToAttachments(
+  message: Pick<UiMessage, "id" | "images">,
+): AttachmentPayload[];
+export declare const rewindController: RewindControllerApi;
+
 export type ClientPluginApply<C = Record<string, unknown>> = (ctx: Context, config: C) => void;
 `;
   writePkgDts(targetDir, "@qianji/client", clientSdkDts);
@@ -969,6 +1117,7 @@ export declare const SIDEBAR_SERVICE_VERSION: string;
           module: "ESNext",
           moduleResolution: "bundler",
           jsx: "react-jsx",
+          allowImportingTsExtensions: true,
           strict: true,
           skipLibCheck: true,
           noEmit: true,

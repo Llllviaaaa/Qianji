@@ -8,7 +8,6 @@ import { PluginCard } from "./plugins/PluginCard";
 import type { PluginFilter } from "./plugins/pluginHelpers";
 import { PluginsEmptyHub } from "./plugins/PluginsEmptyHub";
 import { PluginsHeaderBar } from "./plugins/PluginsHeaderBar";
-import { SkillsSettingsSection } from "./plugins/SkillsSettingsSection";
 import { usePluginsPanelState } from "./plugins/usePluginsPanelState";
 
 export interface PluginsSettingsPanelProps {
@@ -18,7 +17,7 @@ export interface PluginsSettingsPanelProps {
 }
 
 export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSettingsPanelProps) {
-  const isTauri = "__TAURI_INTERNALS__" in window;
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   const state = usePluginsPanelState(cwd, form);
 
   const isSearching = state.search.trim() !== "";
@@ -31,12 +30,17 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
 
   const filterTabs: ReadonlyArray<{ id: PluginFilter; label: string; count: number }> = [
     { id: "all", label: "全部", count: state.counts.all },
+    { id: "bundled", label: "官方插件", count: state.counts.bundled },
     { id: "builtin", label: "核心能力", count: state.counts.builtin },
     { id: "user", label: "已安装", count: state.counts.user },
     { id: "workspace", label: "项目级", count: state.counts.workspace },
-    { id: "skills", label: "技能包", count: state.skillsQuery.data?.length ?? 0 },
   ];
-  const hasBothGroups = state.installedList.length > 0 && state.coreList.length > 0;
+  const visibleGroups = [
+    state.installedList.length > 0 ? { id: "installed", title: "已安装扩展", items: state.installedList } : null,
+    state.bundledList.length > 0 ? { id: "bundled", title: "官方功能插件", items: state.bundledList } : null,
+    state.coreList.length > 0 ? { id: "core", title: "核心智能体能力", items: state.coreList } : null,
+  ].filter((g): g is { id: string; title: string; items: PluginInfo[] } => g !== null);
+  const showGroupHeadings = visibleGroups.length > 1 || (state.filter === "all" && state.bundledList.length > 0);
 
   const renderCard = (plugin: PluginInfo, compactSystem = false) => (
     <PluginCard
@@ -102,10 +106,7 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
         )}
       </AnimatePresence>
 
-      {state.filter === "skills" ? (
-        <SkillsSettingsSection cwd={cwd} search={state.search} onNotify={state.setNotice} />
-      ) : (
-        <>
+      {/* Plugins list */}
           {showTrustCard && currentTrust !== undefined && (
             <div className={`plugins-trust-banner${currentTrust.trusted ? " trusted" : ""}`}>
               <div className="plugins-trust-body">
@@ -140,7 +141,7 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
               <span>读取插件列表失败：{describeError(state.pluginsQuery.error)}</span>
               <button type="button" className="plugin-ghost-btn" onClick={() => void state.pluginsQuery.refetch()}>重试</button>
             </div>
-          ) : state.installedList.length === 0 && state.coreList.length === 0 && state.systemList.length === 0 ? (
+          ) : state.installedList.length === 0 && state.bundledList.length === 0 && state.coreList.length === 0 && state.systemList.length === 0 ? (
             <PluginsEmptyHub
               cwd={cwd}
               isTauri={isTauri}
@@ -155,28 +156,17 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
             />
           ) : (
             <div className="plugins-groups">
-              {state.installedList.length > 0 && (
-                <section className="plugins-group">
-                  {hasBothGroups && (
+              {visibleGroups.map((group) => (
+                <section key={group.id} className="plugins-group">
+                  {showGroupHeadings && (
                     <h2 className="plugins-group-heading">
-                      <span>已安装扩展</span>
-                      <em>{state.installedList.length}</em>
+                      <span>{group.title}</span>
+                      <em>{group.items.length}</em>
                     </h2>
                   )}
-                  <div className="plugins-bento-grid">{state.installedList.map((item) => renderCard(item))}</div>
+                  <div className="plugins-bento-grid">{group.items.map((item) => renderCard(item))}</div>
                 </section>
-              )}
-              {state.coreList.length > 0 && (
-                <section className="plugins-group">
-                  {hasBothGroups && (
-                    <h2 className="plugins-group-heading">
-                      <span>核心智能体能力</span>
-                      <em>{state.coreList.length}</em>
-                    </h2>
-                  )}
-                  <div className="plugins-bento-grid">{state.coreList.map((item) => renderCard(item))}</div>
-                </section>
-              )}
+              ))}
               {state.systemList.length > 0 && (
                 <section className="plugins-group">
                   <button
@@ -208,8 +198,7 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
               )}
             </div>
           )}
-        </>
-      )}
+      {/* Plugins modals */}
 
       <AnimatePresence>
         {state.installChannel !== null && (

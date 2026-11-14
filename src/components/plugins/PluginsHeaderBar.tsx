@@ -35,7 +35,7 @@ export function PluginsHeaderBar({
         <label className="plugins-search-box">
           <Search size={14} />
           <input
-            placeholder="搜索连接器、MCP 服务、技能或扩展模块…"
+            placeholder="搜索官方插件、核心能力或扩展模块…"
             value={search}
             onChange={(event) => onChangeSearch(event.target.value)}
           />

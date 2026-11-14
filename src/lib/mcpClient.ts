@@ -1,4 +1,5 @@
 import type {
+  McpChangedNotification,
   McpGetPromptResult,
   McpPromptInfo,
   McpPromptsResult,
@@ -69,6 +70,12 @@ export const mcpClient = {
       serverId,
       name,
       arguments: args,
+    });
+  },
+
+  onChanged(listener: (payload: McpChangedNotification) => void): () => void {
+    return harnessRuntimes.onNotification("mcp/changed", (params) => {
+      listener(params as McpChangedNotification);
     });
   },
 };

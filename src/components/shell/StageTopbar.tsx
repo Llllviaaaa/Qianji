@@ -1,5 +1,6 @@
 import { Folder, Menu, MoreHorizontal } from "lucide-react";
 import type { GitSnapshot, SessionInfo, TerminalAppInfo, WorkspaceEditorInfo } from "../../types";
+import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
 import { PluginMenuItems } from "../common/PluginMenuItems";
 import { GitActionButton } from "../GitActionButton";
 import { OpenInMenu } from "../WorkspaceOpeners";
@@ -109,6 +110,7 @@ export function StageTopbar({
   revealWorkspaceInExplorer,
   openBottomTerminal,
 }: StageTopbarProps) {
+  const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
   const sidebarToggleLabel = isNarrowViewport
     ? (sidebarRendered ? "隐藏侧栏" : "显示侧栏")
     : "固定侧栏";
@@ -263,7 +265,7 @@ export function StageTopbar({
         {!hubView && (
           <div className="panel-toggles codex-layout-chrome">
             <div className="main-pane-controls">
-              {reviewFileCount > 0 && (
+              {codeReviewEnabled && reviewFileCount > 0 && (
                 <button
                   type="button"
                   className="title-diff-chip topbar-diff-chip"

@@ -1,6 +1,6 @@
 /**
  * Slash command RPC endpoints (`command.list`, `command.run`), built-in Host
- * slash commands (`/clear`, `/compact`, `/doctor`), and `command/changed`
+ * slash commands (`/clear`, `/compact`, `/doctor`, `/mcp`, `/skills`), and `command/changed`
  * broadcast notifications (ADR 0002, 0003).
  */
 import type { Context } from "@deepseek-ai/cordis";
@@ -124,6 +124,71 @@ export function apply(ctx: Context, config: Config = {}): void {
         },
       }),
     "command: /doctor",
+  );
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: "mcp",
+        description: "打开 MCP 服务管理页或查看已启用 MCP 服务状态",
+        source: "builtin",
+        async execute() {
+          const mcpService = ctx.get("mcp") as
+            | {
+                ready: Promise<void>;
+                statuses(): Array<{
+                  config: { id: string; name?: string; transport?: string };
+                  connected: boolean;
+                  toolCount: number;
+                  error?: string;
+                }>;
+              }
+            | undefined;
+          if (mcpService !== undefined) {
+            await mcpService.ready;
+          }
+          const statuses = mcpService?.statuses() ?? [];
+          if (statuses.length === 0) {
+            return { output: "当前未配置或未启用任何 MCP 服务器。可在设置 → MCP 页面添加并启用连接器。" };
+          }
+          const connectedCount = statuses.filter((item) => item.connected).length;
+          const totalTools = statuses.reduce((acc, item) => acc + item.toolCount, 0);
+          const lines = [`### MCP 服务状态（已连接 ${connectedCount}/${statuses.length}，共 ${totalTools} 个工具）`];
+          for (const item of statuses) {
+            const title = item.config.name || item.config.id;
+            const transport = item.config.transport ? `[${item.config.transport.toUpperCase()}] ` : "";
+            lines.push(
+              item.connected
+                ? `- ✅ **${title}** ${transport}(\`${item.config.id}\`): ${item.toolCount} 个工具`
+                : `- ❌ **${title}** ${transport}(\`${item.config.id}\`): ${item.error ?? "未连接"}`,
+            );
+          }
+          return { output: lines.join("\n") };
+        },
+      }),
+    "command: /mcp",
+  );
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: "skills",
+        description: "打开 Agent 技能管理页或列出已启用技能",
+        source: "builtin",
+        async execute(_rawArgs, env) {
+          const allCommands = await ctx.commands.list(env.cwd);
+          const skillCommands = allCommands.filter((item) => item.source === "skill");
+          if (skillCommands.length === 0) {
+            return { output: "当前工作区尚未启用任何 Agent 技能。可在设置 → 技能 页面创建或启用技能。" };
+          }
+          const lines = [`### 已启用 Agent 技能（共 ${skillCommands.length} 个）`];
+          for (const item of skillCommands) {
+            lines.push(`- \`/${item.name}\` — ${item.description}`);
+          }
+          return { output: lines.join("\n") };
+        },
+      }),
+    "command: /skills",
   );
 
   ctx.on("commands/changed", (reason) => {

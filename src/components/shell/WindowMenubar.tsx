@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowLeft, ArrowRight, Minus, PanelLeft, Square, X } from "lucide-react";
 import { useClientContributions } from "../../lib/clientContributions";
 import { requestAppQuit } from "../../lib/quitGuard";
+import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
 import {
   TRANSCRIPT_DENSITY_LABELS,
   TRANSCRIPT_DENSITY_ORDER,
@@ -87,6 +88,7 @@ export function WindowMenubar({
     ? "隐藏侧栏"
     : isNarrowViewport ? "显示侧栏" : "固定侧栏";
   const { menuItems } = useClientContributions();
+  const webPreviewEnabled = useBuiltinPluginGatesStore((state) => state.webPreviewEnabled);
   const menus: readonly AppMenu[] = hasMenuItems(menuItems, "menubar.tools") ? [...BUILTIN_MENUS, "tools"] : BUILTIN_MENUS;
   const pluginMenuContext = { cwd, sessionFile };
   const closeMenu = () => setAppMenu(null);
@@ -254,15 +256,17 @@ export function WindowMenubar({
                 >
                   侧边栏  Ctrl+Alt+B
                 </button>
-                <button
-                  onClick={() => {
-                    setAppMenu(null);
-                    setSettingsOpen(false);
-                    openBrowserAt();
-                  }}
-                >
-                  浏览器  Ctrl+T
-                </button>
+                {webPreviewEnabled && (
+                  <button
+                    onClick={() => {
+                      setAppMenu(null);
+                      setSettingsOpen(false);
+                      openBrowserAt();
+                    }}
+                  >
+                    浏览器  Ctrl+T
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setAppMenu(null);
@@ -279,6 +283,31 @@ export function WindowMenubar({
                   }}
                 >
                   外观设置
+                </button>
+                <div className="menu-separator" />
+                <button
+                  onClick={() => {
+                    setAppMenu(null);
+                    openSettingsPage("skills");
+                  }}
+                >
+                  Agent 技能管理
+                </button>
+                <button
+                  onClick={() => {
+                    setAppMenu(null);
+                    openSettingsPage("mcp");
+                  }}
+                >
+                  MCP 服务管理
+                </button>
+                <button
+                  onClick={() => {
+                    setAppMenu(null);
+                    openSettingsPage("plugins");
+                  }}
+                >
+                  扩展插件管理
                 </button>
                 <PluginMenuItems location="menubar.view" context={pluginMenuContext} onClose={closeMenu} separatorClassName="menu-separator" />
               </>

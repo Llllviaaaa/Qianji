@@ -12,6 +12,7 @@ import { matchCodeBlockRenderer, useClientContributions } from "../lib/clientCon
 import { isRichContentLanguage, parseRichContent } from "../lib/richContent";
 import { splitStreamingMarkdownBlocks } from "../lib/streamingMarkdown";
 import { INTELLIGENT_UI_FENCE_LANGUAGE, parseIntelligentUiFence } from "../lib/intelligentUi";
+import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import { SlotEntryHost } from "./common/ErrorBoundary";
 import { DiagramBlock, diagramKindForLanguage } from "./DiagramBlock";
@@ -193,6 +194,9 @@ function MarkdownPre({
 }) {
   const { language, text } = codeFenceDetails(children);
   const intelligentUiEnabled = useIntelligentUiStore((state) => state.pluginEnabled);
+  const diagramViewerEnabled = useBuiltinPluginGatesStore((state) => state.diagramViewerEnabled);
+  const mermaidEnabled = useBuiltinPluginGatesStore((state) => state.mermaidEnabled);
+  const plantUmlEnabled = useBuiltinPluginGatesStore((state) => state.plantUmlEnabled);
   const { codeBlockRenderers } = useClientContributions();
   const cwd = useAppStore((state) => state.cwd);
   const sessionFile = useAppStore((state) => state.sessionFile);
@@ -219,7 +223,11 @@ function MarkdownPre({
     );
   }
   const diagramKind = diagramKindForLanguage(language);
-  if (diagramKind) {
+  const canRenderDiagram =
+    diagramKind !== null &&
+    diagramViewerEnabled &&
+    (diagramKind === "mermaid" ? mermaidEnabled : plantUmlEnabled);
+  if (canRenderDiagram && diagramKind) {
     return isStreaming ? <CodeFence>{children}</CodeFence> : <DiagramBlock kind={diagramKind} source={text} />;
   }
   return <CodeFence>{children}</CodeFence>;
