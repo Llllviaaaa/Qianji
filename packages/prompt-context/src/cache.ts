@@ -3,8 +3,8 @@
  * caches for context files, project/user rules, and skills.
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync, type Stats } from "node:fs";
-import { dirname, join, parse, resolve } from "node:path";
+import { readdirSync, readFileSync, realpathSync, statSync, type Stats } from "node:fs";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import {
   contextFiles,
   expandContextImports,
@@ -149,6 +149,31 @@ function listAncestorDirs(cwd: string): string[] {
     dir = parent;
   }
   return dirs;
+}
+
+/**
+ * Canonicalizes symlinks, Windows junctions, and 8.3 short paths (e.g. `RUNNER~1` -> `runneradmin`),
+ * walking up to the nearest existing ancestor when leaf segments do not exist yet.
+ */
+export function canonicalSkillPath(input: string): string {
+  const resolved = resolve(input);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    const tail: string[] = [];
+    let current = resolved;
+    for (;;) {
+      const parent = dirname(current);
+      if (parent === current) return resolved;
+      tail.unshift(basename(current));
+      current = parent;
+      try {
+        return join(realpathSync.native(current), ...tail);
+      } catch {
+        // Walk up until an existing ancestor resolves.
+      }
+    }
+  }
 }
 
 /** Pins `YYYY-MM-DD` once per non-empty `sessionId` (bounded LRU up to `MAX_PINNED_SESSIONS`). */

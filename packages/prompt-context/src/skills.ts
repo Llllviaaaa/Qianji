@@ -14,7 +14,7 @@ import {
   type SkillScope,
 } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
-import { getCachedScannedSkills } from "./cache.ts";
+import { canonicalSkillPath, getCachedScannedSkills } from "./cache.ts";
 
 const MAX_SKILL_BYTES = 256 * 1024;
 
@@ -54,7 +54,7 @@ function resolvePluginSkillSources(
 }
 
 export function normalizeSkillPathKey(filePath: string): string {
-  const abs = resolve(filePath).replace(/\\/g, "/");
+  const abs = canonicalSkillPath(filePath).replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? abs.toLowerCase() : abs;
 }
 
@@ -119,7 +119,7 @@ export function setSkillEnabledState(dataDir: string, skillPath: string, enabled
   const targetKey = normalizeSkillPathKey(skillPath);
   const filtered = rawDisabled.filter((item) => normalizeSkillPathKey(item) !== targetKey);
   if (!enabled) {
-    filtered.push(resolve(skillPath));
+    filtered.push(canonicalSkillPath(skillPath));
   }
   mkdirSync(dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
@@ -298,14 +298,14 @@ function allowedSkillRoots(
   bundledRoots: readonly string[],
 ): Array<{ root: string; readOnly: boolean }> {
   const roots: Array<{ root: string; readOnly: boolean }> = [
-    ...bundledRoots.map((dir) => ({ root: resolve(dir), readOnly: true })),
-    { root: resolve(join(dataDir, "skills")), readOnly: false },
+    ...bundledRoots.map((dir) => ({ root: canonicalSkillPath(dir), readOnly: true })),
+    { root: canonicalSkillPath(join(dataDir, "skills")), readOnly: false },
   ];
   if (cwd !== undefined) {
-    roots.push({ root: resolve(join(cwd, ".qianji", "skills")), readOnly: false });
-    roots.push({ root: resolve(join(cwd, ".pid", "skills")), readOnly: false });
-    roots.push({ root: resolve(join(cwd, ".agents", "skills")), readOnly: false });
-    roots.push({ root: resolve(join(cwd, ".claude", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".qianji", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".pid", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".agents", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".claude", "skills")), readOnly: false });
   }
   return roots;
 }
@@ -320,7 +320,7 @@ function resolveAllowedSkillFile(
   if (typeof rawPath !== "string" || rawPath.trim() === "") {
     throw new RpcError(ErrorCode.InvalidParams, "path must be a non-empty string");
   }
-  const resolved = resolve(rawPath.trim());
+  const resolved = canonicalSkillPath(rawPath.trim());
   if (basename(resolved) !== "SKILL.md") {
     throw new RpcError(ErrorCode.InvalidParams, "技能文件路径必须指向 SKILL.md");
   }

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -395,6 +395,15 @@ describe("Host /mcp and /skills slash commands & companion plugin skills", () =>
     });
     expect(readResult.content).toContain("Check CI and migrations.");
 
+    const aliasPluginDir = join(tempRoot, "team-playbook-alias");
+    symlinkSync(pluginDir, aliasPluginDir, process.platform === "win32" ? "junction" : "dir");
+    const aliasSkillFile = join(aliasPluginDir, "skills", "deploy-check", "SKILL.md");
+    const aliasRead = await callRpc<SkillReadResult>(host, "skill.read", {
+      path: aliasSkillFile,
+      cwd: workspace,
+    });
+    expect(aliasRead.content).toContain("Check CI and migrations.");
+
     await expect(
       callRpc(host, "skill.save", {
         path: skillFile,
@@ -407,7 +416,7 @@ describe("Host /mcp and /skills slash commands & companion plugin skills", () =>
     ).rejects.toThrow();
 
     const toggledOff = await callRpc<SkillListResult>(host, "skill.toggle", {
-      path: skillFile,
+      path: aliasSkillFile,
       enabled: false,
       cwd: workspace,
     });
