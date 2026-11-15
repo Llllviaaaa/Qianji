@@ -390,21 +390,16 @@ describe("Official bundled feature plugins suite", () => {
       "quick-prompts:git-review",
     ]);
     expect(snap.messageActions.some((a) => a.id === "message-actions:assistant")).toBe(true);
-    expect(snap.pages.some((p) => p.id === "sites")).toBe(true);
+    expect(snap.pages.some((p) => p.id === "sites")).toBe(false);
     expect(snap.fileViewers.some((v) => v.id === "diagram-viewer:file")).toBe(true);
     expect(snap.composerBanners.some((b) => b.id === "goal-tracker:banner")).toBe(true);
     expect(snap.keybindings.some((k) => k.id === "side-chat:toggle" && k.key === "Ctrl+Alt+S")).toBe(true);
     expect(snap.menuItems.some((m) => m.id === "code-review:open-panel-tools")).toBe(true);
-    expect(snap.menuItems.some((m) => m.id === "web-preview:sites-menu")).toBe(true);
+    expect(snap.menuItems.some((m) => m.id === "web-preview:sites-menu")).toBe(false);
+    expect(snap.slashInterceptors.some((s) => s.id === "web-preview:slash")).toBe(true);
     expect(snap.menuItems.some((m) => m.id === "side-chat:thread-menu")).toBe(true);
 
     // Render client widgets via SSR to ensure zero throw on initial render
-    const page = snap.pages.find((p) => p.id === "sites");
-    expect(page).toBeDefined();
-    if (page) {
-      const html = renderToStaticMarkup(createElement(() => page.render({ cwd: "/demo", sessionFile: null })));
-      expect(html).toContain("站点预览中心");
-    }
 
     const viewer = snap.fileViewers.find((v) => v.id === "diagram-viewer:file");
     expect(viewer).toBeDefined();

@@ -24,6 +24,7 @@ export interface PluginCardDrawerProps {
   onCloseDrawer: () => void;
   onSaveConfig: (plugin: PluginInfo) => void;
   onRunTask: (task: { run: () => Promise<PluginMutationResult>; label: string }) => void;
+  onOpenMcpSection?: () => void;
 }
 
 export function PluginCardDrawer({
@@ -43,6 +44,7 @@ export function PluginCardDrawer({
   onCloseDrawer,
   onSaveConfig,
   onRunTask,
+  onOpenMcpSection,
 }: PluginCardDrawerProps) {
   const isExternal = plugin.tier === "user" || plugin.tier === "workspace";
   const isStructuredCore = !isExternal
@@ -72,6 +74,7 @@ export function PluginCardDrawer({
           onReconnectMcp={onReconnectMcp}
           onMcpServersUpdated={onMcpServersUpdated}
           onNotify={onNotify}
+          onOpenMcpSection={onOpenMcpSection}
         />
 
         <details className="plugin-raw-json-details">

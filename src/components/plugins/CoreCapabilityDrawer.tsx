@@ -17,6 +17,7 @@ export interface CoreCapabilityDrawerProps {
   onReconnectMcp: (serverId?: string) => void;
   onMcpServersUpdated: () => void;
   onNotify: (notice: Notice) => void;
+  onOpenMcpSection?: () => void;
 }
 
 export function CoreCapabilityDrawer({
@@ -30,14 +31,22 @@ export function CoreCapabilityDrawer({
   onReconnectMcp,
   onMcpServersUpdated,
   onNotify,
+  onOpenMcpSection,
 }: CoreCapabilityDrawerProps) {
   if (plugin.id === "mcp") {
     return (
       <>
         <div className="plugin-mcp-open-page-bar">
-          <span>MCP 服务编排、工具开关以及 Resources / Prompts 检验已升级为独立管理页</span>
-          <button type="button" className="plugin-ghost-btn" onClick={() => requestOpenSettings("mcp")}>
-            前往 MCP 管理页 →
+          <span>MCP 服务编排、工具开关以及 Resources / Prompts 检验已整合至「MCP 服务」标签页</span>
+          <button
+            type="button"
+            className="plugin-ghost-btn"
+            onClick={() => {
+              if (onOpenMcpSection) onOpenMcpSection();
+              else requestOpenSettings("mcp");
+            }}
+          >
+            打开 MCP 服务面板 →
           </button>
         </div>
         <McpCapabilityDrawer

@@ -97,8 +97,7 @@ export function apply(ctx: Context): void {
     () =>
       ctx.commands.register({
         name: "preview",
-        argsHint: "[hub]",
-        description: "打开右侧内置浏览器预览面板（或输入 `/preview hub` 打开站点预览中心）",
+        description: "识别当前工作区 Web 脚本并打开右侧内置浏览器预览面板",
         source: "plugin",
         execute(_rawArgs, env) {
           const info = inspectWebProject(env.cwd);

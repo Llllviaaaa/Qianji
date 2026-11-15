@@ -1,16 +1,15 @@
 {
   "name": "web-preview",
   "version": "0.1.0",
-  "description": "Web 预览与站点中心：自动识别工作区前端工程，提供站点预览页面、/preview 指令与右侧浏览器预览门控。",
+  "description": "Web 浏览器预览：自动识别工作区前端工程，提供 /preview 指令与右侧浏览器预览门控。",
   "qianji": {
     "id": "web-preview",
-    "name": "Web 预览与站点中心",
-    "description": "自动识别工作区中的 Web 框架与开发启动脚本，提供「站点预览」独立页面、/preview 斜杠指令以及右侧「预览 (Ctrl+T)」浏览器面板。",
+    "name": "Web 浏览器预览",
+    "description": "自动识别工作区中的 Web 框架与开发启动脚本，提供 /preview 斜杠指令以及右侧「预览 (Ctrl+T)」浏览器面板。",
     "host": "./host.ts",
     "client": "./client.tsx",
     "contributes": {
-      "commands": ["preview"],
-      "slots": ["pages", "menubar.tools"]
+      "commands": ["preview"]
     },
     "defaultConfig": {
       "defaultPreviewUrl": "http://localhost:5173"

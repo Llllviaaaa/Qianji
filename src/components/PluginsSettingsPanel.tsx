@@ -1,24 +1,69 @@
+import { useCallback, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { useQuery } from "@tanstack/react-query";
 import type { PluginInfo } from "@qianji/protocol";
 import { Boxes, ChevronDown, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { describeError } from "../lib/errors";
+import { queryKeys } from "../lib/queries";
+import { skillClient } from "../lib/skillClient";
+import { useAppStore } from "../store";
 import type { AppSettings } from "../types";
+import { ExtensionsModuleTabs, type ExtensionsSection } from "./plugins/ExtensionsModuleTabs";
 import { InstallPluginDialog } from "./plugins/InstallPluginDialog";
 import { PluginCard } from "./plugins/PluginCard";
 import type { PluginFilter } from "./plugins/pluginHelpers";
 import { PluginsEmptyHub } from "./plugins/PluginsEmptyHub";
 import { PluginsHeaderBar } from "./plugins/PluginsHeaderBar";
 import { usePluginsPanelState } from "./plugins/usePluginsPanelState";
+import { McpSettingsPage } from "./settings/McpSettingsPage";
+import { DEFAULTS } from "./settings/settingsPrimitives";
+import { SkillsSettingsPage } from "./settings/SkillsSettingsPage";
 
 export interface PluginsSettingsPanelProps {
   cwd: string;
   form?: AppSettings;
   onSyncAppSetting?: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  initialSection?: ExtensionsSection;
+  onDismissHub?: () => void;
 }
 
-export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSettingsPanelProps) {
+export function PluginsSettingsPanel({
+  cwd,
+  form,
+  onSyncAppSetting,
+  initialSection,
+  onDismissHub,
+}: PluginsSettingsPanelProps) {
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  const state = usePluginsPanelState(cwd, form);
+  const storeSettings = useAppStore((s) => s.settings);
+  const effectiveForm = useMemo<AppSettings>(
+    () => ({ ...DEFAULTS, ...storeSettings, ...form, language: "zh-CN" }),
+    [form, storeSettings],
+  );
+  const handleSyncAppSetting = useCallback(
+    <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+      if (onSyncAppSetting) {
+        onSyncAppSetting(key, value);
+        return;
+      }
+      const current = useAppStore.getState().settings;
+      void useAppStore.getState().saveSettings({ ...DEFAULTS, ...current, [key]: value, language: "zh-CN" });
+    },
+    [onSyncAppSetting],
+  );
+
+  const [section, setSection] = useState<ExtensionsSection>(initialSection ?? "plugins");
+  const [prevInitial, setPrevInitial] = useState(initialSection);
+  if (prevInitial !== initialSection) {
+    setPrevInitial(initialSection);
+    setSection(initialSection ?? "plugins");
+  }
+
+  const state = usePluginsPanelState(cwd, effectiveForm);
+  const skillsQuery = useQuery({
+    queryKey: queryKeys.skills(cwd),
+    queryFn: () => skillClient.list(cwd),
+  });
 
   const isSearching = state.search.trim() !== "";
   const effectiveSystemOpen = isSearching || state.systemExpanded;
@@ -51,8 +96,8 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
       isTauri={isTauri}
       busy={busy}
       clientError={state.clientErrors[plugin.id]}
-      form={form}
-      onSyncAppSetting={onSyncAppSetting}
+      form={effectiveForm}
+      onSyncAppSetting={handleSyncAppSetting}
       mcpStatuses={state.mcpStatuses}
       mcpReconnecting={state.mcpReconnectMutation.isPending}
       onReconnectMcp={(serverId) => state.mcpReconnectMutation.mutate(serverId)}
@@ -67,46 +112,60 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
       confirmRemove={state.confirmRemoveId === plugin.id}
       onSetConfirmRemove={state.setConfirmRemoveId}
       onRunTask={(task) => state.actionMutation.mutate(task)}
+      onOpenMcpSection={() => setSection("mcp")}
     />
   );
 
   return (
     <div className="plugins-panel">
-      <PluginsHeaderBar
-        cwd={cwd}
-        busy={busy}
-        search={state.search}
-        onChangeSearch={state.setSearch}
-        filter={state.filter}
-        onChangeFilter={state.setFilter}
-        filterTabs={filterTabs}
-        updatableCount={state.updatableCount}
-        onOpenInstall={(ch) => {
-          state.setNotice(null);
-          state.setInstallChannel(ch);
-        }}
-        onRunTask={(task) => state.actionMutation.mutate(task)}
+      <ExtensionsModuleTabs
+        active={section}
+        onChange={setSection}
+        pluginsCount={state.counts.all}
+        skillsCount={skillsQuery.data?.length ?? 0}
+        mcpCount={effectiveForm.mcpServers.length}
       />
 
-      <AnimatePresence initial={false}>
-        {state.notice !== null && (
-          <motion.div
-            className={`plugins-notice ${state.notice.kind}`}
-            role="status"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.14 }}
-          >
-            <span>{state.notice.text}</span>
-            <button type="button" className="icon-button" aria-label="关闭提示" onClick={() => state.setNotice(null)}>
-              <X size={13} />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {section === "skills" ? (
+        <SkillsSettingsPage cwd={cwd} onCloseSettings={onDismissHub} />
+      ) : section === "mcp" ? (
+        <McpSettingsPage cwd={cwd} form={effectiveForm} update={handleSyncAppSetting} onCloseSettings={onDismissHub} />
+      ) : (
+        <>
+          <PluginsHeaderBar
+            cwd={cwd}
+            busy={busy}
+            search={state.search}
+            onChangeSearch={state.setSearch}
+            filter={state.filter}
+            onChangeFilter={state.setFilter}
+            filterTabs={filterTabs}
+            updatableCount={state.updatableCount}
+            onOpenInstall={(ch) => {
+              state.setNotice(null);
+              state.setInstallChannel(ch);
+            }}
+            onRunTask={(task) => state.actionMutation.mutate(task)}
+          />
 
-      {/* Plugins list */}
+          <AnimatePresence initial={false}>
+            {state.notice !== null && (
+              <motion.div
+                className={`plugins-notice ${state.notice.kind}`}
+                role="status"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.14 }}
+              >
+                <span>{state.notice.text}</span>
+                <button type="button" className="icon-button" aria-label="关闭提示" onClick={() => state.setNotice(null)}>
+                  <X size={13} />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {showTrustCard && currentTrust !== undefined && (
             <div className={`plugins-trust-banner${currentTrust.trusted ? " trusted" : ""}`}>
               <div className="plugins-trust-body">
@@ -198,21 +257,22 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
               )}
             </div>
           )}
-      {/* Plugins modals */}
 
-      <AnimatePresence>
-        {state.installChannel !== null && (
-          <InstallPluginDialog
-            isTauri={isTauri}
-            initialChannel={state.installChannel}
-            onClose={() => state.setInstallChannel(null)}
-            onInstalled={(result, label) => {
-              state.setInstallChannel(null);
-              state.applyMutationResult(result, label);
-            }}
-          />
-        )}
-      </AnimatePresence>
+          <AnimatePresence>
+            {state.installChannel !== null && (
+              <InstallPluginDialog
+                isTauri={isTauri}
+                initialChannel={state.installChannel}
+                onClose={() => state.setInstallChannel(null)}
+                onInstalled={(result, label) => {
+                  state.setInstallChannel(null);
+                  state.applyMutationResult(result, label);
+                }}
+              />
+            )}
+          </AnimatePresence>
+        </>
+      )}
     </div>
   );
 }

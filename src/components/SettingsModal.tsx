@@ -8,8 +8,6 @@ import { ModelsPage } from "./ModelsPage";
 import { PluginsSettingsPanel } from "./PluginsSettingsPanel";
 import { AppearancePage } from "./settings/AppearanceSettingsPage";
 import { GeneralPage } from "./settings/GeneralSettingsPage";
-import { McpSettingsPage } from "./settings/McpSettingsPage";
-import { SkillsSettingsPage } from "./settings/SkillsSettingsPage";
 import {
   BUILTIN_SETTINGS_NAV,
   PluginSettingsContent,
@@ -152,8 +150,10 @@ export function SettingsModal({
   }, [isPage, update]);
   const { settingsPages, settingsSections } = useClientContributions();
   const pluginNav = useMemo(() => pluginSettingsNavItems(settingsPages), [settingsPages]);
+  const navPageId: SettingsPage = active === "mcp" || active === "skills" ? "plugins" : active;
+  const initialPluginsSection = active === "mcp" ? "mcp" : active === "skills" ? "skills" : "plugins";
   // A plugin page that was unloaded while open falls back to "general".
-  const activeMeta = [...BUILTIN_SETTINGS_NAV, ...pluginNav].find((item) => item.id === active) ?? BUILTIN_SETTINGS_NAV[0];
+  const activeMeta = [...BUILTIN_SETTINGS_NAV, ...pluginNav].find((item) => item.id === navPageId) ?? BUILTIN_SETTINGS_NAV[0];
   const shownPage = activeMeta.id;
   const isWideGrid = activeMeta.wide;
   const slotContext: SettingsSlotContext = { cwd, sessionFile, page: shownPage, closeSettings };
@@ -286,9 +286,15 @@ export function SettingsModal({
                 {shownPage === "general" && <GeneralPage form={form} update={update} />}
                 {shownPage === "appearance" && <AppearancePage form={form} update={update} catalog={appearanceCatalog} />}
                 {shownPage === "providers" && <ModelsPage form={form} update={update} />}
-                {shownPage === "mcp" && <McpSettingsPage cwd={cwd} form={form} update={update} onCloseSettings={closeSettings} />}
-                {shownPage === "skills" && <SkillsSettingsPage cwd={cwd} onCloseSettings={closeSettings} />}
-                {shownPage === "plugins" && <PluginsSettingsPanel cwd={cwd} form={form} onSyncAppSetting={update} />}
+                {shownPage === "plugins" && (
+                  <PluginsSettingsPanel
+                    cwd={cwd}
+                    form={form}
+                    onSyncAppSetting={update}
+                    initialSection={initialPluginsSection}
+                    onDismissHub={closeSettings}
+                  />
+                )}
                 <PluginSettingsContent page={activeMeta} sections={settingsSections} context={slotContext} />
               </motion.div>
             </AnimatePresence>

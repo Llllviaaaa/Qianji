@@ -1,6 +1,5 @@
 import {
   Bell,
-  BookOpen,
   Boxes,
   Check,
   CheckCircle2,
@@ -11,7 +10,6 @@ import {
   MessageCircleQuestion,
   PanelLeftClose,
   Pin,
-  Plug,
   Plus,
   Search,
   ShieldCheck,
@@ -19,7 +17,6 @@ import {
 } from "lucide-react";
 import { QIANJI_BRAND_MARK_SVG } from "../../lib/claudeCrabSheets";
 import type { AppNotification } from "../../types";
-import type { SettingsPage } from "../SettingsModal";
 import type { SidebarGroupMode, SidebarHub } from "./sidebarHelpers";
 
 export interface SidebarHeaderAndPopoversProps {
@@ -40,7 +37,7 @@ export interface SidebarHeaderAndPopoversProps {
   newChatShortcut?: string;
   onNewSession: () => void;
   onOpenScheduled: () => void;
-  onOpenSettings?: (page: SettingsPage) => void;
+  onOpenPlugins?: () => void;
   workspaceView: "active" | "archived";
   setWorkspaceView: (next: "active" | "archived") => void;
   groupMode: SidebarGroupMode;
@@ -73,7 +70,7 @@ export function SidebarHeaderAndPopovers({
   newChatShortcut,
   onNewSession,
   onOpenScheduled,
-  onOpenSettings,
+  onOpenPlugins,
   workspaceView,
   setWorkspaceView,
   groupMode,
@@ -256,33 +253,15 @@ export function SidebarHeaderAndPopovers({
           <Clock3 size={15} strokeWidth={1.75} />
           <span>定时任务</span>
         </button>
-        {onOpenSettings !== undefined && (
-          <>
-            <button
-              type="button"
-              className="nav-item"
-              onClick={() => { closePopovers(); onOpenSettings("skills"); }}
-            >
-              <BookOpen size={15} strokeWidth={1.75} />
-              <span>技能</span>
-            </button>
-            <button
-              type="button"
-              className="nav-item"
-              onClick={() => { closePopovers(); onOpenSettings("mcp"); }}
-            >
-              <Plug size={15} strokeWidth={1.75} />
-              <span>MCP 服务</span>
-            </button>
-            <button
-              type="button"
-              className="nav-item"
-              onClick={() => { closePopovers(); onOpenSettings("plugins"); }}
-            >
-              <Boxes size={15} strokeWidth={1.75} />
-              <span>扩展插件</span>
-            </button>
-          </>
+        {onOpenPlugins !== undefined && (
+          <button
+            type="button"
+            className={`nav-item ${activeHub === "plugins" ? "active" : ""}`}
+            onClick={() => { closePopovers(); onOpenPlugins(); }}
+          >
+            <Boxes size={15} strokeWidth={1.75} />
+            <span>扩展插件</span>
+          </button>
         )}
       </nav>
 

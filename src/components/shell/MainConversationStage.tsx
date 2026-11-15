@@ -18,11 +18,13 @@ import { ConversationMessages } from "../ConversationMessages";
 import { ExtensionDialog } from "../ExtensionDialog";
 import { LivePlanBar } from "../LivePlanBar";
 import { SessionChangeCard } from "../SessionChangeCard";
-import type { SettingsPage } from "../SettingsModal";
 import { BottomWorkbench } from "../workbench/BottomWorkbench";
 import { WorkspaceTrustBanner } from "../WorkspaceTrustBanner";
 import type { HubView, NavigationTarget } from "./shellTypes";
 
+const PluginsHubPage = lazy(() =>
+  import("../PluginsHubPage").then((module) => ({ default: module.PluginsHubPage })),
+);
 const ScheduledTasksPage = lazy(() =>
   import("../ScheduledTasksPage").then((module) => ({ default: module.ScheduledTasksPage })),
 );
@@ -66,7 +68,6 @@ export interface MainConversationStageProps {
   refreshSessions: () => Promise<unknown>;
   navigateTo: (target: NavigationTarget) => void;
   showErrorToast: (message: string) => void;
-  openSettingsPage: (page: SettingsPage) => void;
   sendFromComposer: (text: string, behavior?: "steer" | "followUp") => Promise<boolean>;
   renderComposer: (variant: "task-start" | "follow-up") => React.ReactNode;
   layoutScale: number;
@@ -81,6 +82,7 @@ export function MainConversationStage({
   sessionFile,
   runtimeId,
   hubView,
+  setHubView,
   newTask,
   transcriptDensity,
   homeHeadline,
@@ -110,7 +112,6 @@ export function MainConversationStage({
   refreshSessions,
   navigateTo,
   showErrorToast,
-  openSettingsPage,
   sendFromComposer,
   renderComposer,
   layoutScale,
@@ -121,10 +122,12 @@ export function MainConversationStage({
     <>
       <div className="work-body">
         <main className="main-stage">
-          <WorkspaceTrustBanner
-            workspace={workspaceCwd || cwd}
-            onOpenPluginsSettings={() => openSettingsPage("plugins")}
-          />
+          {hubView !== "plugins" && (
+            <WorkspaceTrustBanner
+              workspace={workspaceCwd || cwd}
+              onOpenPluginsSettings={() => navigateTo({ kind: "hub", view: "plugins" })}
+            />
+          )}
           <Suspense fallback={<div className="page-loading">正在加载…</div>}>
             {hubView === "scheduled" ? (
               <ScheduledTasksPage
@@ -134,10 +137,15 @@ export function MainConversationStage({
                 onOpenSession={(workspace, file) => navigateTo({ kind: "session", cwd: workspace, file })}
                 onError={showErrorToast}
               />
-            ) : hubView === "sites" || hubView?.startsWith("plugin:") ? (
+            ) : hubView === "plugins" ? (
+              <PluginsHubPage
+                cwd={workspaceCwd || cwd}
+                onReturnToChat={() => setHubView?.(null)}
+              />
+            ) : hubView?.startsWith("plugin:") ? (
               <div className="pid-plugin-page-stage">
                 {(() => {
-                  const targetPageId = hubView === "sites" ? "sites" : hubView.slice("plugin:".length);
+                  const targetPageId = hubView.slice("plugin:".length);
                   const activePluginPage = contributions.pages.find((page) => page.id === targetPageId);
                   if (!activePluginPage) return null;
                   return (

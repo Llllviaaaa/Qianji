@@ -324,3 +324,100 @@
   color: var(--qj-text-primary);
   font-size: 12px;
 }
+
+/* ── Unified Main-Stage Plugins Hub & Module Tabs ─────────────────── */
+
+.plugins-hub-page {
+  height: 100%;
+  overflow-y: auto;
+  padding: 36px clamp(24px, 5vw, 56px) 56px;
+  color: var(--qj-text-primary);
+}
+
+.plugins-hub-inner {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.plugins-hub-header h1 {
+  margin: 0 0 4px;
+  font-size: 20.5px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--qj-text-primary);
+}
+
+.plugins-hub-header p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--qj-text-secondary);
+}
+
+.extensions-module-tabs {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border-bottom: 1px solid var(--qj-border-subtle);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.extensions-module-tab {
+  position: relative;
+  height: 38px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--qj-text-secondary);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 520;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 130ms ease;
+}
+
+.extensions-module-tab:hover,
+.extensions-module-tab.active {
+  color: var(--qj-text-primary);
+}
+
+.extensions-module-tab.active {
+  font-weight: 620;
+}
+
+.extensions-module-tab-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-muted);
+  font-size: 11px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.extensions-module-tab.active .extensions-module-tab-badge {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.extensions-module-tab-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--qj-text-primary);
+}

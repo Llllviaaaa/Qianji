@@ -50,6 +50,7 @@ export interface PluginCardProps {
   confirmRemove: boolean;
   onSetConfirmRemove: (id: string | null) => void;
   onRunTask: (task: { run: () => Promise<PluginMutationResult>; label: string }) => void;
+  onOpenMcpSection?: () => void;
 }
 
 export function PluginCard({
@@ -75,6 +76,7 @@ export function PluginCard({
   confirmRemove,
   onSetConfirmRemove,
   onRunTask,
+  onOpenMcpSection,
 }: PluginCardProps) {
   const clientError = runtimeClientError ?? plugin.clientError?.message;
   const status = statusState(plugin, clientError);
@@ -359,6 +361,7 @@ export function PluginCard({
             onCloseDrawer={onCloseDrawer}
             onSaveConfig={onSaveConfig}
             onRunTask={onRunTask}
+            onOpenMcpSection={onOpenMcpSection}
           />
         )}
       </AnimatePresence>

@@ -11,6 +11,7 @@ import { readEffectiveHarnessConfig } from "../packages/host/src/harness-config.
 import { createHost, type Host } from "../packages/host/src/host.ts";
 import { PluginManager } from "../packages/host/src/plugin-manager.ts";
 import * as pluginsRpc from "../packages/host/src/plugins-rpc.ts";
+import { PluginsHubPage } from "../src/components/PluginsHubPage";
 import { SettingsModal } from "../src/components/SettingsModal";
 import { BUILTIN_SETTINGS_NAV } from "../src/components/settings/settingsNavigation";
 import { SidebarHeaderAndPopovers, type SidebarHeaderAndPopoversProps } from "../src/components/sidebar/SidebarHeaderAndPopovers";
@@ -78,20 +79,16 @@ function makeSidebarHeaderProps(
   };
 }
 
-describe("MCP and Skills navigation + Settings pages", () => {
-  it("exposes builtin mcp and skills pages in navigation and shellBridge", () => {
+describe("Unified Plugins Hub, MCP and Skills navigation", () => {
+  it("consolidates BUILTIN_SETTINGS_NAV while preserving mcp/skills shellBridge compatibility", () => {
     expect(BUILTIN_SETTINGS_NAV.map((item) => item.id)).toEqual([
       "general",
       "appearance",
       "providers",
-      "mcp",
-      "skills",
       "plugins",
     ]);
-    const mcpNav = BUILTIN_SETTINGS_NAV.find((item) => item.id === "mcp");
-    const skillsNav = BUILTIN_SETTINGS_NAV.find((item) => item.id === "skills");
-    expect(mcpNav?.wide).toBe(true);
-    expect(skillsNav?.wide).toBe(true);
+    const pluginsNav = BUILTIN_SETTINGS_NAV.find((item) => item.id === "plugins");
+    expect(pluginsNav?.wide).toBe(true);
     expect(resolveSettingsPageId("mcp")).toBe("mcp");
     expect(resolveSettingsPageId("skills")).toBe("skills");
 
@@ -107,7 +104,7 @@ describe("MCP and Skills navigation + Settings pages", () => {
     }
   });
 
-  it("renders dedicated MCP, Skills, and simplified Plugins pages in SettingsModal", () => {
+  it("renders unified PluginsSettingsPanel in SettingsModal across plugins, skills, and mcp initialPage", () => {
     const mcpHtml = renderToStaticMarkup(withQueryClient(createElement(SettingsModal, {
       settings: null,
       cwd: "/repo",
@@ -115,7 +112,9 @@ describe("MCP and Skills navigation + Settings pages", () => {
       onSave: () => undefined,
       onClose: () => undefined,
     })));
-    expect(mcpHtml).toContain("MCP 工具服务");
+    expect(mcpHtml).toContain("扩展插件");
+    expect(mcpHtml).toContain("Agent 技能");
+    expect(mcpHtml).toContain("MCP 服务");
     expect(mcpHtml).toContain("MCP 服务桥接");
     expect(mcpHtml).toContain("工具调用安全确认");
     expect(mcpHtml).toContain("已配置服务器");
@@ -129,7 +128,6 @@ describe("MCP and Skills navigation + Settings pages", () => {
       onSave: () => undefined,
       onClose: () => undefined,
     })));
-    expect(skillsHtml).toContain("Agent 技能 (Skills)");
     expect(skillsHtml).toContain("搜索技能名称、触发描述、/skill 指令或 SKILL.md 路径…");
 
     const pluginsHtml = renderToStaticMarkup(withQueryClient(createElement(SettingsModal, {
@@ -141,24 +139,39 @@ describe("MCP and Skills navigation + Settings pages", () => {
     })));
     expect(pluginsHtml).toContain("扩展插件");
     expect(pluginsHtml).toContain("官方插件");
-    expect(pluginsHtml).not.toContain(">技能包<");
+    expect(pluginsHtml).toContain("项目级");
   });
 
-  it("renders direct sidebar buttons for 技能, MCP 服务, and 扩展插件 only when onOpenSettings is passed", () => {
-    const withSettingsHtml = renderToStaticMarkup(withQueryClient(createElement(
+  it("renders a single 扩展插件 sidebar button wired to main-stage navigation", () => {
+    const withPluginsHtml = renderToStaticMarkup(withQueryClient(createElement(
       SidebarHeaderAndPopovers,
-      makeSidebarHeaderProps({ onOpenSettings: () => undefined }),
+      makeSidebarHeaderProps({ onOpenPlugins: () => undefined, activeHub: "plugins" }),
     )));
-    expect(withSettingsHtml).toContain("技能");
-    expect(withSettingsHtml).toContain("MCP 服务");
-    expect(withSettingsHtml).toContain("扩展插件");
+    expect(withPluginsHtml).toContain("扩展插件");
+    expect(withPluginsHtml).toContain("nav-item active");
+    expect(withPluginsHtml).not.toContain("MCP 服务");
+    expect(withPluginsHtml).not.toContain(">技能<");
 
-    const withoutSettingsHtml = renderToStaticMarkup(withQueryClient(createElement(
+    const withoutPluginsHtml = renderToStaticMarkup(withQueryClient(createElement(
       SidebarHeaderAndPopovers,
-      makeSidebarHeaderProps({ onOpenSettings: undefined }),
+      makeSidebarHeaderProps({ onOpenPlugins: undefined }),
     )));
-    expect(withoutSettingsHtml).not.toContain("MCP 服务");
-    expect(withoutSettingsHtml).not.toContain("扩展插件");
+    expect(withoutPluginsHtml).not.toContain("扩展插件");
+    expect(withoutPluginsHtml).not.toContain("MCP 服务");
+  });
+
+  it("renders standalone PluginsHubPage with unified module tabs and plugin filter tabs", () => {
+    const hubHtml = renderToStaticMarkup(withQueryClient(createElement(PluginsHubPage, {
+      cwd: "/repo",
+    })));
+    expect(hubHtml).toContain("扩展插件");
+    expect(hubHtml).toContain("Agent 技能");
+    expect(hubHtml).toContain("MCP 服务");
+    expect(hubHtml).toContain("全部");
+    expect(hubHtml).toContain("官方插件");
+    expect(hubHtml).toContain("核心能力");
+    expect(hubHtml).toContain("已安装");
+    expect(hubHtml).toContain("项目级");
   });
 });
 

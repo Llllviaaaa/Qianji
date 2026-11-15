@@ -288,26 +288,11 @@ export function WindowMenubar({
                 <button
                   onClick={() => {
                     setAppMenu(null);
-                    openSettingsPage("skills");
+                    setSettingsOpen(false);
+                    navigateTo({ kind: "hub", view: "plugins" });
                   }}
                 >
-                  Agent 技能管理
-                </button>
-                <button
-                  onClick={() => {
-                    setAppMenu(null);
-                    openSettingsPage("mcp");
-                  }}
-                >
-                  MCP 服务管理
-                </button>
-                <button
-                  onClick={() => {
-                    setAppMenu(null);
-                    openSettingsPage("plugins");
-                  }}
-                >
-                  扩展插件管理
+                  扩展插件
                 </button>
                 <PluginMenuItems location="menubar.view" context={pluginMenuContext} onClose={closeMenu} separatorClassName="menu-separator" />
               </>
