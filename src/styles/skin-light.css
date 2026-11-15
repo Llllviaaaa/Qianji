@@ -2,15 +2,10 @@
  * Qianji — Meta AI Muse Light-Mode Refinements (`skin-light.css`)
  */
 
-:root[data-theme="light"] .codex-shot .work-surface {
-  border-color: transparent;
-  box-shadow: none;
-}
-
 :root[data-theme="light"] .codex-shot .nav-item.active,
 :root[data-theme="light"] .codex-shot .thread-row.active,
 :root[data-theme="light"] .codex-shot .thread-row-shell.active .thread-row {
-  background: var(--muse-soft-fill);
+  background: var(--qj-bg-active);
   border-color: transparent;
   box-shadow: none;
   color: var(--text);

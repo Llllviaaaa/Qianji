@@ -33,8 +33,10 @@ import {
 import { pluginClient } from "./pluginClient";
 import { groupTranscriptMessages } from "./transcriptTurns";
 import { IntelligentUiCanvasTab } from "../components/workbench/IntelligentUiCanvasTab";
+import { DiagramBlock } from "../components/DiagramBlock";
 import { qianjiClientSdk } from "../sdk";
 import { useAppStore } from "../store";
+import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import { useWorkbenchStore } from "../stores/workbenchStore";
 
@@ -47,6 +49,7 @@ declare module "@deepseek-ai/cordis" {
 declare global {
   interface Window {
     __ModuleLoader__?: ModuleLoaderGlobal;
+    __qianjiDiagramComponent?: typeof DiagramBlock;
   }
 }
 
@@ -322,6 +325,9 @@ function mountBuiltinIntelligentUiSync(): void {
 
   // Mount immediately by default so offline / browser / fixture boots have Intelligent UI ready.
   applyEnabled(true);
+  if (typeof window !== "undefined") {
+    window.__qianjiDiagramComponent = DiagramBlock;
+  }
 
   const syncFromHost = async () => {
     try {
@@ -329,6 +335,16 @@ function mountBuiltinIntelligentUiSync(): void {
       const entry = items.find((item) => item.id === "intelligent-ui");
       if (entry !== undefined) {
         applyEnabled(entry.enabled !== false && entry.status !== "disabled");
+      }
+      useBuiltinPluginGatesStore.getState().syncFromPluginList(items);
+      const gates = useBuiltinPluginGatesStore.getState();
+      const wb = useWorkbenchStore.getState();
+      if (
+        (!gates.codeReviewEnabled && wb.activeTab === "review") ||
+        (!gates.webPreviewEnabled && wb.activeTab === "preview") ||
+        (!gates.sideChatEnabled && wb.activeTab === "side-chat")
+      ) {
+        wb.openTab("files");
       }
     } catch {
       // Keep current state when host is not yet connected or running in browser mode.

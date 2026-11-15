@@ -10,7 +10,9 @@ import { showToast } from "../notifications";
 import { stripCodeReviewDirectives } from "../lib/codeReview";
 import { matchCodeBlockRenderer, useClientContributions } from "../lib/clientContributions";
 import { isRichContentLanguage, parseRichContent } from "../lib/richContent";
+import { splitStreamingMarkdownBlocks } from "../lib/streamingMarkdown";
 import { INTELLIGENT_UI_FENCE_LANGUAGE, parseIntelligentUiFence } from "../lib/intelligentUi";
+import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import { SlotEntryHost } from "./common/ErrorBoundary";
 import { DiagramBlock, diagramKindForLanguage } from "./DiagramBlock";
@@ -97,8 +99,11 @@ const LANGUAGE_LABELS: Record<string, string> = {
   kotlin: "Kotlin",
   md: "Markdown",
   markdown: "Markdown",
+  mermaid: "Mermaid",
   mjs: "JavaScript",
   php: "PHP",
+  plantuml: "PlantUML",
+  puml: "PlantUML",
   "qianji-rich": "千机 Rich",
   "pidesktop-rich": "千机 Rich",
   "intelligent-ui": "Intelligent UI",
@@ -117,6 +122,7 @@ const LANGUAGE_LABELS: Record<string, string> = {
   toml: "TOML",
   ts: "TypeScript",
   tsx: "TSX",
+  uml: "PlantUML",
   vue: "Vue",
   xml: "XML",
   yaml: "YAML",
@@ -177,9 +183,20 @@ function CodeFence({ children }: { children?: ReactNode }) {
   );
 }
 
-function MarkdownPre({ children, allowRichContent = false }: { children?: ReactNode; allowRichContent?: boolean }) {
+function MarkdownPre({
+  children,
+  allowRichContent = false,
+  isStreaming = false,
+}: {
+  children?: ReactNode;
+  allowRichContent?: boolean;
+  isStreaming?: boolean;
+}) {
   const { language, text } = codeFenceDetails(children);
   const intelligentUiEnabled = useIntelligentUiStore((state) => state.pluginEnabled);
+  const diagramViewerEnabled = useBuiltinPluginGatesStore((state) => state.diagramViewerEnabled);
+  const mermaidEnabled = useBuiltinPluginGatesStore((state) => state.mermaidEnabled);
+  const plantUmlEnabled = useBuiltinPluginGatesStore((state) => state.plantUmlEnabled);
   const { codeBlockRenderers } = useClientContributions();
   const cwd = useAppStore((state) => state.cwd);
   const sessionFile = useAppStore((state) => state.sessionFile);
@@ -206,7 +223,13 @@ function MarkdownPre({ children, allowRichContent = false }: { children?: ReactN
     );
   }
   const diagramKind = diagramKindForLanguage(language);
-  if (diagramKind) return <DiagramBlock kind={diagramKind} source={text} />;
+  const canRenderDiagram =
+    diagramKind !== null &&
+    diagramViewerEnabled &&
+    (diagramKind === "mermaid" ? mermaidEnabled : plantUmlEnabled);
+  if (canRenderDiagram && diagramKind) {
+    return isStreaming ? <CodeFence>{children}</CodeFence> : <DiagramBlock kind={diagramKind} source={text} />;
+  }
   return <CodeFence>{children}</CodeFence>;
 }
 
@@ -293,18 +316,24 @@ const markdownUrlTransform = (url: string) =>
 interface MarkdownProps {
   content: string;
   allowRichContent?: boolean;
+  isStreaming?: boolean;
 }
 
-export const Markdown = memo(function Markdown({ content, allowRichContent = false }: MarkdownProps) {
-  const visibleContent = useMemo(() => stripCodeReviewDirectives(content), [content]);
-  const linkedMarkdown = useMemo(() => linkifyFilePaths(visibleContent), [visibleContent]);
-  const richContentEnabled = useMemo(
-    () => allowRichContent && richContentFenceCount(visibleContent) === 1,
-    [allowRichContent, visibleContent],
-  );
+const MarkdownBlockChunk = memo(function MarkdownBlockChunk({
+  content,
+  allowRichContent,
+  isStreaming,
+}: {
+  content: string;
+  allowRichContent: boolean;
+  isStreaming: boolean;
+}) {
+  const linkedMarkdown = useMemo(() => linkifyFilePaths(content), [content]);
   const components = useMemo<Components>(
     () => ({
-      pre: ({ children }) => <MarkdownPre allowRichContent={richContentEnabled}>{children}</MarkdownPre>,
+      pre: ({ children }) => (
+        <MarkdownPre allowRichContent={allowRichContent} isStreaming={isStreaming}>{children}</MarkdownPre>
+      ),
       table: ({ children, node: _node, ...props }) => <MarkdownTable {...props}>{children}</MarkdownTable>,
       a: ({ href, children }) => {
         if (href?.startsWith(FILE_SCHEME)) return <FileRef href={href}>{children}</FileRef>;
@@ -335,19 +364,62 @@ export const Markdown = memo(function Markdown({ content, allowRichContent = fal
         return <code className={className} {...rest}>{children}</code>;
       },
     }),
-    [richContentEnabled],
+    [allowRichContent, isStreaming],
+  );
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      urlTransform={markdownUrlTransform}
+      components={components}
+    >
+      {linkedMarkdown}
+    </ReactMarkdown>
+  );
+});
+
+export const Markdown = memo(function Markdown({
+  content,
+  allowRichContent = false,
+  isStreaming = false,
+}: MarkdownProps) {
+  const visibleContent = useMemo(() => stripCodeReviewDirectives(content), [content]);
+  const richContentEnabled = useMemo(
+    () => allowRichContent && richContentFenceCount(visibleContent) === 1,
+    [allowRichContent, visibleContent],
+  );
+  const blocks = useMemo(
+    () => (isStreaming ? splitStreamingMarkdownBlocks(visibleContent) : [visibleContent]),
+    [isStreaming, visibleContent],
   );
 
   return (
     <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
-        urlTransform={markdownUrlTransform}
-        components={components}
-      >
-        {linkedMarkdown}
-      </ReactMarkdown>
+      {!isStreaming || blocks.length <= 1 ? (
+        <MarkdownBlockChunk
+          content={blocks[0] ?? visibleContent}
+          allowRichContent={richContentEnabled}
+          isStreaming={isStreaming}
+        />
+      ) : (
+        <>
+          {blocks.slice(0, -1).map((block, index) => (
+            <MarkdownBlockChunk
+              key={index}
+              content={block}
+              allowRichContent={richContentEnabled}
+              isStreaming={false}
+            />
+          ))}
+          <MarkdownBlockChunk
+            key={blocks.length - 1}
+            content={blocks[blocks.length - 1] ?? ""}
+            allowRichContent={richContentEnabled}
+            isStreaming
+          />
+        </>
+      )}
     </div>
   );
 });

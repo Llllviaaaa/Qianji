@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { SkillInfo, SkillScope } from "@qianji/protocol";
-import { Check, Eye, FileText, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, Eye, FileText, FolderOpen, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { agent } from "../../lib/agent";
 import { describeError } from "../../lib/errors";
 import { queryKeys } from "../../lib/queries";
+import { rewindController } from "../../lib/rewindController";
 import { skillClient } from "../../lib/skillClient";
 
 type ScopeFilter = "all" | SkillScope;
@@ -12,6 +14,7 @@ export interface SkillsSettingsSectionProps {
   cwd: string;
   search: string;
   onNotify: (notice: { kind: "success" | "error"; text: string } | null) => void;
+  onCloseSettings?: () => void;
 }
 
 const NO_SKILLS: SkillInfo[] = [];
@@ -22,8 +25,9 @@ function scopeBadgeLabel(scope: SkillScope, readOnly?: boolean): string {
   return readOnly ? "全局只读" : "全局用户";
 }
 
-export function SkillsSettingsSection({ cwd, search, onNotify }: SkillsSettingsSectionProps) {
+export function SkillsSettingsSection({ cwd, search, onNotify, onCloseSettings }: SkillsSettingsSectionProps) {
   const queryClient = useQueryClient();
+  const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [creating, setCreating] = useState(false);
   const [createScope, setCreateScope] = useState<"user" | "project">("user");
@@ -288,6 +292,30 @@ export function SkillsSettingsSection({ cwd, search, onNotify }: SkillsSettingsS
                   </div>
 
                   <div className="skill-item-actions">
+                    {skill.enabled && (
+                      <button
+                        type="button"
+                        className="plugin-primary-btn"
+                        title={`将 /skill:${skill.name} 填入对话输入框`}
+                        onClick={() => {
+                          rewindController.setComposerDraft({ text: `/skill:${skill.name} `, focus: true });
+                          onCloseSettings?.();
+                        }}
+                      >
+                        <Play size={12} />
+                        <span>使用</span>
+                      </button>
+                    )}
+                    {inTauri && skill.path.trim() !== "" && (
+                      <button
+                        type="button"
+                        className="plugin-ghost-btn"
+                        title="在文件管理器中显示 SKILL.md"
+                        onClick={() => void agent.revealPathInFileManager(skill.path).catch((err) => onNotify({ kind: "error", text: describeError(err) }))}
+                      >
+                        <FolderOpen size={12.5} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="plugin-ghost-btn"

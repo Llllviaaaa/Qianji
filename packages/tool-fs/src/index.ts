@@ -1,25 +1,21 @@
 /**
- * Built-in file tools: read, write, edit, ls, find, grep. Paths resolve
- * against the session's cwd; output is capped so one call cannot flood the
- * context. Permission checks are not done here but in `tools/pre-execute`
- * listeners (P4).
+ * Built-in file tools: read, write, edit, ls, find, grep, and deferred diagnostics.
+ * Paths resolve against the session's cwd; output is capped so one call cannot
+ * flood the context. Permission checks run in `tools/pre-execute` listeners.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
-import { textOutput, type ToolDefinition } from "@qianji/tools";
-import {
-  MAX_BYTES,
-  MAX_LINES,
-  clipLine,
-  displayPath,
-  matchesGlob,
-  resolvePath,
-  truncateHead,
-  walkFiles,
-} from "./shared.ts";
+import { textOutput, type ToolDefinition, type ToolOutput } from "@qianji/tools";
+import { diagnostics } from "./diagnostics.ts";
+import { formatHashlines, isHashlineEdit, resolveHashlineSpan, type HashlineEdit, type TextEditSpan } from "./hashline.ts";
+import { find, grep } from "./search.ts";
+import { MAX_BYTES, MAX_LINES, resolvePath, truncateHead } from "./shared.ts";
 
 export * from "./shared.ts";
+export * from "./hashline.ts";
+export * from "./search.ts";
+export * from "./diagnostics.ts";
 
 export const name = "qianji-tool-fs";
 export const inject = ["tools"];
@@ -33,23 +29,22 @@ const IMAGE_TYPES: Record<string, string> = {
 };
 
 const MAX_ENTRIES = 500;
-const MAX_FIND_RESULTS = 1000;
-const MAX_GREP_MATCHES = 100;
-const MAX_GREP_FILE_BYTES = 2 * 1024 * 1024;
 
-export const read: ToolDefinition<{ path: string; offset?: number; limit?: number }> = {
+export const read: ToolDefinition<{ path: string; offset?: number; limit?: number; hashlines?: boolean }> = {
   name: "read",
-  description: `Read a file. Text is returned from line \`offset\` (1-based) for at most \`limit\` lines, capped at ${MAX_LINES} lines or ${MAX_BYTES / 1024} KB; images (png, jpg, gif, webp) are returned as images.`,
+  readOnly: true,
+  description: `Read a file. Text is returned from line \`offset\` (1-based) for at most \`limit\` lines, capped at ${MAX_LINES} lines or ${MAX_BYTES / 1024} KB; pass \`hashlines: true\` to prefix lines with \`line:hash|\` anchors for resilient \`edit\`. Images (png, jpg, gif, webp) return as image blocks.`,
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path, relative to the working directory or absolute" },
       offset: { type: "integer", description: "First line to read, 1-based" },
       limit: { type: "integer", description: "Maximum number of lines" },
+      hashlines: { type: "boolean", description: "Prefix each line with `<line>:<hash>| ` for anchor-based editing" },
     },
     required: ["path"],
   },
-  execute({ path, offset, limit }, env) {
+  execute({ path, offset, limit, hashlines }, env) {
     const file = resolvePath(env.cwd, path);
     const mimeType = IMAGE_TYPES[extname(file).toLowerCase()];
     if (mimeType !== undefined) {
@@ -59,7 +54,8 @@ export const read: ToolDefinition<{ path: string; offset?: number; limit?: numbe
     const start = Math.max(1, offset ?? 1);
     if (start > lines.length) return textOutput(`${path} has ${lines.length} lines; offset ${start} is past the end.`, true);
     const wanted = lines.slice(start - 1, limit === undefined ? undefined : start - 1 + Math.max(1, limit));
-    const { text, truncated } = truncateHead(wanted.join("\n"));
+    const displayLines = hashlines === true ? formatHashlines(wanted, start) : wanted;
+    const { text, truncated } = truncateHead(displayLines.join("\n"));
     const shown = text === "" ? 0 : text.split("\n").length;
     const end = start + shown - 1;
     const more = end < lines.length;
@@ -87,9 +83,16 @@ export const write: ToolDefinition<{ path: string; content: string }> = {
   },
 };
 
-interface Edit {
+export interface Edit {
   oldText: string;
   newText: string;
+}
+
+export type FileEdit = Edit | HashlineEdit;
+
+export interface EditApplyNotes {
+  fuzzy?: number[];
+  relocated?: number[];
 }
 
 /** Characters models swap for one another; each group matches any of its members. */
@@ -111,8 +114,7 @@ function charPattern(char: string): string {
  * A pattern for `text` that tolerates the differences models introduce when
  * they retype code: curly or straight quotes, Unicode dashes and spaces,
  * trailing whitespace at line ends, and CRLF or LF. Indentation and every
- * other character must still match exactly. The pattern is literals,
- * character classes and `[ \t]*\r?\n` only, so it cannot backtrack badly.
+ * other character must still match exactly.
  */
 export function tolerantPattern(text: string): RegExp {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
@@ -120,34 +122,48 @@ export function tolerantPattern(text: string): RegExp {
   return new RegExp(body, "g");
 }
 
+function resolveTextEditSpan(
+  original: string,
+  edit: Edit,
+  index: number,
+  toFile: (text: string) => string,
+  fuzzy?: number[],
+): TextEditSpan {
+  const oldText = toFile(edit.oldText);
+  if (oldText === "") throw new Error(`edits[${index}].oldText is empty`);
+  let start = original.indexOf(oldText);
+  let end = start + oldText.length;
+  if (start >= 0 && original.indexOf(oldText, start + 1) >= 0) {
+    throw new Error(`edits[${index}].oldText occurs more than once; include more surrounding lines`);
+  }
+  if (start < 0) {
+    const matches = edit.oldText.trim() === "" ? [] : [...original.matchAll(tolerantPattern(edit.oldText))];
+    if (matches.length > 1) throw new Error(`edits[${index}].oldText occurs more than once; include more surrounding lines`);
+    const match = matches[0];
+    if (match === undefined) throw new Error(`edits[${index}].oldText was not found; read the file and copy the text exactly`);
+    start = match.index;
+    end = start + match[0].length;
+    fuzzy?.push(index);
+  }
+  return { start, end, text: toFile(edit.newText), index };
+}
+
 /**
- * Apply unique replacements; throws with the reason the model needs to fix its
- * call. Each `oldText` is looked up exactly first; only when that fails is it
- * matched with `tolerantPattern`, and the indices of such edits are pushed to
- * `fuzzy` when given.
+ * Apply unique text replacements or Hashline anchor edits atomically; throws
+ * with an actionable reason on mismatch or overlap.
  */
-export function applyEdits(original: string, edits: readonly Edit[], fuzzy?: number[]): string {
+export function applyEdits(original: string, edits: readonly FileEdit[], notes?: number[] | EditApplyNotes): string {
   const crlf = original.includes("\r\n");
   const toFile = (text: string) => (crlf && !text.includes("\r\n") ? text.replace(/\n/g, "\r\n") : text);
-  const spans: Array<{ start: number; end: number; text: string; index: number }> = [];
-  edits.forEach((edit, index) => {
-    const oldText = toFile(edit.oldText);
-    if (oldText === "") throw new Error(`edits[${index}].oldText is empty`);
-    let start = original.indexOf(oldText);
-    let end = start + oldText.length;
-    if (start >= 0 && original.indexOf(oldText, start + 1) >= 0) throw new Error(`edits[${index}].oldText occurs more than once; include more surrounding lines`);
-    if (start < 0) {
-      const matches = edit.oldText.trim() === "" ? [] : [...original.matchAll(tolerantPattern(edit.oldText))];
-      if (matches.length > 1) throw new Error(`edits[${index}].oldText occurs more than once; include more surrounding lines`);
-      const match = matches[0];
-      if (match === undefined) throw new Error(`edits[${index}].oldText was not found; read the file and copy the text exactly`);
-      start = match.index;
-      end = start + match[0].length;
-      fuzzy?.push(index);
-    }
-    spans.push({ start, end, text: toFile(edit.newText), index });
-  });
-  spans.sort((a, b) => a.start - b.start);
+  const fuzzy = Array.isArray(notes) ? notes : notes?.fuzzy;
+  const relocated = Array.isArray(notes) ? undefined : notes?.relocated;
+  const spans: TextEditSpan[] = edits.map((item, index) => (
+    isHashlineEdit(item)
+      ? resolveHashlineSpan(original, item, index, relocated)
+      : resolveTextEditSpan(original, item, index, toFile, fuzzy)
+  ));
+
+  spans.sort((a, b) => a.start - b.start || a.index - b.index);
   for (let index = 1; index < spans.length; index += 1) {
     const previous = spans[index - 1];
     const current = spans[index];
@@ -164,52 +180,99 @@ export function applyEdits(original: string, edits: readonly Edit[], fuzzy?: num
   return result + original.slice(cursor);
 }
 
-export const edit: ToolDefinition<{ path: string; edits: Edit[] }> = {
+function buildEditDiff(original: string, updated: string, path: string): string {
+  if (original === updated) return "";
+  const oldLines = original.replace(/\r\n/g, "\n").split("\n");
+  const newLines = updated.replace(/\r\n/g, "\n").split("\n");
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix
+    && suffix < newLines.length - prefix
+    && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const delLines = oldLines.slice(prefix, oldLines.length - suffix);
+  const addLines = newLines.slice(prefix, newLines.length - suffix);
+  const header = `--- a/${path}\n+++ b/${path}\n@@ -${prefix + 1},${delLines.length} +${prefix + 1},${addLines.length} @@`;
+  const body = [
+    ...delLines.slice(0, 60).map((line) => `-${line}`),
+    ...addLines.slice(0, 60).map((line) => `+${line}`),
+  ];
+  return [header, ...body].join("\n");
+}
+
+export const edit: ToolDefinition<{ path: string; edits: FileEdit[] }> = {
   name: "edit",
-  description: "Edit a file by exact text replacement. Each `oldText` must appear exactly once in the current file; all edits apply together or none do.",
+  description: [
+    "Edit a file atomically: each item in `edits` can either use exact `{ oldText, newText }`",
+    "or Hashline `{ anchor, endAnchor?, op?, newText? }` returned by `read(..., { hashlines: true })`.",
+    "All edits apply together or none do.",
+  ].join(" "),
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path, relative to the working directory or absolute" },
       edits: {
         type: "array",
-        description: "Replacements to make",
+        description: "Exact text replacements or Hashline anchor operations",
         items: {
           type: "object",
           properties: {
-            oldText: { type: "string", description: "Exact text to replace, unique in the file" },
-            newText: { type: "string", description: "Replacement text" },
+            oldText: { type: "string", description: "Exact text to replace (for text mode)" },
+            newText: { type: "string", description: "Replacement or inserted text" },
+            anchor: { type: "string", description: "Start `<line>:<hash>` anchor (for hashline mode)" },
+            endAnchor: { type: "string", description: "Optional inclusive end `<line>:<hash>` anchor for replace/delete" },
+            op: { type: "string", enum: ["replace", "insert_after", "insert_before", "delete"] },
           },
-          required: ["oldText", "newText"],
         },
       },
     },
     required: ["path", "edits"],
   },
-  execute({ path, edits }, env) {
+  execute({ path, edits }, env): ToolOutput {
     const file = resolvePath(env.cwd, path);
     if (!existsSync(file)) return textOutput(`${path} does not exist; use write to create it.`, true);
-    if (edits.some((item) => typeof item?.oldText !== "string" || typeof item?.newText !== "string")) {
-      return textOutput("Each edit needs oldText and newText strings.", true);
+    for (const item of edits) {
+      if (isHashlineEdit(item)) {
+        if (item.op !== "delete" && typeof item.newText !== "string") {
+          return textOutput("Hashline edits require newText unless op is 'delete'.", true);
+        }
+      } else if (typeof item?.oldText !== "string" || typeof item?.newText !== "string") {
+        return textOutput("Each edit needs oldText and newText strings, or a hashline anchor.", true);
+      }
     }
     const original = readFileSync(file, "utf8");
-    let updated: string;
     const fuzzy: number[] = [];
+    const relocated: number[] = [];
+    let updated: string;
     try {
-      updated = applyEdits(original, edits, fuzzy);
+      updated = applyEdits(original, edits, { fuzzy, relocated });
     } catch (error) {
       return textOutput(`No changes made to ${path}: ${(error as Error).message}.`, true);
     }
     writeFileSync(file, updated);
-    const note = fuzzy.length === 0
-      ? ""
-      : ` ${fuzzy.map((index) => `edits[${index}]`).join(", ")} matched only after ignoring differences in quotes, dashes, spaces or trailing whitespace.`;
-    return textOutput(`Applied ${edits.length} edit(s) to ${path}.${note}`);
+    const notes: string[] = [];
+    if (relocated.length > 0) {
+      notes.push(`${relocated.map((i) => `edits[${i}]`).join(", ")} relocated by line content hash after line shift.`);
+    }
+    if (fuzzy.length > 0) {
+      notes.push(`${fuzzy.map((i) => `edits[${i}]`).join(", ")} matched only after ignoring differences in quotes, dashes, spaces or trailing whitespace.`);
+    }
+    const suffix = notes.length === 0 ? "" : ` ${notes.join(" ")}`;
+    const diff = buildEditDiff(original, updated, path);
+    return {
+      content: [{ type: "text", text: `Applied ${edits.length} edit(s) to ${path}.${suffix}` }],
+      ...(diff === "" ? {} : { details: { diff } }),
+    };
   },
 };
 
 export const ls: ToolDefinition<{ path?: string }> = {
   name: "ls",
+  readOnly: true,
   description: `List a directory (default: the working directory). Directories end with "/". At most ${MAX_ENTRIES} entries.`,
   parameters: {
     type: "object",
@@ -226,94 +289,9 @@ export const ls: ToolDefinition<{ path?: string }> = {
   },
 };
 
-export const find: ToolDefinition<{ pattern: string; path?: string }> = {
-  name: "find",
-  description: `Find files by glob, e.g. "*.ts" (any depth) or "src/**/*.test.ts". Skips .git and node_modules. At most ${MAX_FIND_RESULTS} paths.`,
-  parameters: {
-    type: "object",
-    properties: {
-      pattern: { type: "string", description: "Glob; without a '/' it matches file names at any depth" },
-      path: { type: "string", description: "Directory to search (default: the working directory)" },
-    },
-    required: ["pattern"],
-  },
-  execute({ pattern, path }, env) {
-    const root = resolvePath(env.cwd, path ?? ".");
-    const found: string[] = [];
-    let more = false;
-    for (const file of walkFiles(root, env.signal)) {
-      const rel = displayPath(root, file);
-      if (!matchesGlob(pattern, rel)) continue;
-      if (found.length >= MAX_FIND_RESULTS) {
-        more = true;
-        break;
-      }
-      found.push(rel);
-    }
-    if (found.length === 0) return textOutput("No files found.");
-    found.sort((a, b) => a.localeCompare(b));
-    return textOutput(found.join("\n") + (more ? `\n[More than ${MAX_FIND_RESULTS} files; narrow the pattern.]` : ""));
-  },
-};
-
-export const grep: ToolDefinition<{ pattern: string; path?: string; glob?: string; ignoreCase?: boolean; literal?: boolean; limit?: number }> = {
-  name: "grep",
-  description: `Search file contents for a regular expression (or literal text). Prints "path:line: text". Skips .git, node_modules and binary files. At most ${MAX_GREP_MATCHES} matches unless \`limit\` says otherwise.`,
-  parameters: {
-    type: "object",
-    properties: {
-      pattern: { type: "string", description: "JavaScript regular expression, or text when literal is true" },
-      path: { type: "string", description: "File or directory to search (default: the working directory)" },
-      glob: { type: "string", description: "Only search files matching this glob, e.g. \"*.ts\"" },
-      ignoreCase: { type: "boolean" },
-      literal: { type: "boolean" },
-      limit: { type: "integer", description: "Maximum matches" },
-    },
-    required: ["pattern"],
-  },
-  execute({ pattern, path, glob, ignoreCase, literal, limit }, env) {
-    let regex: RegExp;
-    try {
-      regex = new RegExp(literal ? pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : pattern, ignoreCase ? "i" : "");
-    } catch (error) {
-      return textOutput(`Invalid pattern: ${(error as Error).message}`, true);
-    }
-    const target = resolvePath(env.cwd, path ?? ".");
-    const single = statSync(target).isFile();
-    const base = single ? dirname(target) : target;
-    const files = single ? [target] : walkFiles(target, env.signal);
-    const max = Math.max(1, limit ?? MAX_GREP_MATCHES);
-    const matches: string[] = [];
-    let more = false;
-    outer: for (const file of files) {
-      const rel = displayPath(base, file);
-      if (glob !== undefined && !matchesGlob(glob, rel)) continue;
-      let buffer: Buffer;
-      try {
-        if (statSync(file).size > MAX_GREP_FILE_BYTES) continue;
-        buffer = readFileSync(file);
-      } catch {
-        continue;
-      }
-      if (buffer.subarray(0, 8192).includes(0)) continue;
-      const lines = buffer.toString("utf8").split("\n");
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = (lines[index] as string).replace(/\r$/, "");
-        if (!regex.test(line)) continue;
-        if (matches.length >= max) {
-          more = true;
-          break outer;
-        }
-        matches.push(`${rel}:${index + 1}: ${clipLine(line)}`);
-      }
-    }
-    if (matches.length === 0) return textOutput("No matches.");
-    return textOutput(matches.join("\n") + (more ? `\n[Stopped at ${max} matches; narrow the search.]` : ""));
-  },
-};
-
 export const FS_TOOLS = [read, write, edit, ls, find, grep] as const;
 
 export function apply(ctx: Context): void {
   for (const tool of FS_TOOLS) ctx.effect(() => ctx.tools.register(tool), `${name}: ${tool.name}`);
+  ctx.effect(() => ctx.tools.register(diagnostics), `${name}: diagnostics`);
 }

@@ -7,9 +7,15 @@
  * 3. A Cool-Gray Minimalist sandboxed HTML escape pod (`sandbox="allow-scripts"` + `connect-src 'none'`)
  */
 import type { UiMessage, UiToolCall } from "../types";
+import {
+  getCachedSessionIntelligentUi,
+  INTELLIGENT_UI_FENCE_LANGUAGE,
+  messageMayContainIntelligentUi,
+  setCachedSessionIntelligentUi,
+} from "./intelligentUiCache";
 import { normalizedToolName } from "./toolPresentation";
 
-export const INTELLIGENT_UI_FENCE_LANGUAGE = "intelligent-ui";
+export { INTELLIGENT_UI_FENCE_LANGUAGE, messageMayContainIntelligentUi };
 export const INTELLIGENT_UI_CANVAS_TAB_ID = "intelligent-ui-canvas";
 export const INTELLIGENT_UI_COMPOSER_ACTION_ID = "intelligent-ui-trigger";
 
@@ -419,22 +425,8 @@ function extractIntelligentUiFences(markdown: string, messageId: string): Intell
   return artifacts;
 }
 
-const sessionIntelligentUiCache = new WeakMap<readonly UiMessage[], SessionIntelligentUiSummary>();
-
-export function messageMayContainIntelligentUi(message: UiMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") return false;
-  if (message.content && message.content.includes(INTELLIGENT_UI_FENCE_LANGUAGE)) return true;
-  if (message.toolCalls) {
-    for (const call of message.toolCalls) {
-      const normalized = normalizedToolName(call.name);
-      if (normalized === "render_ui" || normalized === "update_ui") return true;
-    }
-  }
-  return false;
-}
-
 export function deriveSessionIntelligentUis(messages: readonly UiMessage[]): SessionIntelligentUiSummary {
-  const cached = sessionIntelligentUiCache.get(messages);
+  const cached = getCachedSessionIntelligentUi(messages);
   if (cached) return cached;
 
   const groupsById = new Map<string, IntelligentUiVersionGroup>();
@@ -527,6 +519,6 @@ export function deriveSessionIntelligentUis(messages: readonly UiMessage[]): Ses
     orderedGroups,
     turnWidgetsByMessageId,
   };
-  sessionIntelligentUiCache.set(messages, summary);
+  setCachedSessionIntelligentUi(messages, summary);
   return summary;
 }

@@ -1,5 +1,6 @@
 import {
   Bell,
+  Boxes,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -36,6 +37,7 @@ export interface SidebarHeaderAndPopoversProps {
   newChatShortcut?: string;
   onNewSession: () => void;
   onOpenScheduled: () => void;
+  onOpenPlugins?: () => void;
   workspaceView: "active" | "archived";
   setWorkspaceView: (next: "active" | "archived") => void;
   groupMode: SidebarGroupMode;
@@ -68,6 +70,7 @@ export function SidebarHeaderAndPopovers({
   newChatShortcut,
   onNewSession,
   onOpenScheduled,
+  onOpenPlugins,
   workspaceView,
   setWorkspaceView,
   groupMode,
@@ -250,6 +253,16 @@ export function SidebarHeaderAndPopovers({
           <Clock3 size={15} strokeWidth={1.75} />
           <span>定时任务</span>
         </button>
+        {onOpenPlugins !== undefined && (
+          <button
+            type="button"
+            className={`nav-item ${activeHub === "plugins" ? "active" : ""}`}
+            onClick={() => { closePopovers(); onOpenPlugins(); }}
+          >
+            <Boxes size={15} strokeWidth={1.75} />
+            <span>扩展插件</span>
+          </button>
+        )}
       </nav>
 
       <div className="sidebar-projects-header" data-ws-view={workspaceView}>

@@ -1,14 +1,17 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  BackgroundProcessManager,
+  bindAsyncJobObjectDisposer,
   buildSandboxedEnv,
   findShell,
   generateDevContainerConfig,
   generateWindowsSandboxConfig,
   inspectSandboxedCommand,
   runCommand,
+  shellArgs,
 } from "../src/index.ts";
 
 describe("lightweight sandbox helpers", () => {
@@ -91,5 +94,114 @@ describe("lightweight sandbox helpers", () => {
     };
     expect(devcontainer.name).toBe("Qianji (my-app)");
     expect(devcontainer.image).toContain("devcontainers/base");
+  });
+
+  it("handles async Job Object attachment races on fast exit, pre-resolution stop/abort, and rejection", async () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    // 1. Normal lifecycle: attachment resolves before cleanup, disposer runs once on dispose.
+    const normalPending = deferred<(() => void) | undefined>();
+    const normalDisposer = vi.fn();
+    const normalStopped = vi.fn();
+    const normalBinding = bindAsyncJobObjectDisposer(normalPending.promise, {
+      onStoppedResolve: normalStopped,
+    });
+    normalPending.resolve(normalDisposer);
+    await normalBinding.settled;
+    expect(normalDisposer).not.toHaveBeenCalled();
+    normalBinding.dispose();
+    normalBinding.dispose({ stopped: true });
+    expect(normalDisposer).toHaveBeenCalledTimes(1);
+    expect(normalStopped).not.toHaveBeenCalled();
+
+    // 2. Fast-exit race: process exits and calls dispose() before attachment resolves.
+    const fastPending = deferred<(() => void) | undefined>();
+    const fastDisposer = vi.fn();
+    const fastStopped = vi.fn();
+    const fastBinding = bindAsyncJobObjectDisposer(fastPending.promise, {
+      onStoppedResolve: fastStopped,
+    });
+    fastBinding.dispose();
+    expect(fastDisposer).not.toHaveBeenCalled();
+    fastPending.resolve(fastDisposer);
+    await fastBinding.settled;
+    fastBinding.dispose();
+    expect(fastDisposer).toHaveBeenCalledTimes(1);
+    expect(fastStopped).not.toHaveBeenCalled();
+
+    // 3. Pre-resolution stop/abort race: stop() runs before attachment resolves.
+    let settledFlag = false;
+    let stoppedFlag = false;
+    const abortPending = deferred<(() => void) | undefined>();
+    const abortDisposer = vi.fn();
+    const abortLateKill = vi.fn();
+    const abortBinding = bindAsyncJobObjectDisposer(abortPending.promise, {
+      isDisposed: () => settledFlag || stoppedFlag,
+      isStopped: () => stoppedFlag,
+      onStoppedResolve: abortLateKill,
+    });
+    stoppedFlag = true;
+    abortBinding.dispose({ stopped: true });
+    expect(abortDisposer).not.toHaveBeenCalled();
+    abortPending.resolve(abortDisposer);
+    await abortBinding.settled;
+    settledFlag = true;
+    abortBinding.dispose();
+    expect(abortDisposer).toHaveBeenCalledTimes(1);
+    expect(abortLateKill).toHaveBeenCalledTimes(1);
+
+    // 4. External state flag race before dispose() is called directly.
+    const flagPending = deferred<(() => void) | undefined>();
+    const flagDisposer = vi.fn();
+    let externalExited = false;
+    const flagBinding = bindAsyncJobObjectDisposer(flagPending.promise, {
+      isDisposed: () => externalExited,
+    });
+    externalExited = true;
+    flagPending.resolve(flagDisposer);
+    await flagBinding.settled;
+    flagBinding.dispose();
+    expect(flagDisposer).toHaveBeenCalledTimes(1);
+
+    // 5. Rejected attachment promise is swallowed safely.
+    const failedPending = deferred<(() => void) | undefined>();
+    const failedBinding = bindAsyncJobObjectDisposer(failedPending.promise);
+    failedPending.reject(new Error("attach failed"));
+    await expect(failedBinding.settled).resolves.toBeUndefined();
+  });
+
+  it("completes sandboxed pre-aborted runCommand and background stop cleanly without hanging", async () => {
+    const shell = findShell();
+    if (shell === undefined) return;
+    const dir = mkdtempSync(join(tmpdir(), "pid-sandbox-race-"));
+    const manager = new BackgroundProcessManager();
+    try {
+      const preAborted = new AbortController();
+      preAborted.abort();
+      const abortedRes = await runCommand(shell, "sleep 5", dir, 5_000, preAborted.signal, { sandbox: true });
+      expect(abortedRes.aborted).toBe(true);
+
+      const started = manager.start({
+        sessionId: "s-race",
+        shellPath: shell,
+        shellArgs: shellArgs(shell, "sleep 5"),
+        command: "sleep 5",
+        cwd: dir,
+        sandbox: true,
+      });
+      const stopped = await manager.stop("s-race", started.id);
+      expect(stopped?.status).toBe("exited");
+    } finally {
+      manager.stopAll();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

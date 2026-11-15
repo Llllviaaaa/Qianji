@@ -7,7 +7,7 @@ import {
 import type { AppNotification, ProjectConfig, SessionInfo, SessionSearchMatch } from "../../types";
 import type { SettingsPage } from "../SettingsModal";
 
-export type SidebarHub = "scheduled" | null;
+export type SidebarHub = "scheduled" | "plugins" | null;
 export type SidebarGroupMode = "project" | "recent";
 
 export interface SidebarProps {
@@ -21,6 +21,7 @@ export interface SidebarProps {
   activeHub: SidebarHub;
   onNewSession: () => void;
   onOpenScheduled: () => void;
+  onOpenPlugins?: () => void;
   onOpenSession: (session: SessionInfo) => void;
   onOpenNotification: (notification: AppNotification) => void;
   onMarkAllNotificationsRead: () => void;

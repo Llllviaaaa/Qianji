@@ -22,11 +22,10 @@ const RATCHET_SLACK = 50;
 /** Physical line counts on 2026-11-12. Lower these as the files get split; never raise them. */
 const OVERSIZED_CEILINGS: Record<string, number> = {
   "packages/host/src/plugin-manager.ts": 1229,
-  "packages/host/src/plugin-dev-tools.ts": 623,
+  "packages/host/src/plugin-dev-tools.ts": 561,
   "src/lib/intelligentUi.ts": 533,
   "src/lib/clientPluginRuntime.ts": 636,
   "src/lib/harnessRuntime.ts": 858,
-  "packages/protocol/src/methods.ts": 865,
   "packages/browser/src/driver.ts": 860,
   "packages/protocol/src/self-guard.ts": 849,
   "src/components/SideChatPanel.tsx": 789,
@@ -36,10 +35,8 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "packages/host/src/agent-plugins.ts": 644,
   "src/store/runtime.ts": 625,
   "src/stores/workbenchStore.ts": 581,
-  "packages/prompt-context/src/index.ts": 569,
   "src/components/ModelPicker.tsx": 522,
   "src/types.ts": 501,
-  "packages/permissions/src/rules.ts": 501,
 };
 
 function countPhysicalLines(absolutePath: string): number {

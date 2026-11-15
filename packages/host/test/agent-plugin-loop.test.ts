@@ -479,4 +479,149 @@ describe("Phase 3: Agent plugin development closed loop", () => {
       clearInterval(pollApprovals);
     }
   });
+
+  it("rejects missing Host/Client Cordis inject declarations in verify while avoiding false positives", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { verifyPluginDirectory } = await import("../src/plugin-verify.ts");
+
+    tempRoot = mkdtempSync(join(tmpdir(), "qj-verify-inject-"));
+    const hostMissingDir = join(tempRoot, "missing-host-inject");
+    mkdirSync(hostMissingDir, { recursive: true });
+    writeFileSync(
+      join(hostMissingDir, "package.json"),
+      JSON.stringify({
+        name: "missing-host-inject",
+        version: "0.0.1",
+        description: "missing inject test",
+        qianji: { id: "missing-host-inject", name: "Missing Host", host: "./host.ts", inject: ["tools"] },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      join(hostMissingDir, "host.ts"),
+      `export const inject = ["tools"];
+export function apply(ctx: { tools: unknown; sessions: { list(): Promise<unknown[]> } }) {
+  void ctx.sessions.list();
+}
+`,
+      "utf8",
+    );
+    const hostReport = await verifyPluginDirectory(hostMissingDir);
+    expect(hostReport.ok).toBe(false);
+    expect(hostReport.errors.some((e) => e.includes("sessions"))).toBe(true);
+
+    const clientMissingDir = join(tempRoot, "missing-client-inject");
+    mkdirSync(clientMissingDir, { recursive: true });
+    writeFileSync(
+      join(clientMissingDir, "package.json"),
+      JSON.stringify({
+        name: "missing-client-inject",
+        version: "0.0.1",
+        description: "missing client inject test",
+        // Client runtime ignores package.json -> qianji.inject, so verify must still require client export inject.
+        qianji: { id: "missing-client-inject", name: "Missing Client", client: "./client.tsx", inject: ["betterSidebar"] },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      join(clientMissingDir, "client.tsx"),
+      `export const inject = ["contributions", "styles"];
+export function apply(ctx: { betterSidebar: { registerTab(d: unknown): void } }) {
+  ctx.betterSidebar.registerTab({ id: "t" });
+}
+export default { name: "missing-client-inject", inject, apply };
+`,
+      "utf8",
+    );
+    const clientReport = await verifyPluginDirectory(clientMissingDir);
+    expect(clientReport.ok).toBe(false);
+    expect(clientReport.errors.some((e) => e.includes("betterSidebar"))).toBe(true);
+
+    const validScopedDir = join(tempRoot, "valid-scoped-inject");
+    mkdirSync(validScopedDir, { recursive: true });
+    writeFileSync(
+      join(validScopedDir, "package.json"),
+      JSON.stringify({
+        name: "valid-scoped-inject",
+        version: "0.0.1",
+        description: "scoped inject and string literal check",
+        qianji: { id: "valid-scoped-inject", name: "Valid Scoped", host: "./host.ts", inject: ["tools"] },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      join(validScopedDir, "host.ts"),
+      `export function apply(ctx: { tools: { get(n: string): unknown }; inject(deps: string[], fn: (c: { rpc: { methods(): string[] } }) => void): void }) {
+  const docHint = "ctx.sessions.list() inside a string must not trigger inject warnings";
+  const quoteRegex = /'/;
+  void docHint;
+  void quoteRegex;
+  void ctx.tools.get("read");
+  ctx.inject(["rpc"], (rpcCtx) => {
+    void rpcCtx.rpc.methods();
+  });
+}
+`,
+      "utf8",
+    );
+    const scopedReport = await verifyPluginDirectory(validScopedDir);
+    expect(scopedReport.ok).toBe(true);
+    expect(scopedReport.errors).toEqual([]);
+
+    for (const bundledDir of ["plugins/observability", "plugins/session-usage", "plugins/smart-rewind"]) {
+      const bundledReport = await verifyPluginDirectory(join(repoRoot, bundledDir));
+      expect(bundledReport.ok, `${bundledDir}: ${bundledReport.errors.join("; ")}`).toBe(true);
+    }
+  });
+
+  it("propagates package.json qianji.inject into Host Cordis plugin exports at runtime", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { resolveCordisPluginExport } = await import("../src/plugin-util.ts");
+
+    const exported = resolveCordisPluginExport({ apply() {} }, "pkg-inject-direct", ["tools", "sessions"]);
+    expect((exported as { inject?: unknown }).inject).toEqual(["tools", "sessions"]);
+
+    tempRoot = mkdtempSync(join(tmpdir(), "qj-pkg-inject-"));
+    const dataDir = join(tempRoot, "data");
+    const workspace = join(tempRoot, "workspace");
+    const pluginDir = join(tempRoot, "pkg-inject-runtime");
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(pluginDir, { recursive: true });
+
+    writeFileSync(
+      join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "pkg-inject-runtime",
+        version: "0.0.1",
+        description: "runtime qianji.inject test",
+        qianji: { id: "pkg-inject-runtime", name: "Pkg Inject Runtime", host: "./host.mjs", inject: ["tools"] },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      join(pluginDir, "host.mjs"),
+      `export function apply(ctx) {
+  ctx.effect(() => ctx.tools.register({
+    name: "pkg_inject_ping",
+    description: "test ping tool",
+    parameters: { type: "object", properties: {} },
+    async execute() { return { content: [{ type: "text", text: "pong" }], isError: false }; },
+  }));
+}
+`,
+      "utf8",
+    );
+
+    host = createHost({ version: "0.3.0-test", dataDir, plugins: corePlugins() });
+    await host.start();
+    manager = new PluginManager(host.ctx, { dataDir, version: "0.3.0-test" });
+    await manager.install({ channel: "local", spec: pluginDir, link: true, watch: false });
+
+    const list = await manager.list();
+    const mounted = list.find((p) => p.id === "pkg-inject-runtime");
+    expect(mounted?.status).toBe("active");
+    expect(mounted?.error).toBeUndefined();
+    expect(host.ctx.tools.get("pkg_inject_ping")).toBeDefined();
+  });
 });

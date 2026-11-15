@@ -1,0 +1,27 @@
+{
+  "name": "side-chat",
+  "version": "0.1.0",
+  "description": "侧边分支对话插件：不打断主对话线程的独立临时问答面板，支持 /side、/btw 与 Ctrl+Alt+S。",
+  "qianji": {
+    "id": "side-chat",
+    "name": "侧边分支对话",
+    "description": "控制工作台右侧「侧边对话」面板，提供 /side 与 /btw 快捷唤醒、线程菜单入口以及 Ctrl+Alt+S 全局快捷键。",
+    "client": "./client.tsx",
+    "contributes": {
+      "commands": ["side", "btw"],
+      "slots": ["thread.more"]
+    },
+    "defaultConfig": {
+      "enableShortcut": true
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "enableShortcut": {
+          "type": "boolean",
+          "description": "启用 Ctrl+Alt+S 快捷键切换右侧「侧边对话」面板"
+        }
+      }
+    }
+  }
+}

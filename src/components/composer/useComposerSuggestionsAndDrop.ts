@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent } from
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import { imageAttachmentFromBlob } from "../../lib/attachments";
 import type { AttachmentPayload, SlashCommand, WorkspaceDirEntry } from "../../types";
+import { filterAndRankSlashCommands } from "./ComposerSuggestionMenus";
 import { MAX_COMMAND_MATCHES, MAX_MENTION_RESULTS } from "./composerHelpers";
 
 export interface UseComposerSuggestionsAndDropOptions {
@@ -100,22 +101,22 @@ export function useComposerSuggestionsAndDrop({
 
   const browserDrop = Boolean(onAttachPayloads) && !disabled && !("__TAURI_INTERNALS__" in window);
 
-  const commandQuery = text.startsWith("/") && !text.includes(" ") ? text.slice(1).toLowerCase() : null;
+  const commandQuery = text.startsWith("/") && !text.includes(" ") && !text.includes("\n") ? text.slice(1) : null;
   const commandMatches = useMemo(
-    () => (commandQuery === null
-      ? []
-      : commands
-          .filter((command) => command.name.toLowerCase().includes(commandQuery))
-          .sort((left, right) => Number(!left.name.toLowerCase().startsWith(commandQuery)) - Number(!right.name.toLowerCase().startsWith(commandQuery)))
-          .slice(0, MAX_COMMAND_MATCHES)),
+    () => filterAndRankSlashCommands(commands, commandQuery, MAX_COMMAND_MATCHES),
     [commandQuery, commands],
   );
   const suggestionsDismissed = suggestionsDismissedFor === text;
   const commandMenuOpen = commandMatches.length > 0 && !suggestionsDismissed;
   const activeCommand = commandMenuOpen ? commandMatches[Math.min(suggestionIndex, commandMatches.length - 1)] : undefined;
   const chooseCommand = (command: SlashCommand) => {
-    setText(`/${command.name} `);
-    textareaRef.current?.focus();
+    const next = `/${command.name} `;
+    setText(next);
+    setCaret(next.length);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(next.length, next.length);
+    });
   };
 
   const mention = useMemo(() => {
@@ -182,7 +183,7 @@ export function useComposerSuggestionsAndDrop({
   return {
     dragOver, setDragOver, browserDrop, attachImageFiles, handlePaste,
     suggestionIndex, setSuggestionIndex, setSuggestionsDismissedFor, suggestionsId,
-    commandMatches, commandMenuOpen, activeCommand, chooseCommand,
+    commandQuery, commandMatches, commandMenuOpen, activeCommand, chooseCommand,
     mentionQuery, mentionMenuOpen, mentionEntries, mentionLoading, activeEntry, chooseEntry,
     suggestionCount,
   };

@@ -10,6 +10,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { Context, Service } from "@deepseek-ai/cordis";
+import { readFiberPluginId } from "./plugin-util.ts";
 import {
   ErrorCode,
   PROTOCOL_VERSION,
@@ -67,6 +68,7 @@ export class RpcGateway extends Service implements RpcService {
   static provide = "rpc";
 
   private readonly handlers = new Map<string, RpcHandler>();
+  private readonly handlerPlugins = new Map<string, string>();
   private readonly connections = new Set<Connection>();
   /** Numbers the calls, so a call's log lines can be found together. */
   private nextTrace = 0;
@@ -99,11 +101,18 @@ export class RpcGateway extends Service implements RpcService {
     if (name === "initialize") throw new Error("initialize is answered by the gateway itself");
     if (this.handlers.has(name)) throw new Error(`RPC method ${name} is already registered`);
     this.handlers.set(name, handler);
+    const pluginId = readFiberPluginId(this.ctx?.fiber);
+    if (pluginId !== undefined) {
+      this.handlerPlugins.set(name, pluginId);
+    }
     let disposed = false;
     const once = (): void => {
       if (disposed) return;
       disposed = true;
-      if (this.handlers.get(name) === handler) this.handlers.delete(name);
+      if (this.handlers.get(name) === handler) {
+        this.handlers.delete(name);
+        this.handlerPlugins.delete(name);
+      }
     };
     if (this.ctx?.fiber?.uid != null && this.ctx.fiber.state !== 5) {
       try {
@@ -196,6 +205,7 @@ export class RpcGateway extends Service implements RpcService {
       this.send(connection, failure(message.id, ErrorCode.MethodNotFound, `Unknown method ${message.method}`));
       return;
     }
+    const pluginId = this.handlerPlugins.get(message.method);
     // Each call is traced at debug level: the log file keeps it, stderr does not.
     const trace = (++this.nextTrace).toString(36);
     const started = performance.now();
@@ -211,7 +221,12 @@ export class RpcGateway extends Service implements RpcService {
         this.send(connection, failure(message.id, error.code, error.message, error.data));
         logger.debug("%s %s error %d %dms: %s", trace, message.method, error.code, elapsed(), error.message);
       } else {
-        logger.error("%s %s failed %dms: %s", trace, message.method, elapsed(), error);
+        const detail = error instanceof Error && error.stack ? error.stack : String(error);
+        if (pluginId !== undefined) {
+          logger.error("%s %s failed %dms (plugin=%s): %s", trace, message.method, elapsed(), pluginId, detail);
+        } else {
+          logger.error("%s %s failed %dms: %s", trace, message.method, elapsed(), detail);
+        }
         this.send(connection, failure(message.id, ErrorCode.InternalError, "Internal error"));
       }
     }

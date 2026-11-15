@@ -1,25 +1,32 @@
 import type { McpServerStatus, PluginInfo } from "@qianji/protocol";
 import {
+  Activity,
   Blocks,
   BookMarked,
   Boxes,
   CalendarClock,
   ChartPie,
   Cpu,
+  GitCompare,
   GitFork,
   Globe,
+  History,
   ListChecks,
+  MessageSquare,
   Monitor,
   Package,
+  Quote,
   RotateCcw,
   Shield,
   Sparkles,
+  Target,
   Terminal,
+  Workflow,
 } from "lucide-react";
 import { sameLocalPath } from "../../lib/pathIdentity";
 import type { AppSettings, DesktopHookConfig } from "../../types";
 
-export type PluginFilter = "all" | "builtin" | "user" | "workspace" | "skills";
+export type PluginFilter = "all" | "bundled" | "builtin" | "user" | "workspace";
 export type Notice = { kind: "success" | "error"; text: string } | null;
 export type OpChipTone = "neutral" | "accent" | "green" | "warn";
 
@@ -42,6 +49,7 @@ export const PILL_SPRING = { type: "spring" as const, stiffness: 520, damping: 3
 
 export const CORE_EXTENSION_ORDER: readonly string[] = [
   "intelligent-ui",
+  "checkpoints",
   "mcp",
   "browser",
   "computer",
@@ -54,6 +62,40 @@ export const CORE_EXTENSION_ORDER: readonly string[] = [
 ];
 
 export const CORE_EXTENSION_SET = new Set<string>(CORE_EXTENSION_ORDER);
+
+export const BUNDLED_FEATURE_ORDER: readonly string[] = [
+  "smart-rewind",
+  "goal-tracker",
+  "code-review",
+  "web-preview",
+  "side-chat",
+  "diagram-viewer",
+  "message-actions",
+  "quick-prompts",
+  "session-usage",
+  "observability",
+];
+
+export const BUNDLED_FEATURE_SET = new Set<string>(BUNDLED_FEATURE_ORDER);
+
+export function isBundledFeaturePlugin(plugin: PluginInfo): boolean {
+  return (
+    plugin.tier === "builtin" &&
+    !CORE_EXTENSION_SET.has(plugin.id) &&
+    (plugin.dir !== undefined || BUNDLED_FEATURE_SET.has(plugin.id))
+  );
+}
+
+export function sortBundledExtensions(items: readonly PluginInfo[]): PluginInfo[] {
+  return [...items].sort((a, b) => {
+    const ai = BUNDLED_FEATURE_ORDER.indexOf(a.id);
+    const bi = BUNDLED_FEATURE_ORDER.indexOf(b.id);
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    if (ai >= 0) return -1;
+    if (bi >= 0) return 1;
+    return a.name.localeCompare(b.name, "zh-CN");
+  });
+}
 
 export const MCP_PRESET_TEMPLATES: readonly McpPresetTemplate[] = [
   {
@@ -130,8 +172,17 @@ export function shouldShowVersion(version: string, tier: PluginInfo["tier"]): bo
 
 export function iconAccentTone(id: string): string {
   if (id === "smart-rewind") return "violet";
+  if (id === "goal-tracker") return "emerald";
+  if (id === "code-review") return "indigo";
+  if (id === "web-preview") return "sky";
+  if (id === "side-chat") return "teal";
+  if (id === "diagram-viewer") return "violet";
+  if (id === "message-actions") return "blue";
+  if (id === "quick-prompts") return "amber";
   if (id === "session-usage") return "sky";
+  if (id === "observability") return "teal";
   if (id === "intelligent-ui") return "indigo";
+  if (id === "checkpoints") return "amber";
   if (id === "mcp") return "blue";
   if (id === "browser") return "sky";
   if (id === "computer") return "slate";
@@ -146,8 +197,17 @@ export function iconAccentTone(id: string): string {
 
 export function PluginCategoryIcon({ id, tier }: { id: string; tier: PluginInfo["tier"] }) {
   if (id === "smart-rewind") return <RotateCcw size={18} strokeWidth={1.8} />;
+  if (id === "goal-tracker") return <Target size={18} strokeWidth={1.8} />;
+  if (id === "code-review") return <GitCompare size={18} strokeWidth={1.8} />;
+  if (id === "web-preview") return <Globe size={18} strokeWidth={1.8} />;
+  if (id === "side-chat") return <MessageSquare size={18} strokeWidth={1.8} />;
+  if (id === "diagram-viewer") return <Workflow size={18} strokeWidth={1.8} />;
+  if (id === "message-actions") return <Quote size={18} strokeWidth={1.8} />;
+  if (id === "quick-prompts") return <Sparkles size={18} strokeWidth={1.8} />;
   if (id === "session-usage") return <ChartPie size={18} strokeWidth={1.8} />;
+  if (id === "observability") return <Activity size={18} strokeWidth={1.8} />;
   if (id === "intelligent-ui") return <Sparkles size={18} strokeWidth={1.8} />;
+  if (id === "checkpoints") return <History size={18} strokeWidth={1.8} />;
   if (id === "mcp") return <Blocks size={18} strokeWidth={1.8} />;
   if (id === "browser") return <Globe size={18} strokeWidth={1.8} />;
   if (id === "computer") return <Monitor size={18} strokeWidth={1.8} />;
@@ -210,6 +270,8 @@ export function coreOperationalChips(
         { key: "tools", label: "render_ui · update_ui", tone: "accent" },
         { key: "sandbox", label: "沙箱化富交互视图" },
       ];
+    case "checkpoints":
+      return [{ key: "shadow", label: "每轮 Git 影子快照 · 无损文件恢复", tone: "accent" }];
     case "mcp": {
       const configured = form?.mcpServers ?? [];
       const enabledServers = configured.filter((s) => s.enabled);

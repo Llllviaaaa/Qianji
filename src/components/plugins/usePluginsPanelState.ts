@@ -12,13 +12,14 @@ import { describeError } from "../../lib/errors";
 import { mcpClient } from "../../lib/mcpClient";
 import { pluginClient } from "../../lib/pluginClient";
 import { queryKeys } from "../../lib/queries";
-import { skillClient } from "../../lib/skillClient";
 import type { AppSettings } from "../../types";
 import {
   canCheckUpdate,
   cleanDisplayName,
   CORE_EXTENSION_ORDER,
   CORE_EXTENSION_SET,
+  isBundledFeaturePlugin,
+  sortBundledExtensions,
   type Notice,
   type PluginFilter,
 } from "./pluginHelpers";
@@ -28,7 +29,7 @@ const NO_MCP_STATUS: McpServerStatus[] = [];
 
 export function usePluginsPanelState(cwd: string, form?: AppSettings) {
   const queryClient = useQueryClient();
-  const clientErrors = useSyncExternalStore(subscribeClientPluginErrors, getClientPluginErrors);
+  const clientErrors = useSyncExternalStore(subscribeClientPluginErrors, getClientPluginErrors, getClientPluginErrors);
 
   const [filter, setFilter] = useState<PluginFilter>("all");
   const [search, setSearch] = useState("");
@@ -48,10 +49,7 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
     queryFn: () => pluginClient.trustList(cwd),
     enabled: cwd.trim() !== "",
   });
-  const skillsQuery = useQuery({
-    queryKey: queryKeys.skills(cwd),
-    queryFn: () => skillClient.list(cwd),
-  });
+  // skills live in standalone SkillsSettingsPage now
 
   const plugins = pluginsQuery.data ?? NO_PLUGINS;
   const mcpPluginEnabled = useMemo(() => {
@@ -125,31 +123,42 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
   });
 
   const counts = useMemo(() => {
+    const bundledCount = plugins.filter((item) => isBundledFeaturePlugin(item)).length;
     const coreCount = plugins.filter((item) => item.tier === "builtin" && CORE_EXTENSION_SET.has(item.id)).length;
     const userCount = plugins.filter((item) => item.tier === "user").length;
     const wsCount = plugins.filter((item) => item.tier === "workspace").length;
-    return { all: userCount + wsCount + coreCount, builtin: coreCount, user: userCount, workspace: wsCount };
+    return {
+      all: userCount + wsCount + bundledCount + coreCount,
+      bundled: bundledCount,
+      builtin: coreCount,
+      user: userCount,
+      workspace: wsCount,
+    };
   }, [plugins]);
 
   const updatableCount = useMemo(() => plugins.filter((item) => canCheckUpdate(item)).length, [plugins]);
 
-  const { installedList, coreList, systemList } = useMemo(() => {
+  const { installedList, bundledList, coreList, systemList } = useMemo(() => {
     const needle = search.trim().toLowerCase();
     const installed: PluginInfo[] = [];
+    const bundled: PluginInfo[] = [];
     const core: PluginInfo[] = [];
     const system: PluginInfo[] = [];
     for (const item of plugins) {
-      if (filter !== "all" && item.tier !== filter) continue;
+      if (filter === "bundled" && !isBundledFeaturePlugin(item)) continue;
+      else if (filter === "builtin" && (item.tier !== "builtin" || !CORE_EXTENSION_SET.has(item.id))) continue;
+      else if ((filter === "user" || filter === "workspace") && item.tier !== filter) continue;
       if (needle !== "") {
         const haystack = `${item.id} ${item.name} ${item.description ?? ""} ${item.origin?.spec ?? ""}`.toLowerCase();
         if (!haystack.includes(needle)) continue;
       }
       if (item.tier === "user" || item.tier === "workspace") installed.push(item);
       else if (CORE_EXTENSION_SET.has(item.id)) core.push(item);
+      else if (isBundledFeaturePlugin(item)) bundled.push(item);
       else system.push(item);
     }
     core.sort((a, b) => CORE_EXTENSION_ORDER.indexOf(a.id) - CORE_EXTENSION_ORDER.indexOf(b.id));
-    return { installedList: installed, coreList: core, systemList: system };
+    return { installedList: installed, bundledList: sortBundledExtensions(bundled), coreList: core, systemList: system };
   }, [filter, plugins, search]);
 
   const openConfigEditor = (plugin: PluginInfo) => {
@@ -212,7 +221,6 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
     setConfirmRemoveId,
     pluginsQuery,
     trustQuery,
-    skillsQuery,
     mcpStatuses,
     mcpReconnectMutation,
     applyMutationResult,
@@ -221,6 +229,7 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
     counts,
     updatableCount,
     installedList,
+    bundledList,
     coreList,
     systemList,
     openConfigEditor,

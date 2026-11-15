@@ -5,10 +5,12 @@
  * `{ type: "plan", plan }` delta for the UI.
  */
 import type { Context } from "@deepseek-ai/cordis";
+import "@qianji/agent";
 import "@qianji/commands";
 import { ErrorCode, type PlanGetResult } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
-import { latestCustom, type Session } from "@qianji/session";
+import { customEvents, latestCustom, type Session } from "@qianji/session";
+import { SectionOrder } from "@qianji/system-prompt";
 import { textOutput, type ToolDefinition } from "@qianji/tools";
 import { validatePlanState, type PlanItemStatus, type PlanState } from "./core.ts";
 
@@ -93,8 +95,72 @@ export function formatPlanMarkdown(plan: PlanState): string {
   return lines.join("\n");
 }
 
+export function formatPlanPromptSection(plan: PlanState): string | undefined {
+  if (plan.items.length === 0) return undefined;
+  const remaining = plan.items.filter((item) => item.status !== "completed");
+  if (remaining.length === 0) return undefined;
+  const marker = (status: PlanItemStatus) => (status === "completed" ? "[x]" : status === "in_progress" ? "[>]" : "[ ]");
+  const lines = ["Active plan (`update_plan`):"];
+  if (plan.explanation.trim() !== "") lines.push(plan.explanation.trim());
+  for (const item of plan.items) {
+    lines.push(`- ${marker(item.status)} (${item.id}) ${item.text}`);
+  }
+  lines.push("Keep executing the remaining steps and mark each finished step `completed` via `update_plan` until all steps are complete.");
+  return lines.join("\n");
+}
+
+function isExecutableAgentSession(ctx: Context, session: Session): boolean {
+  if (session.header.side === true) return false;
+  const perms = ctx.get("permissions" as never) as { modes?: (s: Session) => { agentMode?: string; effective?: string } } | undefined;
+  if (typeof perms?.modes === "function") {
+    const modes = perms.modes(session);
+    return modes.agentMode === "agent" && modes.effective !== "read-only";
+  }
+  const stored = latestCustom<{ permission?: string; agentMode?: string }>(session.events, ["qianji-permissions", "pid-permissions"]);
+  return (stored?.agentMode ?? "agent") === "agent" && stored?.permission !== "read-only";
+}
+
 export function apply(ctx: Context): void {
+  const nudgedPlanSeq = new Map<string, number>();
+
   ctx.effect(() => ctx.tools.register(planTool(ctx)), `${name}: update_plan`);
+  ctx.effect(() => ctx.on("session/deleted", (id) => void nudgedPlanSeq.delete(id)), `${name}: cleanup deleted`);
+  ctx.effect(() => ctx.on("session/unloaded", (id) => void nudgedPlanSeq.delete(id)), `${name}: cleanup unloaded`);
+
+  ctx.inject(["systemPrompt"], (promptCtx) => {
+    promptCtx.effect(
+      () => promptCtx.systemPrompt.section(
+        "plan",
+        async ({ sessionId }) => {
+          const session = await promptCtx.sessions.get(sessionId);
+          return session === undefined ? undefined : formatPlanPromptSection(planOf(session));
+        },
+        { order: SectionOrder.environment - 50 },
+      ),
+      `${name}: system prompt`,
+    );
+  });
+
+  ctx.effect(() => ctx.on("agent/before-stop", (session, info) => {
+    if (info.stop !== "stop" || !isExecutableAgentSession(ctx, session)) return undefined;
+    const latestEvent = customEvents(session.events, [NAMESPACE, LEGACY_NAMESPACE]).at(-1);
+    if (latestEvent === undefined) return undefined;
+    const raw = latestEvent.data.data as Partial<PlanState> | undefined;
+    let plan: PlanState;
+    try {
+      plan = validatePlanState({ explanation: raw?.explanation ?? "", items: raw?.items ?? [] });
+    } catch {
+      return undefined;
+    }
+    const remaining = plan.items.filter((item) => item.status !== "completed");
+    if (remaining.length === 0) return undefined;
+    if (nudgedPlanSeq.get(session.id) === latestEvent.seq) return undefined;
+    nudgedPlanSeq.set(session.id, latestEvent.seq);
+    const summary = remaining.slice(0, 5).map((item) => `[${item.status}] ${item.id}: ${item.text}`).join("; ");
+    const more = remaining.length > 5 ? ` (+${remaining.length - 5} more)` : "";
+    return `Your current plan still has unfinished steps (${summary}${more}). Continue executing the next step using your tools and update step statuses via update_plan; if those steps are already complete, mark them completed via update_plan before finishing, or explain clearly if you are blocked on user input.`;
+  }), `${name}: before-stop`);
+
   ctx.inject(["commands"], (inner) => {
     inner.effect(() => inner.commands.register({
       name: "plan",

@@ -43,32 +43,26 @@
   background: var(--dsh-claude-scrollbar-hover);
 }
 
-/* Meta AI Muse Seamless Canvas (Flush split, zero outer box frame) */
+/* Inset Floating Stage (Linear / Codex Desktop style) */
 .codex-shot .work-surface {
-  margin: 0;
-  border: 0;
-  border-radius: 0;
+  margin: 0 8px 8px 0;
+  border: 1px solid var(--pi-stage-border, var(--border));
+  border-radius: 12px;
   background: var(--dsh-claude-canvas, var(--app));
-  box-shadow: none;
+  box-shadow: var(--pi-shadow-stage);
   overflow: hidden;
-  transition: background-color 180ms ease;
-}
-
-:root[data-theme="dark"] .codex-shot .work-surface {
-  border-color: transparent;
-  box-shadow: none;
+  transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .codex-shot [data-sidebar-panel-state="closed"] ~ .work-surface,
 .codex-shot [data-sidebar-panel-state="preview"] ~ .work-surface {
-  margin-left: 0;
+  margin-left: 8px;
 }
 
 @media (max-width: 720px) {
   .codex-shot .work-surface {
-    margin: 0;
-    border: 0;
-    border-radius: 0;
+    margin: 0 6px 6px 6px;
+    border-radius: 10px;
   }
 }
 
@@ -80,7 +74,7 @@
 }
 
 .codex-shot .primary-sidebar-panel {
-  border-right: 1px solid var(--muse-divider);
+  border-right: 0;
   background: var(--sidebar-bg);
 }
 
@@ -104,8 +98,8 @@
   width: var(--sidebar-width, 250px);
   max-width: min(var(--sidebar-width, 250px), calc(var(--ui-vw, 100vw) - 20px));
   height: auto;
-  border: 0;
-  border-radius: 20px;
+  border: 1px solid var(--qj-border-default);
+  border-radius: 16px;
   background: var(--muse-dialog-bg, var(--qj-bg-surface));
   box-shadow: var(--muse-elevation-popover);
   display: flex;
@@ -130,7 +124,7 @@
   height: auto;
   min-height: 0;
   border: 0;
-  border-radius: 20px;
+  border-radius: 16px;
   background: transparent;
   box-shadow: none;
 }
@@ -153,7 +147,7 @@
   content: "";
   position: absolute;
   top: 12px;
-  bottom: 12px;
+  bottom: 20px;
   left: 50%;
   width: 2px;
   border-radius: 999px;
@@ -521,7 +515,7 @@ body.sidebar-is-resizing .codex-shot .sidebar-resizer::after {
 
 .codex-shot .nav-item.active,
 .codex-shot .dsh-claude-new-session.active {
-  background: var(--muse-soft-fill);
+  background: var(--qj-bg-active);
   color: var(--text);
   font-weight: 560;
   box-shadow: none;
@@ -916,7 +910,7 @@ body.sidebar-is-resizing .codex-shot .sidebar-resizer::after {
 
 .codex-shot .thread-row.active,
 .codex-shot .thread-row-shell.active .thread-row {
-  background: var(--muse-soft-fill);
+  background: var(--qj-bg-active);
   border-color: transparent;
   box-shadow: none;
   color: var(--text);

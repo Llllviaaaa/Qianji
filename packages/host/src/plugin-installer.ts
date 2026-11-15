@@ -2,7 +2,7 @@
  * Multi-channel plugin installer and updater (`local`, `archive`, `git`, `npm`)
  * for `<dataDir>/plugins` (ADR 0016).
  */
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   cpSync,
@@ -124,25 +124,36 @@ function resolveBunCommand(): { command: string; env: NodeJS.ProcessEnv } {
   return { command: process.platform === "win32" ? "bun.exe" : "bun", env: { ...process.env } };
 }
 
-function runChecked(command: string, args: readonly string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; label: string }): string {
-  const result = spawnSync(command, args, {
-    cwd: options.cwd,
-    env: options.env ?? process.env,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 120_000,
+function runChecked(command: string, args: readonly string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; label: string }): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const child = spawn(command, [...args], { cwd: options.cwd, env: options.env ?? process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err !== undefined) reject(err);
+      else resolvePromise(stdout);
+    };
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, 120_000);
+    child.stdout.setEncoding("utf8").on("data", (c: string) => { stdout += c; });
+    child.stderr.setEncoding("utf8").on("data", (c: string) => { stderr += c; });
+    child.on("error", (err) => finish(new Error(`${options.label} failed: ${err.message}`)));
+    child.on("close", (code) => {
+      if (timedOut) return finish(new Error(`${options.label} timed out after 120000ms`));
+      if (code !== 0) {
+        const detail = (stderr || stdout).trim();
+        return finish(new Error(`${options.label} exited with code ${code ?? "null"}${detail !== "" ? `: ${detail}` : ""}`));
+      }
+      finish();
+    });
   });
-  if (result.error) {
-    throw new Error(`${options.label} failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || "").trim();
-    throw new Error(`${options.label} exited with code ${result.status}${detail !== "" ? `: ${detail}` : ""}`);
-  }
-  return result.stdout ?? "";
 }
 
-function installExternalDependenciesIfNeeded(pluginDir: string): void {
+async function installExternalDependenciesIfNeeded(pluginDir: string): Promise<void> {
   const pkgPath = join(pluginDir, "package.json");
   if (!existsSync(pkgPath) || existsSync(join(pluginDir, "node_modules"))) return;
   let pkg: Record<string, unknown>;
@@ -157,7 +168,7 @@ function installExternalDependenciesIfNeeded(pluginDir: string): void {
   if (externalDeps.length === 0) return;
 
   const bun = resolveBunCommand();
-  runChecked(bun.command, ["install", "--production", "--ignore-scripts"], {
+  await runChecked(bun.command, ["install", "--production", "--ignore-scripts"], {
     cwd: pluginDir,
     env: bun.env,
     label: "bun install",
@@ -230,7 +241,7 @@ function installFromLocal(dataDir: string, spec: string, link: boolean, watchFla
   }
 }
 
-function installFromArchive(dataDir: string, spec: string, watchFlag?: boolean): InstalledPluginRecord {
+async function installFromArchive(dataDir: string, spec: string, watchFlag?: boolean): Promise<InstalledPluginRecord> {
   const archivePath = resolve(spec);
   if (!existsSync(archivePath)) throw new Error(`Archive file does not exist: ${spec}`);
 
@@ -238,13 +249,13 @@ function installFromArchive(dataDir: string, spec: string, watchFlag?: boolean):
   try {
     const extractRoot = join(staging, "extracted");
     mkdirSync(extractRoot, { recursive: true });
-    const listing = runChecked("tar", ["-tf", archivePath], { label: "tar list" });
+    const listing = await runChecked("tar", ["-tf", archivePath], { label: "tar list" });
     validateArchiveEntries(listing);
-    runChecked("tar", ["-xf", archivePath, "-C", extractRoot], { label: "tar extract" });
+    await runChecked("tar", ["-xf", archivePath, "-C", extractRoot], { label: "tar extract" });
     assertNoEscapingLinks(extractRoot);
 
     const unwrapped = unwrapSingleTopDirectory(extractRoot);
-    installExternalDependenciesIfNeeded(unwrapped);
+    await installExternalDependenciesIfNeeded(unwrapped);
     const validated = readPluginManifest(unwrapped, "user");
     const dest = join(managedPluginsRoot(dataDir), managedPluginDirName(validated.id));
     atomicReplaceDir(unwrapped, dest);
@@ -267,17 +278,22 @@ function installFromArchive(dataDir: string, spec: string, watchFlag?: boolean):
   }
 }
 
-function installFromGit(dataDir: string, spec: string, watchFlag?: boolean, previousInstalledAt?: string): InstalledPluginRecord {
+async function installFromGit(
+  dataDir: string,
+  spec: string,
+  watchFlag?: boolean,
+  previousInstalledAt?: string,
+): Promise<InstalledPluginRecord> {
   const { url, ref } = parseGitSpec(spec);
   const staging = makeStagingDir(dataDir);
   try {
     const cloneDir = join(staging, "repo");
     const args = ["clone", "--depth", "1", ...(ref !== undefined ? ["--branch", ref] : []), "--", url, cloneDir];
-    runChecked("git", args, {
+    await runChecked("git", args, {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       label: "git clone",
     });
-    installExternalDependenciesIfNeeded(cloneDir);
+    await installExternalDependenciesIfNeeded(cloneDir);
     const validated = readPluginManifest(cloneDir, "user");
     const dest = join(managedPluginsRoot(dataDir), managedPluginDirName(validated.id));
     atomicReplaceDir(cloneDir, dest);
@@ -302,7 +318,12 @@ function installFromGit(dataDir: string, spec: string, watchFlag?: boolean, prev
   }
 }
 
-function installFromNpm(dataDir: string, spec: string, watchFlag?: boolean, previousInstalledAt?: string): InstalledPluginRecord {
+async function installFromNpm(
+  dataDir: string,
+  spec: string,
+  watchFlag?: boolean,
+  previousInstalledAt?: string,
+): Promise<InstalledPluginRecord> {
   const trimmed = spec.trim();
   if (trimmed === "") throw new Error("npm package specifier is required");
 
@@ -313,7 +334,7 @@ function installFromNpm(dataDir: string, spec: string, watchFlag?: boolean, prev
     writeFileSync(join(wrapperDir, "package.json"), `${JSON.stringify({ name: "qianji-plugin-stage", private: true }, null, 2)}\n`, "utf8");
 
     const bun = resolveBunCommand();
-    runChecked(bun.command, ["add", "--ignore-scripts", trimmed], {
+    await runChecked(bun.command, ["add", "--ignore-scripts", trimmed], {
       cwd: wrapperDir,
       env: bun.env,
       label: `bun add ${trimmed}`,
@@ -377,7 +398,7 @@ function installFromNpm(dataDir: string, spec: string, watchFlag?: boolean, prev
   }
 }
 
-export function installPlugin(dataDir: string, params: PluginInstallParams): InstalledPluginRecord {
+export async function installPlugin(dataDir: string, params: PluginInstallParams): Promise<InstalledPluginRecord> {
   switch (params.channel) {
     case "local":
       return installFromLocal(dataDir, params.spec, params.link !== false, params.watch);
@@ -390,7 +411,7 @@ export function installPlugin(dataDir: string, params: PluginInstallParams): Ins
   }
 }
 
-export function updateInstalledPlugin(dataDir: string, pluginId: string): InstalledPluginRecord {
+export async function updateInstalledPlugin(dataDir: string, pluginId: string): Promise<InstalledPluginRecord> {
   const store = readPluginsStore(dataDir);
   const patch = store.plugins[pluginId];
   const origin = patch?.origin;
@@ -401,11 +422,11 @@ export function updateInstalledPlugin(dataDir: string, pluginId: string): Instal
     case "git": {
       const managedDir = join(managedPluginsRoot(dataDir), managedPluginDirName(pluginId));
       if (existsSync(join(managedDir, ".git"))) {
-        runChecked("git", ["-C", managedDir, "pull", "--ff-only"], {
+        await runChecked("git", ["-C", managedDir, "pull", "--ff-only"], {
           env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
           label: `git pull (${pluginId})`,
         });
-        installExternalDependenciesIfNeeded(managedDir);
+        await installExternalDependenciesIfNeeded(managedDir);
         const manifest = readPluginManifest(managedDir, "user");
         const updatedOrigin: PluginInstallOrigin = { ...origin, updatedAt: new Date().toISOString() };
         updatePluginsStore(dataDir, (draft) => {

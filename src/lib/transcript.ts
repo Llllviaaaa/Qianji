@@ -147,6 +147,7 @@ export function historyToUi(events: readonly PersistedEvent[]): UiMessage[] {
   // The calls are built here, so they can be finished in place: a long log stays linear.
   const calls = new Map<string, UiToolCall>();
   let turnStartedAt: number | null = null;
+  let lastAssistant: UiMessage | undefined;
   for (const event of currentBranch(events)) {
     if (event.type === "user") {
       const message = userMessageOf(event);
@@ -156,7 +157,26 @@ export function historyToUi(events: readonly PersistedEvent[]): UiMessage[] {
       const at = timestampOf(event);
       const message = assistantMessageOf(event, turnStartedAt !== null && at > turnStartedAt ? at - turnStartedAt : undefined);
       for (const call of message.toolCalls ?? []) calls.set(call.id, call);
+      lastAssistant = message;
       messages.push(message);
+    } else if (event.type === "tool-call") {
+      const data = event.data as { callId?: string; name?: string; args?: Record<string, unknown> };
+      const callId = typeof data.callId === "string" ? data.callId : "";
+      const parsed = Date.parse(event.ts);
+      const call = callId !== "" ? calls.get(callId) : undefined;
+      if (call !== undefined) {
+        if (Number.isFinite(parsed)) call.startedAt = parsed;
+      } else if (callId !== "" && typeof data.name === "string" && lastAssistant !== undefined) {
+        const added: UiToolCall = {
+          id: callId,
+          name: data.name,
+          args: data.args ?? {},
+          running: false,
+          ...(Number.isFinite(parsed) ? { startedAt: parsed } : {}),
+        };
+        lastAssistant.toolCalls = [...(lastAssistant.toolCalls ?? []), added];
+        calls.set(callId, added);
+      }
     } else if (event.type === "tool-result") {
       const { callId, result } = toolResultOf(event);
       const call = calls.get(callId);
@@ -442,3 +462,5 @@ function parseArguments(json: string): Record<string, unknown> {
     return parsePartialArguments(json);
   }
 }
+
+export { replayToUi } from "./harnessReplay";

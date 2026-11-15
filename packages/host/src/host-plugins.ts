@@ -7,14 +7,14 @@ import "@qianji/permissions";
 import "@qianji/session";
 import * as toolBash from "@qianji/tool-bash";
 import "@qianji/tools";
-import { fileSecretResolver, type SecretCodec } from "./secrets.ts";
+import { fileSecretStore, type SecretCodec } from "./secrets.ts";
 
-/** Registers secrets.dat as the store for `{ secret }` refs. */
+/** Registers secrets.dat as the store for `{ secret }` refs and plugin secrets. */
 export const secretStore = {
   name: "qianji-secret-store",
   inject: ["credentials"],
   apply(ctx: Context, config: { file: string; codec: SecretCodec }) {
-    ctx.effect(() => ctx.credentials.registerStore(fileSecretResolver(config.file, config.codec)), "secret store: secrets.dat");
+    ctx.effect(() => ctx.credentials.registerStore(fileSecretStore(config.file, config.codec)), "secret store: secrets.dat");
   },
 };
 

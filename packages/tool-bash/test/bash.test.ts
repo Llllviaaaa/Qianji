@@ -1,8 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { Context } from "@deepseek-ai/cordis";
 import { afterAll, describe, expect, it } from "vitest";
-import type { ToolEnv } from "@qianji/tools";
+import { Sessions } from "@qianji/session";
+import { Tools, type ToolEnv } from "@qianji/tools";
+import * as toolBash from "../src/index.ts";
 import { bashTool, chooseShell, findPowerShell, findShell, isPowerShell, powershellTool, shellArgs } from "../src/index.ts";
 
 const shell = findShell();
@@ -143,4 +146,132 @@ describe.skipIf(powershell === undefined)("powershell tool (ADR 0021)", () => {
     expect(textOf(output)).toContain("warn");
     expect(output.isError).toBe(false);
   });
+});
+
+describe.skipIf(shell === undefined)("background process management (ADR 0022)", () => {
+  async function setupPlugin() {
+    const ctx = new Context();
+    await ctx.plugin(Sessions);
+    await ctx.plugin(Tools);
+    await ctx.plugin(toolBash, { shell });
+    return ctx;
+  }
+
+  it("spawns background processes, auto-activates bg_process, supports incremental logs, wait, and stop", async () => {
+    const ctx = await setupPlugin();
+    try {
+      const s1 = ctx.sessions.create({ cwd });
+      const env1: ToolEnv = { sessionId: s1.id, cwd, signal: new AbortController().signal };
+      expect(ctx.tools.schemas(s1.id).some((t) => t.name === "bg_process")).toBe(false);
+
+      const start = await ctx.tools.execute(
+        { id: "1", name: "bash", args: { command: "echo ready-line; sleep 0.6; echo late-line; sleep 5", background: true, waitMs: 300 } },
+        env1,
+      );
+      expect(start.isError).toBe(false);
+      expect(textOf(start)).toContain("ready-line");
+      expect(textOf(start)).toContain("status=running");
+      const bgId = (start.details as { id?: string } | undefined)?.id ?? "";
+      expect(bgId).toMatch(/^bg-/);
+      // Deferred bg_process tool is automatically activated for this session
+      expect(ctx.tools.schemas(s1.id).some((t) => t.name === "bg_process")).toBe(true);
+
+      const listed = await ctx.tools.execute({ id: "2", name: "bg_process", args: { action: "list" } }, env1);
+      expect(textOf(listed)).toContain(bgId);
+
+      // Consume initial buffer via incremental read, then wait for late-line and read again
+      await ctx.tools.execute({ id: "3", name: "bg_process", args: { action: "logs", id: bgId, incremental: true } }, env1);
+      const waitPartial = await ctx.tools.execute({ id: "4", name: "bg_process", args: { action: "wait", id: bgId, timeoutMs: 800 } }, env1);
+      expect(textOf(waitPartial)).toContain("[Wait timed out; process is still running.]");
+
+      const incLogs = await ctx.tools.execute({ id: "5", name: "bg_process", args: { action: "logs", id: bgId, incremental: true } }, env1);
+      expect(textOf(incLogs)).toContain("late-line");
+      expect(textOf(incLogs)).not.toContain("ready-line");
+
+      const stopRes = await ctx.tools.execute({ id: "6", name: "bg_process", args: { action: "stop", id: bgId } }, env1);
+      expect(stopRes.isError).toBe(false);
+      expect(textOf(stopRes)).toContain("status=exited");
+
+      // Fast process waited cleanly to exit
+      const fast = await ctx.tools.execute(
+        { id: "7", name: "bash", args: { command: "sleep 0.25; echo finished-fast", background: true, waitMs: 120 } },
+        env1,
+      );
+      const fastId = (fast.details as { id?: string } | undefined)?.id ?? "";
+      const waited = await ctx.tools.execute({ id: "8", name: "bg_process", args: { action: "wait", id: fastId, timeoutMs: 5000 } }, env1);
+      expect(textOf(waited)).toContain("status=exited");
+      expect(textOf(waited)).toContain("exitCode=0");
+      expect(textOf(waited)).toContain("finished-fast");
+    } finally {
+      await ctx.fiber.dispose();
+    }
+  });
+
+  it("enforces session isolation, self-kill guard, max-8 cap, and lifecycle cleanup", async () => {
+    const ctx = await setupPlugin();
+    try {
+      const parent = ctx.sessions.create({ cwd });
+      const other = ctx.sessions.create({ cwd });
+      const child = ctx.sessions.create({ cwd, parent: { sessionId: parent.id, callId: "sub-1" } });
+      const envParent: ToolEnv = { sessionId: parent.id, cwd, signal: new AbortController().signal };
+      const envOther: ToolEnv = { sessionId: other.id, cwd, signal: new AbortController().signal };
+      const envChild: ToolEnv = { sessionId: child.id, cwd, signal: new AbortController().signal };
+
+      // Self-kill guard still rejects in background mode
+      const blocked = await ctx.tools.execute(
+        { id: "k", name: "bash", args: { command: "taskkill /F /IM qianji.exe", background: true } },
+        envParent,
+      );
+      expect(blocked.isError).toBe(true);
+      expect(textOf(blocked)).toMatch(/已拦截针对千机自身进程/);
+
+      const spawned = await ctx.tools.execute(
+        { id: "s1", name: "bash", args: { command: "sleep 10", background: true, waitMs: 120 } },
+        envParent,
+      );
+      const bgId = (spawned.details as { id?: string } | undefined)?.id ?? "";
+
+      // Cross-session isolation
+      expect(textOf(await ctx.tools.execute({ id: "o1", name: "bg_process", args: { action: "list" } }, envOther))).toBe(
+        "No background processes in this session.",
+      );
+      const foreignLogs = await ctx.tools.execute({ id: "o2", name: "bg_process", args: { action: "logs", id: bgId } }, envOther);
+      expect(foreignLogs.isError).toBe(true);
+      expect(textOf(foreignLogs)).toContain("not found in this session");
+
+      // Child subagent background process reaped on agent/settled
+      await ctx.tools.execute(
+        { id: "c1", name: "bash", args: { command: "sleep 10", background: true, waitMs: 120 } },
+        envChild,
+      );
+      expect(textOf(await ctx.tools.execute({ id: "c2", name: "bg_process", args: { action: "list" } }, envChild))).toContain("status=running");
+      await ctx.parallel("agent/settled", child, "done");
+      expect(textOf(await ctx.tools.execute({ id: "c3", name: "bg_process", args: { action: "list" } }, envChild))).toBe(
+        "No background processes in this session.",
+      );
+
+      // Session deletion cleans up remaining processes for parent session
+      await ctx.sessions.delete(parent.id);
+      expect(textOf(await ctx.tools.execute({ id: "p1", name: "bg_process", args: { action: "list" } }, envParent))).toBe(
+        "No background processes in this session.",
+      );
+
+      // Cap of 8 concurrent processes per session
+      for (let i = 0; i < 8; i += 1) {
+        const res = await ctx.tools.execute(
+          { id: `cap-${i}`, name: "bash", args: { command: "sleep 10", background: true, waitMs: 100 } },
+          envOther,
+        );
+        expect(res.isError).toBe(false);
+      }
+      const ninth = await ctx.tools.execute(
+        { id: "cap-9", name: "bash", args: { command: "sleep 10", background: true, waitMs: 100 } },
+        envOther,
+      );
+      expect(ninth.isError).toBe(true);
+      expect(textOf(ninth)).toContain("Maximum of 8 concurrent background processes");
+    } finally {
+      await ctx.fiber.dispose();
+    }
+  }, 20_000);
 });

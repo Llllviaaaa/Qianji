@@ -133,4 +133,75 @@ describe("errors", () => {
     const known = new LlmError({ kind: "auth", message: "m", retryable: false });
     expect(toLlmError(known)).toBe(known);
   });
+
+  it("sends Connection: close on retries triggered by a network error", async () => {
+    const [{ createServer }, { Context }, { Credentials, LlmService }, { postSse }] = await Promise.all([
+      import("node:http"),
+      import("@deepseek-ai/cordis"),
+      import("../src/index.ts"),
+      import("../src/http.ts"),
+    ]);
+
+    const recordedHeaders: Array<Record<string, string | string[] | undefined>> = [];
+    let reqCount = 0;
+    const server = createServer((req, res) => {
+      reqCount += 1;
+      recordedHeaders.push({ ...req.headers });
+      if (reqCount === 1) {
+        // Simulate an upstream proxy closing an idle keep-alive socket immediately on write.
+        req.socket.destroy();
+        return;
+      }
+      req.on("data", () => undefined);
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end('data: {"ok":true}\n\n');
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const ctx = new Context();
+    await ctx.plugin(Credentials);
+    await ctx.plugin(LlmService, { maxAttempts: 3, baseDelayMs: 5, jitterRatio: 0 });
+    ctx.llm.registerAdapter(
+      { id: "mock-net", name: "mock-net", api: "test", baseUrl },
+      {
+        async *stream(_request, signal): AsyncGenerator<import("../src/index.ts").StreamChunk> {
+          for await (const ev of postSse(`${baseUrl}/v1/messages`, {}, { ping: true }, signal, "mock-net")) {
+            const payload = JSON.parse(ev.data) as { ok?: boolean };
+            if (payload.ok === true) yield { type: "text-delta", index: 0, text: "recovered" };
+          }
+          yield { type: "finish", reason: "stop" };
+        },
+      },
+    );
+
+    try {
+      const chunks = [];
+      for await (const chunk of ctx.llm.stream({
+        provider: "mock-net",
+        model: "m1",
+        messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.some((c) => c.type === "retry")).toBe(true);
+      expect(chunks).toContainEqual({ type: "text-delta", index: 0, text: "recovered" });
+      expect(chunks).toContainEqual({ type: "finish", reason: "stop" });
+      expect(recordedHeaders).toHaveLength(2);
+      expect(recordedHeaders[0]?.connection).not.toBe("close");
+      expect(recordedHeaders[1]?.connection).toBe("close");
+    } finally {
+      await ctx.fiber.dispose();
+      await new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      });
+    }
+  });
 });

@@ -165,4 +165,27 @@ test("tool presentation", async () => {
   assert.equal(unknown.heading, "custom_tool");
   assert.equal(unknown.expandable, false);
   assert.equal(unknown.preview, undefined);
+
+  const hashlineRunning = presentToolCall({
+    id: "edit-hash-1",
+    name: "edit",
+    args: {
+      path: "src/a.ts",
+      edits: [{ anchor: "12:a3f", op: "replace", newText: "const x = 2;" }],
+    },
+    running: true,
+  });
+  assert.equal(hashlineRunning.kind, "edit");
+  assert.equal(hashlineRunning.added, 1);
+  assert.equal(hashlineRunning.expandable, true);
+
+  const hashlineDone = presentToolCall({
+    id: "edit-hash-2",
+    name: "edit",
+    args: { path: "src/a.ts", edits: [{ anchor: "12:a3f", op: "replace", newText: "const x = 2;" }] },
+    details: { diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -12,1 +12,1 @@\n-const x = 1;\n+const x = 2;" },
+    running: false,
+  });
+  assert.equal(hashlineDone.removed, 1);
+  assert.equal(hashlineDone.added, 1);
 });

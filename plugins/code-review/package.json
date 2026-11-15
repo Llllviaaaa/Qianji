@@ -1,0 +1,36 @@
+{
+  "name": "code-review",
+  "version": "0.1.0",
+  "description": "AI 代码审查助手：提供 /review 指令、Git 差异检视工具、文件右键审查与代码审查工作台面板门控。",
+  "qianji": {
+    "id": "code-review",
+    "name": "AI 代码审查助手",
+    "description": "提供 /review 斜杠指令、只读 Git 差异检视工具 code_review_diff、文件树右键 AI 审查、工具栏入口及右侧「审查」工作台面板。",
+    "host": "./host.ts",
+    "client": "./client.tsx",
+    "contributes": {
+      "tools": ["code_review_diff"],
+      "commands": ["review"],
+      "slots": ["menubar.tools", "thread.more", "file.context"]
+    },
+    "defaultConfig": {
+      "maxDiffChars": 24000,
+      "strictSeverityFilter": true
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "maxDiffChars": {
+          "type": "number",
+          "minimum": 4000,
+          "maximum": 100000,
+          "description": "单次读取 Git 差异的最大字符数预算"
+        },
+        "strictSeverityFilter": {
+          "type": "boolean",
+          "description": "审查提示词中优先要求仅报告高置信度、可验证的真实问题"
+        }
+      }
+    }
+  }
+}

@@ -47,6 +47,14 @@ static LOG: Mutex<Option<Today>> = Mutex::new(None);
 static PANIC_HOOK_INSTALLED: Once = Once::new();
 static CRASH_SEQ: AtomicU64 = AtomicU64::new(0);
 static SESSION_CLEAN_EXITED: AtomicBool = AtomicBool::new(false);
+static PANIC_OCCURRED: AtomicBool = AtomicBool::new(false);
+
+fn try_claim_clean_exit(panic_occurred: &AtomicBool, clean_exited: &AtomicBool) -> bool {
+    if panic_occurred.load(Ordering::SeqCst) {
+        return false;
+    }
+    !clean_exited.swap(true, Ordering::SeqCst)
+}
 
 /// Shared JSONL crash/incident record persisted to `desktop-crashes.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +377,7 @@ fn write_lifecycle_atomic(dir: &Path, lifecycle: &DesktopLifecycle) {
 /// Inspect any previous session's `desktop-lifecycle.json` for an unclean exit,
 /// persist an `"unclean_desktop_exit"` crash record if found, and arm the new session sentinel.
 pub(crate) fn mark_session_start(version: &str) {
+    PANIC_OCCURRED.store(false, Ordering::SeqCst);
     SESSION_CLEAN_EXITED.store(false, Ordering::SeqCst);
     mark_session_start_in_dir(&logs_dir(), version, std::process::id(), true);
 }
@@ -434,7 +443,7 @@ fn mark_session_start_in_dir(dir: &Path, version: &str, pid: u32, emit_stderr: b
 
 /// Mark the current desktop session as cleanly exited so the next boot knows no crash occurred.
 pub(crate) fn mark_session_clean_exit(reason: &str) {
-    if SESSION_CLEAN_EXITED.swap(true, Ordering::SeqCst) {
+    if !try_claim_clean_exit(&PANIC_OCCURRED, &SESSION_CLEAN_EXITED) {
         return;
     }
     mark_session_clean_exit_in_dir(&logs_dir(), reason, std::process::id(), true);
@@ -478,6 +487,7 @@ pub fn install_panic_hook() {
         std::panic::set_hook(Box::new(move |info| {
             let thread = std::thread::current();
             let thread_name = thread.name().unwrap_or("unnamed");
+            PANIC_OCCURRED.store(true, Ordering::SeqCst);
             let location = info
                 .location()
                 .map(|loc| (loc.file(), loc.line(), loc.column()));
@@ -803,5 +813,21 @@ mod tests {
         assert_eq!(last.pid, Some(5214));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn panic_flag_blocks_clean_exit_claim() {
+        let panic_occurred = AtomicBool::new(false);
+        let clean_exited = AtomicBool::new(false);
+        assert!(try_claim_clean_exit(&panic_occurred, &clean_exited));
+        assert!(!try_claim_clean_exit(&panic_occurred, &clean_exited));
+
+        let panic_occurred_after = AtomicBool::new(true);
+        let clean_exited_after = AtomicBool::new(false);
+        assert!(!try_claim_clean_exit(
+            &panic_occurred_after,
+            &clean_exited_after
+        ));
+        assert!(!clean_exited_after.load(Ordering::SeqCst));
     }
 }

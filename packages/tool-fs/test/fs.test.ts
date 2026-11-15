@@ -3,7 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ToolDefinition, ToolEnv, ToolOutput } from "@qianji/tools";
-import { applyEdits, edit, find, globToRegExp, grep, ls, matchesGlob, read, write } from "../src/index.ts";
+import {
+  applyEdits,
+  diagnostics,
+  edit,
+  find,
+  globToRegExp,
+  grep,
+  grepWithNode,
+  lineHash,
+  ls,
+  matchesGlob,
+  parseTscDiagnostics,
+  read,
+  write,
+} from "../src/index.ts";
 
 let cwd = "";
 const env = (): ToolEnv => ({ sessionId: "s", cwd, signal: new AbortController().signal });
@@ -124,5 +138,108 @@ describe("ls, find and grep", () => {
     expect((await call(grep, { pattern: "(", literal: true, path: "src/deep/b.test.ts" })).text).toBe("b.test.ts:1: test('needle', () => {});");
     expect((await call(grep, { pattern: "needle", limit: 1 })).text).toContain("[Stopped at 1 matches");
     expect((await call(grep, { pattern: "(" })).isError).toBe(true);
+    const nodeOnly = grepWithNode({ pattern: "needle" }, env());
+    expect(nodeOnly.matches).toEqual([
+      "src/a.ts:2: const hidden = 'needle';",
+      "src/deep/b.test.ts:1: test('needle', () => {});",
+    ]);
+  });
+});
+
+describe("hashline read and edit", () => {
+  it("formats hashlines on read when hashlines=true and supports replace/insert/delete", async () => {
+    writeFileSync(join(cwd, "hash.ts"), "const a = 1;\nconst b = 2;\nconst c = 3;\n");
+    const out = await call(read, { path: "hash.ts", hashlines: true });
+    expect(out.isError).toBe(false);
+    expect(out.text).toContain(`1:${lineHash("const a = 1;")}| const a = 1;`);
+    expect(out.text).toContain(`2:${lineHash("const b = 2;")}| const b = 2;`);
+
+    const a1 = `1:${lineHash("const a = 1;")}`;
+    const a2 = `2:${lineHash("const b = 2;")}`;
+    const a3 = `3:${lineHash("const c = 3;")}`;
+    const edited = await edit.execute({
+      path: "hash.ts",
+      edits: [
+        { anchor: a1, endAnchor: a2, op: "replace", newText: "const ab = 12;" },
+        { anchor: a2, op: "insert_after", newText: "const mid = true;" },
+        { anchor: a3, op: "delete" },
+      ],
+    }, env());
+    expect(edited.isError).not.toBe(true);
+    expect((edited.details as { diff?: string } | undefined)?.diff).toContain("@@");
+    expect(readFileSync(join(cwd, "hash.ts"), "utf8")).toBe("const ab = 12;\nconst mid = true;\n");
+  });
+
+  it("relocates shifted anchors within ±20 lines and returns actionable mismatch errors", async () => {
+    const file = join(cwd, "shift.ts");
+    const original = "// header\n// inserted\nconst target = 42;\n// footer\n";
+    writeFileSync(file, original);
+    // Target moved from line 2 -> line 3, unique hash within ±20 lines.
+    const staleAnchor = `2:${lineHash("const target = 42;")}`;
+    const ok = await call(edit, { path: "shift.ts", edits: [{ anchor: staleAnchor, op: "replace", newText: "const target = 99;" }] });
+    expect(ok.isError).toBe(false);
+    expect(ok.text).toContain("relocated by line content hash");
+    expect(readFileSync(file, "utf8")).toBe("// header\n// inserted\nconst target = 99;\n// footer\n");
+
+    const bad = await call(edit, {
+      path: "shift.ts",
+      edits: [
+        { anchor: `1:${lineHash("// header")}`, op: "replace", newText: "// changed" },
+        { anchor: "3:000", op: "replace", newText: "broken" },
+      ],
+    });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain("Current lines near line 3");
+    // Atomic rollback: line 1 stayed untouched.
+    expect(readFileSync(file, "utf8")).toBe("// header\n// inserted\nconst target = 99;\n// footer\n");
+  });
+
+  it("supports CRLF and insert_before", () => {
+    const original = "one\r\ntwo\r\n";
+    const updated = applyEdits(original, [
+      { anchor: `1:${lineHash("one")}`, op: "insert_before", newText: "zero" },
+      { oldText: "two", newText: "2" },
+    ]);
+    expect(updated).toBe("zero\r\none\r\n2\r\n");
+  });
+});
+
+describe("diagnostics", () => {
+  it("registers as deferred read-only tool and reports JSON errors and tsc formatting", async () => {
+    expect(diagnostics.readOnly).toBe(true);
+    expect(diagnostics.deferred).toBe(true);
+    expect(diagnostics.group).toBe("code_intelligence");
+
+    writeFileSync(join(cwd, "broken.json"), '{\n  "ok": 1,\n  bad\n}\n');
+    const res = await call(diagnostics, { paths: ["broken.json"] });
+    expect(res.isError).toBe(false);
+    expect(res.text).toContain("broken.json:");
+    expect(res.text).toContain("[error JSON]");
+
+    const parsed = parseTscDiagnostics(
+      "src/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\n",
+      cwd,
+      cwd,
+    );
+    expect(parsed).toEqual([{
+      file: "src/a.ts",
+      line: 12,
+      column: 5,
+      severity: "error",
+      code: "TS2322",
+      message: "Type 'string' is not assignable to type 'number'.",
+    }]);
+  });
+});
+
+describe("readOnly metadata", () => {
+  it("marks read-only FS tools as readOnly and mutating tools as non-readOnly", () => {
+    expect(read.readOnly).toBe(true);
+    expect(ls.readOnly).toBe(true);
+    expect(find.readOnly).toBe(true);
+    expect(grep.readOnly).toBe(true);
+    expect(diagnostics.readOnly).toBe(true);
+    expect(write.readOnly).not.toBe(true);
+    expect(edit.readOnly).not.toBe(true);
   });
 });

@@ -152,6 +152,11 @@ export function resolveDesktopBundledPluginRoots(desktopExe?: string): string[] 
     if (existsSync(join(devRepoPlugins, "smart-rewind", "package.json"))) {
       candidates.push(devRepoPlugins);
     }
+  } else if (typeof import.meta.dirname === "string") {
+    const devCheckoutPlugins = resolve(import.meta.dirname, "..", "..", "..", "plugins");
+    if (existsSync(join(devCheckoutPlugins, "smart-rewind", "package.json"))) {
+      candidates.push(devCheckoutPlugins);
+    }
   }
   candidates.push(join(dirname(process.execPath), "bundled-plugins"));
 

@@ -3,8 +3,14 @@
  * The only implementation is `@qianji/agent-loop`; everything else extends a
  * run through these events, never by changing the loop.
  */
-import type { StreamChunk, UserContent } from "@qianji/llm";
+import type { FinishReason, StreamChunk, UserContent } from "@qianji/llm";
 import type { EventOf, Session } from "@qianji/session";
+
+export interface BeforeStopContext {
+  turn: number;
+  stop: FinishReason;
+  hasText: boolean;
+}
 
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -18,6 +24,8 @@ declare module "@deepseek-ai/cordis" {
     "agent/turn-start"(session: Session, turn: number): Promise<void> | void;
     /** After a model call and the tools it asked for. */
     "agent/turn-end"(session: Session, turn: number): Promise<void> | void;
+    /** Right before a run would stop with `done`; returning a non-empty prompt continues the run. */
+    "agent/before-stop"(session: Session, context: BeforeStopContext): Promise<string | undefined> | string | undefined;
     /** The run ended and its queues are empty. */
     "agent/settled"(session: Session, outcome: RunOutcome): Promise<void>;
   }

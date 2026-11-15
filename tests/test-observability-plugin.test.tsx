@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { inflateRawSync } from "node:zlib";
-import { Context } from "@deepseek-ai/cordis";
+import { Context, Logger, type Exporter } from "@deepseek-ai/cordis";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,11 +16,13 @@ import { createHost } from "../packages/host/src/host.ts";
 import * as pluginDevTools from "../packages/host/src/plugin-dev-tools.ts";
 import { verifyPluginDirectory } from "../packages/host/src/plugin-dev-tools.ts";
 import { PluginManager } from "../packages/host/src/plugin-manager.ts";
+import { resolveCordisPluginExport } from "../packages/host/src/plugin-util.ts";
 import * as pluginsRpc from "../packages/host/src/plugins-rpc.ts";
 import { startE2eHost } from "../packages/host/test/e2e-host.ts";
 import observabilityClient from "../plugins/observability/client.tsx";
 import {
   collectDiagnosticsSnapshot,
+  extractPluginId,
   loadDateLogEntries,
   localDayString,
   parseDesktopLogText,
@@ -802,6 +804,244 @@ describe("observability bundled official plugin", () => {
       expect(env.head.querySelector('style[data-qj-plugin-style="observability"]')).toBeNull();
     } finally {
       env.restore();
+    }
+  });
+
+  it("collapses 35 repeated HMR errors into one incident with ×35 badge and merges cross-plane load errors within 5s", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pid-obs-dedupe-"));
+    const logsDir = join(dir, "logs");
+    mkdirSync(logsDir, { recursive: true });
+    const today = localDayString(new Date());
+
+    try {
+      const hmrLines: string[] = [];
+      for (let i = 0; i < 35; i += 1) {
+        hmrLines.push(
+          `${today}T01:00:${String(i).padStart(2, "0")}.000Z error [plugins] HMR sync failed for qianji-im: SyntaxError: Unexpected token`,
+        );
+      }
+      // Same-plugin client bundle load failure emitted across Host + WebView within 5s.
+      hmrLines.push(
+        `${today}T01:05:00.200Z error [plugins] [client:load] plugin=tieba-persona: SyntaxError: Unexpected identifier`,
+      );
+      writeFileSync(join(logsDir, `host-${today}.log`), `${hmrLines.join("\n")}\n`, "utf8");
+      writeFileSync(
+        join(logsDir, `desktop-${today}.log`),
+        `${today}T09:05:00.100+08:00 [renderer:error] (plugin-load:tieba-persona) SyntaxError: Unexpected identifier\n`,
+        "utf8",
+      );
+
+      const snap = collectDiagnosticsSnapshot(logsDir, {
+        dedupeMirroredStderr: true,
+        liveEntries: [],
+        now: new Date(`${today}T12:00:00Z`),
+      });
+
+      const imIncident = snap.recentIncidents.find((item) => item.pluginId === "qianji-im");
+      expect(imIncident).toBeDefined();
+      expect(imIncident?.occurrences).toBe(35);
+      expect(imIncident?.firstSeenAt).toBe(`${today}T01:00:00.000Z`);
+      expect(imIncident?.timestamp).toBe(`${today}T01:00:34.000Z`);
+
+      const tiebaIncidents = snap.recentIncidents.filter((item) => item.pluginId === "tieba-persona");
+      expect(tiebaIncidents).toHaveLength(1);
+      expect(tiebaIncidents[0]?.occurrences).toBeUndefined();
+
+      const overviewHtml = renderToStaticMarkup(
+        createElement(OverviewTab, {
+          loading: false,
+          error: null,
+          onRefresh: async () => undefined,
+          onOpenPluginLogs: () => undefined,
+          overview: {
+            host: {
+              version: "0.3.0",
+              protocolVersion: "1",
+              startedAt: `${today}T00:00:00.000Z`,
+              uptimeMs: 1000,
+              pid: 1234,
+              memoryRssBytes: 1024,
+              heapUsedBytes: 512,
+              dataDir: dir,
+              logsDir,
+            },
+            logFiles: [],
+            counts: {
+              unackedCrashes: snap.recentIncidents.length,
+              totalIncidents: snap.recentIncidents.length,
+              errorLogsToday: snap.errorLogsToday,
+              warnLogsToday: snap.warnLogsToday,
+              toolFailuresSession: 0,
+            },
+            pluginErrorCounts: snap.pluginErrorCounts,
+            recentIncidents: snap.recentIncidents,
+            recentToolIssues: [],
+            lastAckedAt: null,
+          },
+        }),
+      );
+      expect(overviewHtml).toContain("×35");
+      expect(overviewHtml).toContain("首次发生于");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("attributes RPC failures via knownPluginIds namespace matching and stamps (plugin=...) in RpcGateway", async () => {
+    const knownPluginIds = new Set(["tieba-persona"]);
+    expect(
+      extractPluginId(
+        "rpc",
+        "1e tieba_persona.state failed 12ms: Error: db locked",
+        undefined,
+        knownPluginIds,
+      ),
+    ).toBe("tieba-persona");
+
+    const dir = mkdtempSync(join(tmpdir(), "pid-obs-rpc-attr-"));
+    const logsDir = join(dir, "logs");
+    mkdirSync(logsDir, { recursive: true });
+    const today = localDayString(new Date());
+
+    const token = Buffer.alloc(32, 9).toString("base64url");
+    const e2eHost = await startE2eHost({
+      dataDir: dir,
+      pageOrigin: "http://localhost:1420",
+      token,
+      provider: new ScriptedProvider([textReply("ok")]),
+    });
+    const runtimes = new HarnessRuntimes(
+      () => connectHarness({ baseUrl: e2eHost.baseUrl, token }, { name: "obs-rpc-attr", version: "1" }),
+      [20],
+    );
+    const capturedLogs: string[] = [];
+    const exporter: Exporter = {
+      colors: false,
+      levels: { default: 3 },
+      export(message) {
+        if (message.name === "rpc") {
+          capturedLogs.push(Logger.format(exporter, message));
+        }
+      },
+    };
+    e2eHost.host.ctx.logger.exporter(exporter);
+
+    try {
+      writeFileSync(
+        join(logsDir, `host-${today}.log`),
+        `${today}T02:00:00.000Z error [rpc] 1e tieba_persona.state failed 12ms: Error: db locked\n`,
+        "utf8",
+      );
+      const parsed = loadDateLogEntries(logsDir, today, true, [], knownPluginIds);
+      expect(parsed[0]?.pluginId).toBe("tieba-persona");
+
+      const pluginDef = resolveCordisPluginExport(
+        {
+          name: "tieba-persona-rpc-test",
+          apply(pctx: Context) {
+            pctx.inject(["rpc"], (rpcCtx) => {
+              rpcCtx.effect(() =>
+                (
+                  rpcCtx as unknown as {
+                    rpc: { method: (m: string, fn: () => unknown) => () => void };
+                  }
+                ).rpc.method("tieba_persona.boom", () => {
+                  throw new Error("db locked");
+                }),
+              );
+            });
+          },
+        },
+        "tieba-persona",
+      );
+      await e2eHost.host.ctx.plugin(pluginDef);
+
+      await expect(runtimes.call("tieba_persona.boom", {})).rejects.toThrow();
+      const matched = capturedLogs.find((line) => line.includes("tieba_persona.boom"));
+      expect(matched).toBeDefined();
+      expect(matched).toContain("(plugin=tieba-persona)");
+      expect(matched).toContain("Error: db locked");
+    } finally {
+      runtimes.close();
+      await e2eHost.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts pluginId from qianji-plugin:// and /plugins/<id>/client.js URLs and folds [harness|] and legacy Error: stacks without phantom desktop errors", () => {
+    expect(
+      extractPluginId(
+        "browser:console.error",
+        "Uncaught Error: boom",
+        "    at view (qianji-plugin://tieba-persona/client.js:18:4)",
+      ),
+    ).toBe("tieba-persona");
+    expect(
+      extractPluginId(
+        "browser:console.error",
+        "Failed loading http://127.0.0.1:4312/plugins/tieba-persona/client.js?etag=abc:42:9",
+      ),
+    ).toBe("tieba-persona");
+
+    const sample = [
+      "2026-11-15T10:00:00.000Z [harness] 2026-11-15 10:00:00 [E] plugins Failed loading client",
+      "2026-11-15T10:00:00.001Z [harness|] TypeError: boom",
+      "2026-11-15T10:00:00.001Z [harness|]     at view (qianji-plugin://tieba-persona/client.js:12:5)",
+      "2026-11-15T10:00:05.000Z [harness] 2026-11-15 10:00:05 [E] plugins Unframed failure",
+      "2026-11-15T10:00:05.005Z Error: legacy failure",
+      "2026-11-15T10:00:05.006Z     at render (http://127.0.0.1:4100/plugins/alpha-widget/client.js?v=2:9:1)",
+    ].join("\n");
+
+    const entries = parseDesktopLogText(sample, "desktop-2026-11-15.log");
+    expect(entries).toHaveLength(2);
+    expect(entries.some((e) => e.plane === "desktop")).toBe(false);
+    expect(entries[0]?.plane).toBe("host");
+    expect(entries[0]?.pluginId).toBe("tieba-persona");
+    expect(entries[0]?.stack).toContain("TypeError: boom");
+    expect(entries[0]?.stack).toContain("qianji-plugin://tieba-persona/client.js");
+    expect(entries[1]?.plane).toBe("host");
+    expect(entries[1]?.pluginId).toBe("alpha-widget");
+    expect(entries[1]?.stack).toContain("Error: legacy failure");
+    expect(entries[1]?.stack).toContain("/plugins/alpha-widget/client.js");
+  });
+
+  it("derives collapsible plugin_error incidents from repeated [rpc] errors and HMR fiber rollback messages", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "qj-obs-collapse-"));
+    try {
+      const now = new Date(2026, 10, 15, 12, 5, 0);
+      const day = localDayString(now);
+      const rpcLines = Array.from({ length: 39 }, (_, index) => {
+        const trace = `r${String(index + 1).padStart(2, "0")}xy`;
+        const tsIso = new Date(2026, 10, 15, 12, 1, index).toISOString();
+        return `${tsIso} [harness] ${day} 12:01:${String(index).padStart(2, "0")} [E] rpc ${trace} tieba_persona.getOverview failed: ETIMEDOUT upstream`;
+      });
+      const hmrLines = [
+        `${new Date(2026, 10, 15, 12, 2, 0).toISOString()} [harness] ${day} 12:02:00 [E] plugins plugin hmr-widget apply failed: SyntaxError: unexpected token`,
+        `${new Date(2026, 10, 15, 12, 2, 1).toISOString()} [harness] ${day} 12:02:01 [E] plugins plugin=hmr-widget reload import failed, keeping previous fiber: SyntaxError: unexpected token`,
+      ];
+      writeFileSync(join(tempDir, `desktop-${day}.log`), [...rpcLines, ...hmrLines].join("\n"), "utf8");
+
+      const snap = collectDiagnosticsSnapshot(tempDir, {
+        dedupeMirroredStderr: true,
+        liveEntries: [],
+        knownPluginIds: new Set(["tieba-persona", "hmr-widget"]),
+        now,
+      });
+
+      expect(snap.pluginErrorCounts["tieba-persona"]).toBe(39);
+      expect(snap.pluginErrorCounts["hmr-widget"]).toBe(2);
+
+      const tiebaIncidents = snap.recentIncidents.filter((inc) => inc.pluginId === "tieba-persona");
+      expect(tiebaIncidents).toHaveLength(1);
+      expect(tiebaIncidents[0]?.kind).toBe("plugin_error");
+      expect(tiebaIncidents[0]?.occurrences).toBe(39);
+
+      const hmrIncidents = snap.recentIncidents.filter((inc) => inc.pluginId === "hmr-widget");
+      expect(hmrIncidents).toHaveLength(1);
+      expect(hmrIncidents[0]?.kind).toBe("plugin_error");
+      expect(hmrIncidents[0]?.occurrences).toBe(2);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

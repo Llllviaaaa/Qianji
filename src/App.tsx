@@ -317,7 +317,7 @@ export default function App() {
                   openPreviewFile={ws.openPreviewFile} restoreGitFiles={actions.restoreGitFiles}
                   requestReview={actions.requestReview} extensionWidgets={extensionWidgets} extensionRequest={extensionRequest}
                   answerExtension={store.answerExtension} refreshSessions={store.refreshSessions} navigateTo={nav.navigateTo}
-                  showErrorToast={showErrorToast} openSettingsPage={openSettingsPage} sendFromComposer={actions.sendFromComposer}
+                  showErrorToast={showErrorToast} sendFromComposer={actions.sendFromComposer}
                   renderComposer={renderComposer} layoutScale={layoutScale} contributions={contributions}
                 />
               </div>

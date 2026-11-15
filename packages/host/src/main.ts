@@ -69,7 +69,12 @@ export function parseOptions(argv: readonly string[]): MainOptions {
 export const stderrExporter: Exporter = {
   colors: false,
   export(message) {
-    process.stderr.write(`[harness] ${Logger.format(stderrExporter, message)}\n`);
+    const formatted = Logger.format(stderrExporter, message);
+    const framed = formatted
+      .split(/\r?\n/)
+      .map((line, index) => (index === 0 ? `[harness] ${line}` : `[harness|] ${line}`))
+      .join("\n");
+    process.stderr.write(`${framed}\n`);
   },
 };
 

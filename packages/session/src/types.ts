@@ -45,7 +45,7 @@ export interface SessionEventData {
   /** Derive `throughSeq` and everything before it from `summary` instead. */
   compaction: { throughSeq: number; summary: string };
   /** Continue the current branch from `toSeq`; later events stay in the file. */
-  rewind: { toSeq: number; reason?: string };
+  rewind: { toSeq: number; reason?: string; branchSummary?: string };
   label: { title?: string; archived?: boolean };
   /** Plugin-private data; `ns` is the plugin name. Readers skip unknown `ns`. */
   custom: { ns: string; data: unknown };

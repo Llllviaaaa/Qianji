@@ -1,9 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { Context, Service } from "@deepseek-ai/cordis";
+import type { Effort } from "@qianji/llm";
 import { currentBranch, deriveState, forkEvents, summarize, type SessionState } from "./derive.ts";
 import {
   SESSION_FORMAT,
   SESSION_FORMAT_VERSION,
+  type EventOf,
+  type ModelRef,
   type SessionEvent,
   type SessionEventData,
   type SessionEventType,
@@ -167,6 +170,16 @@ export class Session {
     return this.cached.state;
   }
 
+  /** Switch this session's active provider/model by appending a `model` event. */
+  setModel(model: ModelRef): EventOf<"model"> {
+    return this.append("model", { provider: model.provider, model: model.model });
+  }
+
+  /** Switch this session's reasoning effort level by appending an `effort` event. */
+  setEffort(effort: Effort): EventOf<"effort"> {
+    return this.append("effort", { effort });
+  }
+
   summary(): SessionSummary {
     return summarize(this.header, this.log);
   }
@@ -184,6 +197,10 @@ export interface CreateSessionOptions {
   side?: boolean;
   /** Events the session starts with, numbered from 1 (a fork's copy). */
   events?: SessionEvent[];
+  /** Optional initial model appended immediately after creation. */
+  model?: ModelRef;
+  /** Optional initial reasoning effort appended immediately after creation. */
+  effort?: Effort;
 }
 
 /** How long a session nobody holds stays in memory after its last use. */
@@ -321,6 +338,8 @@ export class Sessions extends Service {
     const session = new Session(this.ctx, this, header, [...events]);
     this.open.set(header.id, session);
     this.ctx.emit("session/created", session);
+    if (options.model !== undefined) session.setModel(options.model);
+    if (options.effort !== undefined) session.setEffort(options.effort);
     return session;
   }
 
@@ -414,6 +433,20 @@ export class Sessions extends Service {
     const deleted = await this.storage.delete(id);
     this.ctx.emit("session/deleted", id);
     return deleted;
+  }
+
+  /** Set a session's active provider/model by `Session` or session ID. */
+  async setModel(target: string | Session, model: ModelRef): Promise<EventOf<"model">> {
+    const resolved = typeof target === "string" ? await this.get(target) : target;
+    if (resolved === undefined) throw new Error(`No session ${String(target)}`);
+    return resolved.setModel(model);
+  }
+
+  /** Set a session's reasoning effort by `Session` or session ID. */
+  async setEffort(target: string | Session, effort: Effort): Promise<EventOf<"effort">> {
+    const resolved = typeof target === "string" ? await this.get(target) : target;
+    if (resolved === undefined) throw new Error(`No session ${String(target)}`);
+    return resolved.setEffort(effort);
   }
 
   /** A new session holding `source`'s current branch up to `atSeq` (default: all of it). */

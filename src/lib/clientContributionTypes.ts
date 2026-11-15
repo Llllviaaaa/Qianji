@@ -40,7 +40,7 @@ export interface HomeQuickActionSlotContext extends WorkbenchSlotContext {
 }
 
 /** Built-in Settings categories; each one also accepts plugin `settings.sections`. */
-export type BuiltinSettingsPageId = "general" | "appearance" | "providers" | "plugins";
+export type BuiltinSettingsPageId = "general" | "appearance" | "providers" | "mcp" | "skills" | "plugins";
 
 export interface SettingsSlotContext extends WorkbenchSlotContext {
   /** Settings page on screen: a built-in id, or `plugin:<id>` for a plugin settings page. */

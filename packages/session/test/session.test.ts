@@ -1,7 +1,10 @@
 import { Context } from "@deepseek-ai/cordis";
 import { describe, expect, it } from "vitest";
 import {
+  BRANCH_SUMMARY_PREFIX,
+  COMPACTION_CONTINUE_SUFFIX,
   COMPACTION_PREFIX,
+  CONTINUATION_NAMESPACE,
   INTERRUPTED_TOOL_RESULT,
   MemoryStorage,
   Sessions,
@@ -10,6 +13,7 @@ import {
   deriveState,
   forkEvents,
   settledSeq,
+  slidingCompactionPoint,
   summarize,
   uuidv7,
   type SessionEvent,
@@ -66,6 +70,57 @@ describe("derivation", () => {
       { role: "user", content: text("new") },
       { role: "assistant", content: text("NEW") },
     ]);
+  });
+
+  it("appends COMPACTION_CONTINUE_SUFFIX for mid-run compactions with no trailing user turn", () => {
+    const events = log(() => [
+      ev("model", model),
+      ev("user", { content: text("fix bug") }),
+      assistant(text("Inspecting...")),
+      ev("compaction", { throughSeq: 3, summary: "S" }),
+    ]);
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text(`${COMPACTION_PREFIX}S${COMPACTION_CONTINUE_SUFFIX}`) },
+    ]);
+  });
+
+  it("skips thinking-only and errored non-tool assistant replies while keeping thinking tool calls", () => {
+    const events = log(() => [
+      ev("user", { content: text("go") }),
+      assistant([{ type: "thinking", text: "silent thought" }]),
+      ev("assistant", { content: text("partial error"), model, usage, stop: "error" }),
+      assistant([{ type: "thinking", text: "plan" }, { type: "tool-call", id: "c1", name: "read", arguments: {} }]),
+      ev("tool-result", { callId: "c1", name: "read", content: text("ok"), isError: false }),
+    ]);
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text("go") },
+      { role: "assistant", content: [{ type: "thinking", text: "plan" }, { type: "tool-call", id: "c1", name: "read", arguments: {} }] },
+      { role: "tool-result", callId: "c1", content: text("ok"), isError: false },
+    ]);
+  });
+
+  it("derives CONTINUATION_NAMESPACE custom events into user messages without inflating summarize", () => {
+    const events = log(() => [
+      ev("user", { content: text("start") }),
+      assistant(text("half")),
+      ev("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "length", text: "Continue." } }),
+    ]);
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text("start") },
+      { role: "assistant", content: text("half") },
+      { role: "user", content: text("Continue.") },
+    ]);
+    // Merges into immediately preceding user turn when assistant reply was skipped
+    const merged = log(() => [
+      ev("user", { content: text("start") }),
+      assistant([{ type: "thinking", text: "only thinking" }]),
+      ev("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "empty", text: "Retry." } }),
+    ]);
+    expect(deriveState(merged).messages).toEqual([
+      { role: "user", content: [...text("start"), ...text("\n\nRetry.")] },
+    ]);
+    const summary = summarize({ format: "pid.session", version: 1, id: "s", createdAt: "c", cwd: "/w" }, events);
+    expect(summary.messageCount).toBe(2);
   });
 
   it("closes tool calls that never got a result and skips empty replies", () => {
@@ -285,5 +340,96 @@ describe("sessions service", () => {
     expect((await ctx.sessions.search("CompactedSummaryToken4")).map((h) => h.session.id)).toEqual([session.id]);
     expect((await ctx.sessions.search("PostCompactionPrompt5")).map((h) => h.session.id)).toEqual([session.id]);
     await ctx.fiber.dispose();
+  });
+
+  it("sets initial and updated model and effort via Session and Sessions helpers", async () => {
+    const ctx = new Context();
+    await ctx.plugin(Sessions);
+    const session = ctx.sessions.create({
+      cwd: "/w",
+      model: { provider: "deepseek", model: "deepseek-chat" },
+      effort: "medium",
+    });
+    expect(session.state().model).toEqual({ provider: "deepseek", model: "deepseek-chat" });
+    expect(session.state().effort).toBe("medium");
+
+    session.setModel({ provider: "openai", model: "gpt-5" });
+    session.setEffort("high");
+    expect(session.state().model).toEqual({ provider: "openai", model: "gpt-5" });
+    expect(session.state().effort).toBe("high");
+
+    await ctx.sessions.setModel(session.id, { provider: "anthropic", model: "claude-sonnet-4-6" });
+    await ctx.sessions.setEffort(session.id, "low");
+    expect(session.state().model).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(session.state().effort).toBe("low");
+
+    await expect(ctx.sessions.setModel("missing-session", { provider: "p", model: "m" })).rejects.toThrow("No session missing-session");
+    await expect(ctx.sessions.setEffort("missing-session", "high")).rejects.toThrow("No session missing-session");
+    await ctx.fiber.dispose();
+  });
+
+  it("injects branchSummary notes cleanly, clears superseded notes on earlier rewinds, and preserves them on fork", () => {
+    const model = { provider: "p", model: "m" };
+    const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    seq = 0;
+    const u1 = ev("user", { content: text("Start") });
+    const a1 = ev("assistant", { content: [{ type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } }], model, stop: "tool-use", usage });
+    const tr1 = ev("tool-result", { callId: "c1", name: "read", content: text("file-a"), isError: false });
+    const uDead = ev("user", { content: text("Dead end path") });
+    const aDead = ev("assistant", { content: text("Failed attempt"), model, stop: "stop", usage });
+    const rw1 = ev("rewind", { toSeq: tr1.seq, branchSummary: "Approach A failed after reading a.ts." });
+    const u2 = ev("user", { content: text("Next path") });
+
+    const events = [u1, a1, tr1, uDead, aDead, rw1, u2];
+    const state = deriveState(events);
+    expect(state.messages.map((m) => m.role)).toEqual(["user", "assistant", "tool-result", "user", "user"]);
+    expect(state.messages[3]).toEqual({ role: "user", content: text(`${BRANCH_SUMMARY_PREFIX}Approach A failed after reading a.ts.`) });
+    expect(state.messages[4]).toEqual({ role: "user", content: text("Next path") });
+
+    // Never splits a tool-call from its tool-result if a rewind points at the assistant tool-call itself.
+    seq = 0;
+    const x1 = ev("user", { content: text("U") });
+    const x2 = ev("assistant", { content: [{ type: "tool-call", id: "tc", name: "read", arguments: {} }], model, stop: "tool-use", usage });
+    const xRw = ev("rewind", { toSeq: x2.seq, branchSummary: "Deferred until tool-result closes." });
+    const x3 = ev("tool-result", { callId: "tc", name: "read", content: text("ok"), isError: false });
+    const unsplit = deriveState([x1, x2, xRw, x3]);
+    expect(unsplit.messages.map((m) => m.role)).toEqual(["user", "assistant", "tool-result", "user"]);
+    expect(unsplit.messages[3]).toEqual({ role: "user", content: text(`${BRANCH_SUMMARY_PREFIX}Deferred until tool-result closes.`) });
+
+    // Forking preserves active branch summaries at renumbered anchor positions.
+    const forked = forkEvents(events, u2.seq);
+    expect(deriveState(forked).messages).toEqual(state.messages);
+
+    // Rewinding further back than an earlier rewind discards its descendant note.
+    const rwRoot = ev("rewind", { toSeq: u1.seq, branchSummary: "Root restart summary." });
+    const rewoundBack = deriveState([...events, rwRoot]);
+    expect(rewoundBack.messages).toEqual([
+      { role: "user", content: text("Start") },
+      { role: "user", content: text(`${BRANCH_SUMMARY_PREFIX}Root restart summary.`) },
+    ]);
+  });
+
+  it("slidingCompactionPoint keeps newest complete steps within token budget and falls back cleanly", () => {
+    const model = { provider: "p", model: "m" };
+    const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const chunk400 = "x".repeat(400); // ~100 tokens
+    seq = 0;
+    const u1 = ev("user", { content: text(`turn1-${chunk400}`) });
+    const a1 = ev("assistant", { content: text(`ans1-${chunk400}`), model, stop: "stop", usage });
+    const u2 = ev("user", { content: text(`turn2-${chunk400}`) });
+    const a2 = ev("assistant", { content: [{ type: "tool-call", id: "c2", name: "read", arguments: { text: chunk400 } }], model, stop: "tool-use", usage });
+    const tr2 = ev("tool-result", { callId: "c2", name: "read", content: text(`res2-${chunk400}`), isError: false });
+    const u3 = ev("user", { content: text(`turn3-${chunk400}`) });
+    const a3 = ev("assistant", { content: text(`ans3-${chunk400}`), model, stop: "stop", usage });
+    const all = [u1, a1, u2, a2, tr2, u3, a3];
+
+    // Budget enough only for unit 3 (u3+a3 ~204 tokens): cuts right after tr2 (keeps u3+a3)
+    expect(slidingCompactionPoint(all, 260)).toBe(tr2.seq);
+    // Larger budget keeps unit 2 (u2+a2+tr2) AND unit 3 intact without splitting a2/tr2
+    expect(slidingCompactionPoint(all, 650)).toBe(a1.seq);
+    // Tiny budget where even newest unit doesn't fit falls back to full compactionPoint(events, false)
+    expect(slidingCompactionPoint(all, 10)).toBe(a3.seq);
+    // Single-step log falls back to compactionPoint(events, false)
+    expect(slidingCompactionPoint([u1, a1], 10_000)).toBe(a1.seq);
   });
 });

@@ -9,10 +9,12 @@
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
+    "@qianji/agent": "*",
     "@qianji/commands": "*",
     "@qianji/protocol": "*",
     "@qianji/rpc": "*",
     "@qianji/session": "*",
+    "@qianji/system-prompt": "*",
     "@qianji/tools": "*"
   }
 }

@@ -40,7 +40,7 @@ export function SessionChangeCard({
   stats: Map<string, { add: number; del: number }>;
   onOpenFile: (path: string) => void;
   onRestore: () => void;
-  onReview: () => void;
+  onReview?: () => void;
 }) {
   const [open, setOpen] = useState(true);
   const [showAll, setShowAll] = useState(false);
@@ -74,7 +74,7 @@ export function SessionChangeCard({
           {!single && <ChevronDown className="conversation-change-chevron" size={14} strokeWidth={1.8} aria-hidden="true" />}
         </button>
         <button type="button" className="change-card-secondary" onClick={onRestore}>撤销</button>
-        <button type="button" onClick={onReview}>审核</button>
+        {onReview && <button type="button" onClick={onReview}>审核</button>}
       </div>
       {!single && open && (
         <ul className="conversation-change-files">

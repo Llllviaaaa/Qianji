@@ -12,7 +12,8 @@
     "@qianji/agent": "*",
     "@qianji/llm": "*",
     "@qianji/session": "*",
-    "@qianji/tools": "*"
+    "@qianji/tools": "*",
+    "@qianji/ui": "*"
   },
   "devDependencies": {
     "@qianji/agent-loop": "*",

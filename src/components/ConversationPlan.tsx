@@ -1,27 +1,27 @@
 import { useId, useState } from "react";
-import { Check, ChevronRight, Circle, CircleCheck, ListChecks, LoaderCircle, PanelRightOpen } from "lucide-react";
+import { Check, ChevronRight, Circle, CircleCheck, Clock, ListChecks, LoaderCircle, PanelRightOpen } from "lucide-react";
 import type { TaskPlanStep, TaskPlanStatus, TaskPlanSummary } from "../lib/envSources";
 
-function statusLabel(status: TaskPlanStatus): string {
+function statusLabel(status: TaskPlanStatus, live: boolean): string {
   if (status === "completed") return "完成";
-  if (status === "in_progress") return "进行中";
+  if (status === "in_progress") return live ? "进行中" : "已暂停";
   return "待处理";
 }
 
-function StatusIcon({ status }: { status: TaskPlanStatus }) {
+function StatusIcon({ status, live }: { status: TaskPlanStatus; live: boolean }) {
   if (status === "completed") return <Check size={13} strokeWidth={2} />;
-  if (status === "in_progress") return <LoaderCircle className="spin" size={13} strokeWidth={2} />;
+  if (status === "in_progress") return live ? <LoaderCircle className="spin" size={13} strokeWidth={2} /> : <Clock size={13} strokeWidth={1.8} />;
   return <Circle size={13} strokeWidth={1.8} />;
 }
 
-export function PlanSteps({ id, steps }: { id?: string; steps: TaskPlanStep[] }) {
+export function PlanSteps({ id, steps, live = false }: { id?: string; steps: TaskPlanStep[]; live?: boolean }) {
   return (
     <ol id={id} className="plan-steps">
       {steps.map((step) => (
         <li key={step.id} className={`plan-step is-${step.status}`}>
-          <StatusIcon status={step.status} />
+          <StatusIcon status={step.status} live={live} />
           <span>{step.text}</span>
-          <em>{statusLabel(step.status)}</em>
+          <em>{statusLabel(step.status, live)}</em>
         </li>
       ))}
     </ol>

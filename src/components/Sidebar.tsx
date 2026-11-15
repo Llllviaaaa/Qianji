@@ -19,6 +19,7 @@ export function Sidebar({
   activeHub,
   onNewSession,
   onOpenScheduled,
+  onOpenPlugins,
   onOpenSession,
   onOpenNotification,
   onMarkAllNotificationsRead,
@@ -83,6 +84,7 @@ export function Sidebar({
         newChatShortcut={newChatShortcut}
         onNewSession={onNewSession}
         onOpenScheduled={onOpenScheduled}
+        onOpenPlugins={onOpenPlugins}
         workspaceView={state.workspaceView}
         setWorkspaceView={state.setWorkspaceView}
         groupMode={state.groupMode}

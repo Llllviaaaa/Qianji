@@ -2,7 +2,7 @@
   "name": "@qianji/prompt-context",
   "version": "0.0.0",
   "private": true,
-  "description": "Built-in system prompt sections: identity, guidelines, AGENTS.md/CLAUDE.md, skills, environment",
+  "description": "Built-in system prompt sections: identity, guidelines, AGENTS.md/CLAUDE.md (.local & @path imports), path-scoped rules, skills, /init, environment",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -12,9 +12,11 @@
     "@qianji/commands": "*",
     "@qianji/protocol": "*",
     "@qianji/rpc": "*",
-    "@qianji/system-prompt": "*"
+    "@qianji/system-prompt": "*",
+    "@qianji/tools": "*"
   },
   "devDependencies": {
-    "@qianji/system-prompt": "*"
+    "@qianji/system-prompt": "*",
+    "@qianji/tools": "*"
   }
 }

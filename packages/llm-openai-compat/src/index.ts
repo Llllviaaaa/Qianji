@@ -10,33 +10,26 @@ import {
   getJson,
   joinUrl,
   postSse,
-  type Effort,
   type FinishReason,
   type LlmAdapter,
   type LlmProtocolSpec,
   type LlmRequest,
   type Message,
   type ModelInfo,
-  type SecretRef,
   type StreamChunk,
 } from "@qianji/llm";
+import {
+  clampFallbackEffort,
+  effortValue,
+  parseDiscoveredModel,
+  supportsReasoningEffort,
+  type ProviderConfig,
+} from "./models.ts";
+
+export { supportsReasoningEffort, type ProviderConfig } from "./models.ts";
 
 export const name = "qianji-llm-openai-compat";
 export const inject = ["llm", "credentials"];
-
-export interface ProviderConfig {
-  id: string;
-  name?: string;
-  /** Up to and including the version path, e.g. `https://api.openai.com/v1`. */
-  baseUrl: string;
-  apiKey?: SecretRef;
-  /** Extra request headers, e.g. OpenRouter's `HTTP-Referer`. */
-  headers?: Record<string, string>;
-  /** Send `reasoning_effort` when a request asks for an effort. */
-  reasoningEffort?: boolean;
-  /** Configured models; their metadata wins over what `/models` reports. */
-  models?: ModelInfo[];
-}
 
 export interface Config {
   providers?: ProviderConfig[];
@@ -44,26 +37,68 @@ export interface Config {
 
 type WireMessage = Record<string, unknown>;
 
-function toWireMessages(system: string | undefined, messages: Message[]): WireMessage[] {
+function toUserContentParts(content: string | Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (Array.isArray(content)) return content;
+  return content === "" ? [] : [{ type: "text", text: content }];
+}
+
+function pushWireUser(wire: WireMessage[], content: string | Array<Record<string, unknown>>): void {
+  const prev = wire.at(-1);
+  if (prev?.role !== "user") {
+    wire.push({ role: "user", content });
+    return;
+  }
+  if (typeof prev.content === "string" && typeof content === "string") {
+    prev.content = prev.content === ""
+      ? content
+      : content === ""
+        ? prev.content
+        : `${prev.content}\n\n${content}`;
+    return;
+  }
+  const prevParts = toUserContentParts(prev.content as string | Array<Record<string, unknown>>);
+  const nextParts = toUserContentParts(content);
+  if (prevParts.length > 0 && nextParts.length > 0) {
+    prev.content = [...prevParts, { type: "text", text: "\n\n" }, ...nextParts];
+  } else {
+    prev.content = [...prevParts, ...nextParts];
+  }
+}
+
+function toWireMessages(
+  system: string | undefined,
+  messages: Message[],
+  options?: { includeReasoningContent?: boolean },
+): WireMessage[] {
   const wire: WireMessage[] = system ? [{ role: "system", content: system }] : [];
-  for (const message of messages) {
+  const lastUserIndex = messages.findLastIndex((m) => m.role === "user");
+  for (const [index, message] of messages.entries()) {
     if (message.role === "user") {
       const onlyText = message.content.every((block) => block.type === "text");
-      wire.push({
-        role: "user",
-        content: onlyText
+      pushWireUser(
+        wire,
+        onlyText
           ? message.content.map((block) => (block.type === "text" ? block.text : "")).join("")
           : message.content.map((block) => block.type === "text"
             ? { type: "text", text: block.text }
             : { type: "image_url", image_url: { url: `data:${block.mimeType};base64,${block.data}` } }),
-      });
+      );
     } else if (message.role === "assistant") {
-      // Reasoning is not sent back: DeepSeek rejects reasoning_content in input.
       const text = message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
+      const thinking = message.content.flatMap((block) => (block.type === "thinking" ? [block.text] : [])).join("");
       const calls = message.content.flatMap((block) => (block.type === "tool-call"
         ? [{ id: block.id, type: "function", function: { name: block.name, arguments: JSON.stringify(block.arguments) } }]
         : []));
-      wire.push({ role: "assistant", content: text === "" && calls.length > 0 ? null : text, ...(calls.length > 0 ? { tool_calls: calls } : {}) });
+      if (text === "" && calls.length === 0) continue;
+      // DeepSeek/Kimi require `reasoning_content` on intra-turn tool-call loops (`index > lastUserIndex`)
+      // while omitting it before the latest user turn (`index < lastUserIndex`).
+      const includeReasoning = options?.includeReasoningContent !== false && index > lastUserIndex && thinking !== "";
+      wire.push({
+        role: "assistant",
+        content: text === "" && calls.length > 0 ? null : text,
+        ...(includeReasoning ? { reasoning_content: thinking } : {}),
+        ...(calls.length > 0 ? { tool_calls: calls } : {}),
+      });
     } else {
       const text = message.content.map((block) => (block.type === "text" ? block.text : "[image omitted]")).join("\n");
       wire.push({ role: "tool", tool_call_id: message.callId, content: text });
@@ -72,74 +107,17 @@ function toWireMessages(system: string | undefined, messages: Message[]): WireMe
   return wire;
 }
 
-function effortValue(effort: Effort | undefined): string | undefined {
-  const trimmed = effort?.trim();
-  return trimmed === undefined || trimmed === "" || trimmed === "off" ? undefined : trimmed;
-}
-
-function clampFallbackEffort(effort: string): "low" | "medium" | "high" | undefined {
-  const normalized = effort.toLowerCase();
-  if (normalized === "low" || normalized === "medium" || normalized === "high") return undefined;
-  if (normalized === "minimal") return "low";
-  if (normalized === "xhigh" || normalized === "max") return "high";
-  return "medium";
-}
-
-function parseEffortList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const seen = new Set<string>();
-  const list: string[] = [];
-  for (const item of value) {
-    if (typeof item !== "string") continue;
-    const normalized = item.trim().toLowerCase();
-    if (!/^[a-z0-9._:-]{1,64}$/.test(normalized) || seen.has(normalized)) continue;
-    seen.add(normalized);
-    list.push(normalized);
-  }
-  if (list.length === 0) return undefined;
-  if (!seen.has("off") && !seen.has("none")) {
-    return ["off", ...list];
-  }
-  return list;
-}
-
-const KNOWN_REASONING_EFFORT_MODEL_RE = /^(?:o1|o3|o4|gpt-5|grok-(?:3-mini|4))(?:$|[-._/])/i;
-
-/**
- * Whether `reasoning_effort` should be sent for `modelId`.
- * Explicit `provider.reasoningEffort` (`true` / `false`) always wins; otherwise
- * auto-enable for configured reasoning models and known OpenAI/xAI reasoning families
- * while avoiding DeepSeek's native endpoint where `deepseek-reasoner` omits it.
- */
-export function supportsReasoningEffort(
-  modelId: string,
-  provider: ProviderConfig,
-  unsupportedModels?: ReadonlySet<string>,
-): boolean {
-  if (provider.reasoningEffort === true) return true;
-  if (provider.reasoningEffort === false) return false;
-  if (unsupportedModels?.has(modelId)) return false;
-  if (/^deepseek-reasoner$/i.test(modelId) || /api\.deepseek\.com/i.test(provider.baseUrl)) return false;
-  const configured = provider.models?.find((item) => item.id === modelId);
-  if (configured?.reasoning === false) return false;
-  if (
-    configured?.reasoning === true
-    || (configured?.thinkingLevel !== undefined && configured.thinkingLevel !== "off")
-    || Boolean(configured?.thinkingLevels?.some((lvl) => lvl !== "off"))
-  ) {
-    return true;
-  }
-  return KNOWN_REASONING_EFFORT_MODEL_RE.test(modelId);
-}
-
 export function buildRequestBody(
   request: LlmRequest,
   provider: ProviderConfig,
   unsupportedReasoningModels?: ReadonlySet<string>,
+  unsupportedReasoningContentModels?: ReadonlySet<string>,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
-    messages: toWireMessages(request.system, request.messages),
+    messages: toWireMessages(request.system, request.messages, {
+      includeReasoningContent: !unsupportedReasoningContentModels?.has(request.model),
+    }),
     stream: true,
     stream_options: { include_usage: true },
   };
@@ -158,13 +136,32 @@ export function buildRequestBody(
   return body;
 }
 
-const FINISH_REASONS: Record<string, FinishReason> = {
+const FINISH_REASONS: Record<string, FinishReason | "retryable-error"> = {
   stop: "stop",
+  end_turn: "stop",
   length: "length",
+  max_tokens: "length",
+  model_context_window_exceeded: "length",
   tool_calls: "tool-use",
   function_call: "tool-use",
+  tool_use: "tool-use",
   content_filter: "refusal",
+  safety: "refusal",
+  recitation: "refusal",
+  prohibited_content: "refusal",
+  blocklist: "refusal",
+  spii: "refusal",
+  image_safety: "refusal",
+  malformed_function_call: "retryable-error",
+  unexpected_tool_call: "retryable-error",
+  error: "retryable-error",
+  network_error: "retryable-error",
+  other: "retryable-error",
 };
+
+function classifyOpenAiFinishReason(raw: string): FinishReason | "retryable-error" {
+  return FINISH_REASONS[raw.trim().toLowerCase()] ?? "stop";
+}
 
 interface WireDelta {
   content?: string | null;
@@ -190,8 +187,15 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
   let next = 0;
   let thinkingIndex: number | undefined;
   let textIndex: number | undefined;
-  const toolIndex = new Map<number, number>();
+  const toolState = new Map<number, { blockIndex: number; id?: string }>();
+  const activeAliasByWireIndex = new Map<number, number>();
+  let lastImplicitWireIndex: number | undefined;
+  let nextSyntheticWireIndex = 10_000;
   let reason: FinishReason | undefined;
+  let rawFinishReason: string | undefined;
+  let rawErrorFinishReason: string | undefined;
+  let emittedContent = false;
+  let reportedOutputTokens: number | undefined;
   let sawDone = false;
 
   for await (const event of events) {
@@ -213,28 +217,76 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
       const thinking = delta.reasoning_content ?? delta.reasoning;
       if (typeof thinking === "string" && thinking !== "") {
         thinkingIndex ??= next++;
+        emittedContent = true;
         yield { type: "thinking-delta", index: thinkingIndex, text: thinking };
       }
       if (typeof delta.content === "string" && delta.content !== "") {
         textIndex ??= next++;
+        emittedContent = true;
         yield { type: "text-delta", index: textIndex, text: delta.content };
       }
       for (const call of delta.tool_calls ?? []) {
-        const wireIndex = call.index ?? 0;
-        let index = toolIndex.get(wireIndex);
-        if (index === undefined) {
-          index = next++;
-          toolIndex.set(wireIndex, index);
-          yield { type: "tool-call-start", index, id: call.id ?? `call_${index}`, name: call.function?.name ?? "" };
+        const callId = typeof call.id === "string" && call.id !== "" ? call.id : undefined;
+        let wireIndex: number;
+        if (typeof call.index === "number") {
+          if (callId !== undefined) {
+            const byId = [...toolState.entries()].find(([, entry]) => entry.id === callId);
+            if (byId !== undefined) {
+              wireIndex = byId[0];
+            } else {
+              const existingAtIndex = toolState.get(call.index);
+              if (existingAtIndex !== undefined && existingAtIndex.id !== undefined && existingAtIndex.id !== callId) {
+                wireIndex = nextSyntheticWireIndex++;
+                activeAliasByWireIndex.set(call.index, wireIndex);
+              } else {
+                wireIndex = call.index;
+                activeAliasByWireIndex.delete(call.index);
+              }
+            }
+          } else {
+            wireIndex = activeAliasByWireIndex.get(call.index) ?? call.index;
+          }
+        } else if (callId !== undefined) {
+          const byId = [...toolState.entries()].find(([, entry]) => entry.id === callId);
+          if (byId !== undefined) {
+            wireIndex = byId[0];
+          } else {
+            wireIndex = nextSyntheticWireIndex++;
+            lastImplicitWireIndex = wireIndex;
+          }
+        } else {
+          wireIndex = lastImplicitWireIndex ?? 0;
+          lastImplicitWireIndex ??= wireIndex;
+        }
+        let entry = toolState.get(wireIndex);
+        if (entry === undefined) {
+          const blockIndex = next++;
+          entry = { blockIndex, id: callId };
+          toolState.set(wireIndex, entry);
+          emittedContent = true;
+          yield { type: "tool-call-start", index: blockIndex, id: callId ?? `call_${blockIndex}`, name: call.function?.name ?? "" };
         }
         const args = call.function?.arguments;
-        if (typeof args === "string" && args !== "") yield { type: "tool-call-delta", index, argumentsDelta: args };
+        if (typeof args === "string" && args !== "") yield { type: "tool-call-delta", index: entry.blockIndex, argumentsDelta: args };
       }
-      if (typeof choice.finish_reason === "string") reason = FINISH_REASONS[choice.finish_reason] ?? "stop";
+      if (typeof choice.finish_reason === "string") {
+        rawFinishReason = choice.finish_reason;
+        const classified = classifyOpenAiFinishReason(choice.finish_reason);
+        if (classified === "retryable-error") {
+          rawErrorFinishReason = choice.finish_reason;
+          reason = undefined;
+        } else {
+          rawErrorFinishReason = undefined;
+          reason = classified;
+        }
+      }
     }
     if (chunk.usage) {
       const cached = chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens ?? 0;
       const reasoning = chunk.usage.completion_tokens_details?.reasoning_tokens;
+      if (typeof chunk.usage.completion_tokens === "number") {
+        reportedOutputTokens = chunk.usage.completion_tokens;
+      }
       yield {
         type: "usage",
         usage: {
@@ -246,121 +298,41 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
       };
     }
   }
-  if (!sawDone && reason === undefined) {
+  if (!sawDone && reason === undefined && rawErrorFinishReason === undefined) {
     throw new LlmError({
       kind: "network",
       message: `${providerId}: upstream stream ended before completion`,
       retryable: true,
     });
   }
-  yield { type: "finish", reason: reason ?? (toolIndex.size > 0 ? "tool-use" : "stop") };
-}
-
-function positiveInt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
-}
-
-function parsePerMillionPrice(perToken: unknown): number | undefined {
-  const num = typeof perToken === "number" ? perToken : typeof perToken === "string" ? Number(perToken) : NaN;
-  if (!Number.isFinite(num) || num < 0) return undefined;
-  return Math.round(num * 1_000_000 * 10_000) / 10_000;
-}
-
-function parseDiscoveredModel(raw: Record<string, unknown>): ModelInfo[] {
-  if (typeof raw.id !== "string" || raw.id.trim() === "") return [];
-  const id = raw.id;
-  const info: ModelInfo = { id };
-
-  const displayName = typeof raw.name === "string" ? raw.name.trim() : typeof raw.display_name === "string" ? raw.display_name.trim() : "";
-  if (displayName !== "" && displayName !== id) info.name = displayName;
-
-  const topProvider = typeof raw.top_provider === "object" && raw.top_provider !== null ? (raw.top_provider as Record<string, unknown>) : undefined;
-  const contextWindow =
-    positiveInt(raw.context_length)
-    ?? positiveInt(raw.context_window)
-    ?? positiveInt(raw.max_model_len)
-    ?? positiveInt(raw.max_input_tokens)
-    ?? positiveInt(topProvider?.context_length);
-  if (contextWindow !== undefined) info.contextWindow = contextWindow;
-
-  const maxOutputTokens =
-    positiveInt(raw.max_completion_tokens)
-    ?? positiveInt(raw.max_output_tokens)
-    ?? positiveInt(topProvider?.max_completion_tokens);
-  if (maxOutputTokens !== undefined) info.maxOutputTokens = maxOutputTokens;
-
-  const capabilities = typeof raw.capabilities === "object" && raw.capabilities !== null ? (raw.capabilities as Record<string, unknown>) : undefined;
-  const capReasoning = typeof capabilities?.reasoning === "object" && capabilities.reasoning !== null
-    ? (capabilities.reasoning as Record<string, unknown>)
-    : undefined;
-  const supportedParams = Array.isArray(raw.supported_parameters) ? raw.supported_parameters : undefined;
-  const discoveredLevels =
-    parseEffortList(raw.thinking_levels)
-    ?? parseEffortList(raw.supported_thinking_levels)
-    ?? parseEffortList(raw.reasoning_efforts)
-    ?? parseEffortList(raw.supported_reasoning_efforts)
-    ?? parseEffortList(raw.efforts)
-    ?? parseEffortList(capabilities?.thinking_levels)
-    ?? parseEffortList(capabilities?.reasoning_efforts)
-    ?? parseEffortList(capReasoning?.efforts)
-    ?? parseEffortList(capReasoning?.levels);
-  if (discoveredLevels !== undefined) {
-    info.thinkingLevels = discoveredLevels;
+  if (toolState.size === 0 && reason === undefined && rawErrorFinishReason !== undefined) {
+    throw new LlmError({
+      kind: "server",
+      message: `${providerId} aborted generation with finish_reason=${rawFinishReason ?? rawErrorFinishReason}`,
+      retryable: true,
+    });
   }
-
+  const resolvedReason = toolState.size > 0 && (reason === undefined || reason === "stop")
+    ? "tool-use"
+    : (reason ?? "stop");
   if (
-    raw.reasoning === true
-    || raw.thinking === true
-    || raw.supports_reasoning === true
-    || capabilities?.reasoning === true
-    || capReasoning?.enabled === true
-    || capabilities?.thinking === true
-    || Boolean(discoveredLevels?.some((lvl) => lvl !== "off" && lvl !== "none"))
-    || (supportedParams !== undefined && supportedParams.some((p) => p === "reasoning" || p === "include_reasoning" || p === "reasoning_effort"))
+    !emittedContent
+    && toolState.size === 0
+    && resolvedReason === "stop"
+    && (reportedOutputTokens === undefined || reportedOutputTokens === 0)
   ) {
-    info.reasoning = true;
+    throw new LlmError({
+      kind: "server",
+      message: `${providerId} returned an empty response stream (0 output tokens)`,
+      retryable: true,
+    });
   }
-
-  const rawEffort = typeof raw.thinking_level === "string"
-    ? raw.thinking_level.trim().toLowerCase()
-    : typeof raw.reasoning_effort === "string"
-      ? raw.reasoning_effort.trim().toLowerCase()
-      : typeof raw.default_reasoning_effort === "string"
-        ? raw.default_reasoning_effort.trim().toLowerCase()
-        : "";
-  if (rawEffort !== "" && /^[a-z0-9._:-]{1,64}$/.test(rawEffort)) {
-    info.thinkingLevel = rawEffort;
-    if (rawEffort !== "off" && rawEffort !== "none") info.reasoning = true;
-  }
-
-  const arch = typeof raw.architecture === "object" && raw.architecture !== null ? (raw.architecture as Record<string, unknown>) : undefined;
-  const inputModalities = Array.isArray(arch?.input_modalities) ? arch.input_modalities : undefined;
-  const modality = typeof arch?.modality === "string" ? arch.modality : "";
-  if (
-    raw.vision === true
-    || raw.supports_vision === true
-    || raw.multimodal === true
-    || capabilities?.vision === true
-    || (inputModalities !== undefined && inputModalities.includes("image"))
-    || modality.includes("image")
-  ) {
-    info.input = ["text", "image"];
-  }
-
-  const pricing = typeof raw.pricing === "object" && raw.pricing !== null ? (raw.pricing as Record<string, unknown>) : undefined;
-  if (pricing !== undefined) {
-    const inputPrice = parsePerMillionPrice(pricing.prompt);
-    const outputPrice = parsePerMillionPrice(pricing.completion);
-    if (inputPrice !== undefined && outputPrice !== undefined && (inputPrice > 0 || outputPrice > 0)) {
-      info.cost = { input: inputPrice, output: outputPrice };
-    }
-  }
-
-  return [info];
+  yield { type: "finish", reason: resolvedReason };
 }
 
 export class OpenAiCompatAdapter implements LlmAdapter {
   private readonly unsupportedReasoningModels = new Set<string>();
+  private readonly unsupportedReasoningContentModels = new Set<string>();
 
   constructor(private readonly ctx: Context, private readonly provider: ProviderConfig) {}
 
@@ -382,7 +354,12 @@ export class OpenAiCompatAdapter implements LlmAdapter {
 
   async *stream(request: LlmRequest, signal: AbortSignal): AsyncGenerator<StreamChunk> {
     const headers = await this.headers(request);
-    const body = buildRequestBody(request, this.provider, this.unsupportedReasoningModels);
+    const body = buildRequestBody(
+      request,
+      this.provider,
+      this.unsupportedReasoningModels,
+      this.unsupportedReasoningContentModels,
+    );
     try {
       const events = postSse(
         joinUrl(this.provider.baseUrl, "chat/completions"),
@@ -393,34 +370,17 @@ export class OpenAiCompatAdapter implements LlmAdapter {
       );
       yield* translateStream(events, this.provider.id);
     } catch (error) {
-      if (
-        "reasoning_effort" in body
-        && error instanceof LlmError
-        && error.status === 400
-        && !signal.aborted
-      ) {
-        const sentEffort = String(body.reasoning_effort ?? "");
-        const clamped = clampFallbackEffort(sentEffort);
-        if (
-          clamped !== undefined
-          && /(?:invalid.*value|supported values|must be one of|not one of|enum|reasoning_effort)/i.test(error.message)
-          && !/(?:unrecognized request argument|unknown (?:parameter|field)|extra_forbidden)/i.test(error.message)
-        ) {
-          const clampedBody = { ...body, reasoning_effort: clamped };
-          const retryEvents = postSse(
-            joinUrl(this.provider.baseUrl, "chat/completions"),
-            headers,
-            clampedBody,
-            signal,
-            this.provider.id,
+      if (error instanceof LlmError && error.status === 400 && !signal.aborted) {
+        const hasReasoningContent = Array.isArray(body.messages)
+          && body.messages.some((msg) => typeof msg === "object" && msg !== null && "reasoning_content" in msg);
+        if (hasReasoningContent && /reasoning_content/i.test(error.message)) {
+          this.unsupportedReasoningContentModels.add(request.model);
+          const fallbackBody = buildRequestBody(
+            request,
+            this.provider,
+            this.unsupportedReasoningModels,
+            this.unsupportedReasoningContentModels,
           );
-          yield* translateStream(retryEvents, this.provider.id);
-          return;
-        }
-        // If an OpenAI-compat proxy rejects auto-inferred `reasoning_effort`, remember and retry once cleanly without it.
-        if (this.provider.reasoningEffort === undefined && /reasoning_effort/i.test(error.message)) {
-          this.unsupportedReasoningModels.add(request.model);
-          const fallbackBody = buildRequestBody(request, this.provider, this.unsupportedReasoningModels);
           const retryEvents = postSse(
             joinUrl(this.provider.baseUrl, "chat/completions"),
             headers,
@@ -430,6 +390,45 @@ export class OpenAiCompatAdapter implements LlmAdapter {
           );
           yield* translateStream(retryEvents, this.provider.id);
           return;
+        }
+        if ("reasoning_effort" in body) {
+          const sentEffort = String(body.reasoning_effort ?? "");
+          const clamped = clampFallbackEffort(sentEffort);
+          if (
+            clamped !== undefined
+            && /(?:invalid.*value|supported values|must be one of|not one of|enum|reasoning_effort)/i.test(error.message)
+            && !/(?:unrecognized request argument|unknown (?:parameter|field)|extra_forbidden)/i.test(error.message)
+          ) {
+            const clampedBody = { ...body, reasoning_effort: clamped };
+            const retryEvents = postSse(
+              joinUrl(this.provider.baseUrl, "chat/completions"),
+              headers,
+              clampedBody,
+              signal,
+              this.provider.id,
+            );
+            yield* translateStream(retryEvents, this.provider.id);
+            return;
+          }
+          // If an OpenAI-compat proxy rejects auto-inferred `reasoning_effort`, remember and retry once cleanly without it.
+          if (this.provider.reasoningEffort === undefined && /reasoning_effort/i.test(error.message)) {
+            this.unsupportedReasoningModels.add(request.model);
+            const fallbackBody = buildRequestBody(
+              request,
+              this.provider,
+              this.unsupportedReasoningModels,
+              this.unsupportedReasoningContentModels,
+            );
+            const retryEvents = postSse(
+              joinUrl(this.provider.baseUrl, "chat/completions"),
+              headers,
+              fallbackBody,
+              signal,
+              this.provider.id,
+            );
+            yield* translateStream(retryEvents, this.provider.id);
+            return;
+          }
         }
       }
       throw error;

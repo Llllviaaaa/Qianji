@@ -275,3 +275,44 @@ describe("the powershell tool (ADR 0021)", () => {
     expect(decide("powershell", "Remove-Item -Recurse build", "workspace-write").action).toBe("confirm");
   });
 });
+
+describe("ADR 0022 tool permissions", () => {
+  const check = (
+    toolName: string,
+    input: Record<string, unknown>,
+    mode: "read-only" | "ask" | "workspace-write" | "full-access",
+    quickChat = false,
+  ) => evaluateToolPermission({ mode, rules: rulesFromConfig({}), workspace: "D:/repo", toolName, input, quickChat });
+
+  it("allows desktop_memory search and diagnostics in read-only mode", () => {
+    expect(check("desktop_memory", { action: "search", query: "style" }, "read-only").action).toBe("allow");
+    expect(check("desktop_memory", { action: "upsert_section", section: "Prefs", content: "a" }, "read-only").action).toBe("block");
+    expect(check("diagnostics", {}, "read-only").action).toBe("allow");
+    expect(check("diagnostics", {}, "ask").action).toBe("allow");
+    expect(check("diagnostics", {}, "workspace-write", true).action).toBe("block");
+  });
+
+  it("allows bg_process inspection in read-only and stop without extra confirm outside read-only", () => {
+    expect(check("bg_process", { action: "list" }, "read-only").action).toBe("allow");
+    expect(check("bg_process", { action: "logs", id: "bg_1" }, "read-only").action).toBe("allow");
+    expect(check("bg_process", { action: "stop", id: "bg_1" }, "read-only").action).toBe("block");
+    expect(check("bg_process", { action: "stop", id: "bg_1" }, "ask").action).toBe("allow");
+    expect(check("bg_process", { action: "list" }, "workspace-write", true).action).toBe("block");
+  });
+
+  it("describes verification shell and worktree isolation accurately on delegate_task confirms", () => {
+    const base = check("delegate_task", { permission: "workspace-write", task: "t" }, "workspace-write");
+    expect(base).toMatchObject({ action: "confirm", message: "子代理可以在当前工作区读取、编辑和写入文件，但不能使用 Shell。" });
+
+    const withShell = check("delegate_task", { permission: "workspace-write", allowShell: true, task: "t" }, "workspace-write");
+    expect(withShell).toMatchObject({ action: "confirm" });
+    if (withShell.action === "confirm") expect(withShell.message).toContain("验证 Shell");
+
+    const withBoth = check("delegate_task", { permission: "workspace-write", allowShell: true, isolateWorktree: true, task: "t" }, "ask");
+    expect(withBoth).toMatchObject({ action: "confirm" });
+    if (withBoth.action === "confirm") {
+      expect(withBoth.message).toContain("Git Worktree");
+      expect(withBoth.message).toContain("验证 Shell");
+    }
+  });
+});

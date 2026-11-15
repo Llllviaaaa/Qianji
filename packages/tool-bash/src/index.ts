@@ -15,9 +15,22 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { Service, type Context } from "@deepseek-ai/cordis";
+import "@qianji/agent";
 import { ErrorCode, type SandboxConfigKind, type SandboxGenerateConfigResult } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
+import "@qianji/session";
 import { textOutput, type ToolDefinition } from "@qianji/tools";
+import { BackgroundProcessManager, bgProcessTool, bindAsyncJobObjectDisposer } from "./background.ts";
+import {
+  DEFAULT_TIMEOUT_SECONDS,
+  MAX_BUFFER_BYTES,
+  MAX_OUTPUT_BYTES,
+  MAX_OUTPUT_LINES,
+  POST_EXIT_PIPE_DRAIN_MS,
+  POST_KILL_GRACE_MS,
+  killTree,
+  tail,
+} from "./proc.ts";
 import {
   attachWindowsJobObject,
   buildSandboxedEnv,
@@ -26,6 +39,16 @@ import {
   inspectSelfKillCommand,
 } from "./sandbox.ts";
 
+export {
+  BackgroundProcessManager,
+  bgProcessTool,
+  bindAsyncJobObjectDisposer,
+  type AsyncJobObjectBinding,
+  type BgProcessArgs,
+  type BgProcessSnapshot,
+  type BgStartOptions,
+  type BgWaitResult,
+} from "./background.ts";
 export * from "./sandbox.ts";
 
 declare module "@deepseek-ai/cordis" {
@@ -54,16 +77,6 @@ export interface Config {
   /** Force lightweight sandbox containment on every bash invocation. */
   sandbox?: boolean;
 }
-
-const DEFAULT_TIMEOUT_SECONDS = 120;
-/** Output kept in memory while a command runs; the tool then keeps the tail of it. */
-const MAX_BUFFER_BYTES = 1024 * 1024;
-const MAX_OUTPUT_LINES = 2000;
-const MAX_OUTPUT_BYTES = 50 * 1024;
-/** Grace window after the shell exits before detaching inherited background stdio pipes. */
-const POST_EXIT_PIPE_DRAIN_MS = 250;
-/** Grace window after killing a timed-out or aborted command before forcing resolution. */
-const POST_KILL_GRACE_MS = 500;
 
 function gitBashCandidates(env: NodeJS.ProcessEnv): string[] {
   const candidates: string[] = [];
@@ -148,18 +161,6 @@ export function shellArgs(shell: string, command: string): string[] {
   return ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
 }
 
-function killTree(pid: number): void {
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
-  } else {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      // Already gone.
-    }
-  }
-}
-
 export interface RunResult {
   output: string;
   exitCode: number | null;
@@ -190,35 +191,45 @@ export function runCommand(
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let closeJob: (() => void) | undefined;
-    if (options.sandbox === true && child.pid !== undefined) {
-      void attachWindowsJobObject(child.pid).then((disposer) => {
-        closeJob = disposer;
-      });
-    }
+    let timedOut = false;
+    let aborted = false;
+    let settled = false;
+    let stopped = false;
+    let recordedExitCode: number | null = null;
+    let exitDrainTimer: ReturnType<typeof setTimeout> | undefined;
+    let killGraceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const childPid = child.pid;
+    const jobBinding = options.sandbox === true && childPid !== undefined
+      ? bindAsyncJobObjectDisposer(attachWindowsJobObject(childPid), {
+          isDisposed: () => settled || stopped,
+          isStopped: () => stopped,
+          onStoppedResolve: () => killTree(childPid),
+        })
+      : undefined;
+    const disposeJob = () => {
+      jobBinding?.dispose({ stopped });
+    };
+
     const chunks: Buffer[] = [];
     let buffered = 0;
     const collect = (chunk: Buffer) => {
       chunks.push(chunk);
       buffered += chunk.length;
-      while (buffered > MAX_BUFFER_BYTES && chunks.length > 1) buffered -= (chunks.shift() as Buffer).length;
+      while (buffered > MAX_BUFFER_BYTES && chunks.length > 1) {
+        const dropped = chunks.shift();
+        if (dropped !== undefined) buffered -= dropped.length;
+      }
     };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
-
-    let timedOut = false;
-    let aborted = false;
-    let settled = false;
-    let recordedExitCode: number | null = null;
-    let exitDrainTimer: ReturnType<typeof setTimeout> | undefined;
-    let killGraceTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
       clearTimeout(timer);
       if (exitDrainTimer !== undefined) clearTimeout(exitDrainTimer);
       if (killGraceTimer !== undefined) clearTimeout(killGraceTimer);
       signal.removeEventListener("abort", onAbort);
-      closeJob?.();
+      disposeJob();
     };
 
     const finish = (exitCode: number | null) => {
@@ -231,7 +242,8 @@ export function runCommand(
     };
 
     const stop = () => {
-      closeJob?.();
+      stopped = true;
+      disposeJob();
       if (child.pid !== undefined) killTree(child.pid);
       child.stdout.destroy();
       child.stderr.destroy();
@@ -269,23 +281,21 @@ export function runCommand(
   });
 }
 
-function tail(text: string): { text: string; truncated: boolean } {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  const kept: string[] = [];
-  let bytes = 0;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index] as string;
-    bytes += Buffer.byteLength(line) + 1;
-    if (kept.length >= MAX_OUTPUT_LINES || bytes > MAX_OUTPUT_BYTES) return { text: kept.reverse().join("\n"), truncated: true };
-    kept.push(line);
-  }
-  return { text: kept.reverse().join("\n"), truncated: false };
-}
-
 function powershellLabel(shell: string | undefined): string {
   if (shell === undefined) return "PowerShell";
   return win32.basename(shell).toLowerCase().startsWith("pwsh") ? "PowerShell 7" : "Windows PowerShell 5.1";
+}
+
+export type ShellToolArgs = {
+  command: string;
+  timeout?: number;
+  background?: boolean;
+  waitMs?: number;
+};
+
+export interface ShellToolOptions {
+  manager?: BackgroundProcessManager;
+  ctx?: Context;
 }
 
 /** The shell tool for `kind`; `shellPath` is its executable when already known. */
@@ -294,11 +304,13 @@ export function shellTool(
   config: Config = {},
   isSandboxed?: () => boolean,
   shellPath?: string,
-): ToolDefinition<{ command: string; timeout?: number }> {
+  options?: ShellToolOptions,
+): ToolDefinition<ShellToolArgs> {
   const maxTimeout = config.maxTimeoutSeconds ?? 600;
   let shell = shellPath ?? config.shell;
+  let fallbackManager: BackgroundProcessManager | undefined;
   const limits = `the last ${MAX_OUTPUT_LINES} lines or ${MAX_OUTPUT_BYTES / 1024} KB`;
-  const timing = `Times out after \`timeout\` seconds (default ${DEFAULT_TIMEOUT_SECONDS}, at most ${maxTimeout}).`;
+  const timing = `Times out after \`timeout\` seconds (default ${DEFAULT_TIMEOUT_SECONDS}, at most ${maxTimeout}). Use \`background: true\` for long-running servers/watchers, then manage them via \`bg_process\`.`;
   const description = kind === "bash"
     ? `Run a bash command in the working directory and return its combined stdout and stderr (${limits}). ${timing}`
     : `Run a PowerShell command in the working directory and return its combined output (${limits}). There is no bash on this machine: write ${powershellLabel(shell)} syntax (Get-ChildItem, Select-String, $env:NAME, ; between commands). ${timing}`;
@@ -314,19 +326,60 @@ export function shellTool(
       type: "object",
       properties: {
         command: { type: "string", description: "The command line" },
-        timeout: { type: "number", description: "Timeout in seconds" },
+        timeout: { type: "number", description: "Timeout in seconds (foreground mode)" },
+        background: { type: "boolean", description: "Run detached in the background and manage via bg_process" },
+        waitMs: { type: "number", description: "Initial ms to wait for startup output when background=true (100-30000, default 1500)" },
       },
       required: ["command"],
     },
-    async execute({ command, timeout }, env) {
+    async execute({ command, timeout, background, waitMs }, env) {
       const selfKillReason = inspectSelfKillCommand(command, protectedPids);
       if (selfKillReason !== undefined) return textOutput(selfKillReason, true);
       shell ??= kind === "bash" ? findShell() : findPowerShell();
       if (shell === undefined) {
         return textOutput(kind === "bash" ? "No bash found. Install Git for Windows or set the bash tool's shell." : "No PowerShell found.", true);
       }
-      const seconds = Math.min(Math.max(1, timeout ?? DEFAULT_TIMEOUT_SECONDS), maxTimeout);
       const sandbox = config.sandbox === true || isSandboxed?.() === true;
+
+      if (background === true) {
+        const bgManager = options?.manager ?? (fallbackManager ??= new BackgroundProcessManager());
+        const initialWaitMs = Math.min(Math.max(100, Math.floor(waitMs ?? 1_500)), 30_000);
+        let started;
+        try {
+          started = bgManager.start({
+            sessionId: env.sessionId,
+            shellPath: shell,
+            shellArgs: shellArgs(shell, command),
+            command,
+            cwd: env.cwd,
+            sandbox,
+          });
+        } catch (error) {
+          return textOutput(error instanceof Error ? error.message : String(error), true);
+        }
+        const settled = await bgManager.wait(env.sessionId, started.id, initialWaitMs, env.signal, { tailLines: 200 });
+        if (env.signal.aborted) {
+          await bgManager.stop(env.sessionId, started.id);
+          return textOutput("[Aborted; background process was stopped.]", true);
+        }
+        options?.ctx?.get("tools")?.activate(env.sessionId, ["bg_process"]);
+        const snap = settled?.snapshot ?? started;
+        const pidPart = snap.pid === undefined ? "" : ` pid=${snap.pid}`;
+        const exitPart = snap.status === "exited" ? ` exitCode=${snap.exitCode ?? snap.signal ?? "unknown"}` : "";
+        const header = `[Background process ${snap.id}] status=${snap.status}${pidPart}${exitPart}`;
+        const hint = snap.status === "running"
+          ? "Use `bg_process` (`logs`, `wait`, `stop`, `list`) to inspect or stop this process."
+          : "Process exited during initial wait window.";
+        const preview = settled?.output ?? "";
+        const body = [header, hint, preview === "" ? "(no output yet)" : preview].join("\n");
+        return {
+          content: [{ type: "text", text: body }],
+          isError: snap.status === "exited" && snap.exitCode !== 0,
+          details: { id: snap.id, pid: snap.pid, status: snap.status, exitCode: snap.exitCode },
+        };
+      }
+
+      const seconds = Math.min(Math.max(1, timeout ?? DEFAULT_TIMEOUT_SECONDS), maxTimeout);
       const result = await runCommand(shell, command, env.cwd, seconds * 1000, env.signal, { sandbox });
       const { text, truncated } = tail(result.output);
       const notes: string[] = [];
@@ -344,21 +397,34 @@ export function shellTool(
   };
 }
 
-export function bashTool(config: Config = {}, isSandboxed?: () => boolean): ToolDefinition<{ command: string; timeout?: number }> {
-  return shellTool("bash", config, isSandboxed);
+export function bashTool(config: Config = {}, isSandboxed?: () => boolean, options?: ShellToolOptions): ToolDefinition<ShellToolArgs> {
+  return shellTool("bash", config, isSandboxed, undefined, options);
 }
 
-export function powershellTool(config: Config = {}, isSandboxed?: () => boolean, shellPath?: string): ToolDefinition<{ command: string; timeout?: number }> {
-  return shellTool("powershell", config, isSandboxed, shellPath);
+export function powershellTool(
+  config: Config = {},
+  isSandboxed?: () => boolean,
+  shellPath?: string,
+  options?: ShellToolOptions,
+): ToolDefinition<ShellToolArgs> {
+  return shellTool("powershell", config, isSandboxed, shellPath, options);
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
   // Decided once per load: a machine that gains Git Bash gets the bash tool on the next reload.
   const chosen = chooseShell(config);
+  const manager = new BackgroundProcessManager();
   ctx.effect(
-    () => ctx.tools.register(shellTool(chosen.kind, config, () => ctx.get("bashSandbox")?.enabled === true, chosen.path)),
+    () => ctx.tools.register(shellTool(chosen.kind, config, () => ctx.get("bashSandbox")?.enabled === true, chosen.path, { manager, ctx })),
     `${name}: ${chosen.kind}`,
   );
+  ctx.effect(() => ctx.tools.register(bgProcessTool(manager)), `${name}: bg_process`);
+  ctx.on("session/deleted", (sessionId) => manager.stopSession(sessionId));
+  ctx.on("session/unloaded", (sessionId) => manager.stopSession(sessionId));
+  ctx.on("agent/settled", async (session) => {
+    if (session.header.parent !== undefined) manager.stopSession(session.id);
+  });
+  ctx.effect(() => () => manager.stopAll(), `${name}: bg-cleanup`);
 
   ctx.inject(["rpc"], (rpcCtx) => {
     rpcCtx.effect(

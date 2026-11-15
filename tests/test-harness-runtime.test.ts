@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentLoop } from "@qianji/agent-loop";
 import * as checkpoints from "@qianji/checkpoints";
 import { LlmService } from "@qianji/llm";
@@ -24,12 +24,15 @@ import * as uiRpc from "../packages/host/src/ui-rpc";
 import { Mcp } from "@qianji/mcp";
 import { Schedule } from "@qianji/schedule";
 import { runFromHost, taskFromHost, taskToHost } from "../src/lib/scheduleClient";
-import type { ScheduledRunInfo } from "@qianji/protocol";
+import type { ScheduledRunInfo, SessionSubscribeResult } from "@qianji/protocol";
+import { agent } from "../src/lib/agent";
 import { connectHarness, type HarnessConnection } from "../src/lib/harnessClient";
-import { HarnessRuntimes, type HostStatus } from "../src/lib/harnessRuntime";
+import { HarnessRuntimes, harnessRuntimes, type HostStatus } from "../src/lib/harnessRuntime";
 import { sessionInfoFromHost } from "../src/lib/hostSessions";
-import { historyToUi, type TranscriptEvent } from "../src/lib/transcript";
-import type { ExtensionUIRequest } from "../src/types";
+import { historyToUi, resetStreamingAssistant, startAssistant, streamAssistant, type TranscriptEvent } from "../src/lib/transcript";
+import { StoreContext } from "../src/store/context";
+import type { AppState } from "../src/store/types";
+import type { ExtensionUIRequest, UiMessage } from "../src/types";
 
 const token = Buffer.alloc(32, 3).toString("base64url");
 let host: Host | undefined;
@@ -39,6 +42,8 @@ let dir = "";
 let logs = "";
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   runtimesInUse?.close();
   runtimesInUse = undefined;
   await host?.stop();
@@ -392,5 +397,309 @@ describe("crash recovery", () => {
     // Reopened, the session shows the turn as failed rather than still going.
     const last = (await runtimes.messages(runtimeId)).at(-1);
     expect(last).toMatchObject({ role: "assistant", isError: true });
+  });
+});
+
+describe("mid-stream snapshot replay, liveSeq dedup, and syncSession ordering", () => {
+  it("deduplicates session/delta by liveSeq and resets watermark on newSession", async () => {
+    let notify: ((method: string, params: unknown) => void) | undefined;
+    let subscribeSeq = 5;
+    let nextSession = 1;
+    const runtimes = new HarnessRuntimes(async () => ({
+      host: { protocolVersion: "1", host: { name: "mock", version: "1" }, capabilities: { methods: [] } },
+      call: async <T>(method: string): Promise<T> => {
+        if (method === "session.create") {
+          nextSession += 1;
+          return { session: { id: `s-${nextSession}`, cwd: "D:/repo" } } as T;
+        }
+        if (method === "session.subscribe") {
+          return {
+            events: [{ seq: 1, ts: "2026-10-29T00:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "hi" }] } }],
+            status: { running: true, streaming: [], runningTools: [], queue: { steer: 0, followUp: 0 } },
+            liveSeq: subscribeSeq,
+          } satisfies SessionSubscribeResult as T;
+        }
+        return {} as T;
+      },
+      onNotification: (fn) => {
+        notify = fn;
+        return () => undefined;
+      },
+      onClose: () => undefined,
+      close: () => undefined,
+    }));
+    runtimesInUse = runtimes;
+
+    const deltas: string[] = [];
+    runtimes.subscribe((_id, event) => {
+      if (event.type === "assistant-delta") deltas.push(event.text);
+    });
+
+    const { runtimeId } = await runtimes.start("D:/repo", "harness:s-1");
+    notify?.("session/delta", { sessionId: "s-1", liveSeq: 4, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "old-4" } } });
+    notify?.("session/delta", { sessionId: "s-1", liveSeq: 5, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "old-5" } } });
+    notify?.("session/delta", { sessionId: "s-1", liveSeq: 6, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "live-6" } } });
+    notify?.("session/delta", { sessionId: "s-1", liveSeq: 6, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "dup-6" } } });
+    expect(deltas).toEqual(["live-6"]);
+
+    // Starting a new session resets lastLiveSeq so a new session starting at liveSeq=1 is not dropped.
+    runtimes.newSession(runtimeId);
+    subscribeSeq = 0;
+    await runtimes.prompt(runtimeId, { message: "next", images: [] });
+    notify?.("session/delta", { sessionId: "s-2", liveSeq: 1, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "fresh-1" } } });
+    expect(deltas).toEqual(["live-6", "fresh-1"]);
+  });
+
+  it("continues seamlessly from mid-stream messages() snapshot to live session/delta chunks", async () => {
+    let notify: ((method: string, params: unknown) => void) | undefined;
+    let subscribeCalls = 0;
+    const runtimes = new HarnessRuntimes(async () => ({
+      host: { protocolVersion: "1", host: { name: "mock", version: "1" }, capabilities: { methods: [] } },
+      call: async <T>(method: string): Promise<T> => {
+        if (method === "session.subscribe") {
+          subscribeCalls += 1;
+          const liveSeq = subscribeCalls === 1 ? 8 : 10;
+          return {
+            events: [
+              { seq: 1, ts: "2026-10-29T00:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "edit" }] } },
+            ],
+            status: {
+              running: true,
+              runningTools: [],
+              queue: { steer: 2, followUp: 1 },
+              streaming: [
+                { type: "text-delta", index: 0, text: "Hello " },
+                { type: "tool-call-start", index: 1, id: "tc-1", name: "write" },
+                { type: "tool-call-delta", index: 1, argumentsDelta: '{"path":"a.ts","con' },
+              ],
+            },
+            liveSeq,
+          } satisfies SessionSubscribeResult as T;
+        }
+        return {} as T;
+      },
+      onNotification: (fn) => {
+        notify = fn;
+        return () => undefined;
+      },
+      onClose: () => undefined,
+      close: () => undefined,
+    }));
+    runtimesInUse = runtimes;
+
+    const emitted: TranscriptEvent[] = [];
+    runtimes.subscribe((_id, event) => emitted.push(event));
+    const { runtimeId } = await runtimes.start("D:/repo", "harness:s-mid");
+    let uiMessages = await runtimes.messages(runtimeId);
+
+    expect(uiMessages[1]).toMatchObject({
+      role: "assistant",
+      isStreaming: true,
+      content: "Hello ",
+      toolCalls: [{ id: "tc-1", name: "write", args: { path: "a.ts" }, running: true }],
+    });
+    expect(emitted).toContainEqual({ type: "queue", steering: 2, followUp: 1 });
+    expect(runtimes.streamingRuntimeIds()).toContain(runtimeId);
+
+    emitted.length = 0;
+    // Duplicate liveSeq <= 10 is ignored; 11..13 append seamlessly onto the replayed message & translator.
+    notify?.("session/delta", { sessionId: "s-mid", liveSeq: 10, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "Hello " } } });
+    notify?.("session/delta", { sessionId: "s-mid", liveSeq: 11, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "world" } } });
+    notify?.("session/delta", { sessionId: "s-mid", liveSeq: 12, delta: { type: "llm-chunk", chunk: { type: "tool-call-delta", index: 1, argumentsDelta: 'tent":"ok"}' } } });
+    notify?.("session/delta", { sessionId: "s-mid", liveSeq: 13, delta: { type: "llm-chunk", chunk: { type: "finish", reason: "tool-use" } } });
+
+    for (const event of emitted) {
+      if (event.type === "assistant-delta") uiMessages = streamAssistant(uiMessages, { text: event.text, thinking: event.thinking });
+      if (event.type === "assistant-tool-calls") uiMessages = streamAssistant(uiMessages, { toolCalls: event.calls });
+    }
+    expect(uiMessages[1]).toMatchObject({
+      content: "Hello world",
+      toolCalls: [{ id: "tc-1", name: "write", args: { path: "a.ts", content: "ok" }, running: true }],
+    });
+  });
+
+  it("replays active stream on resume() without duplicating already-streamed text", async () => {
+    let notify: ((method: string, params: unknown) => void) | undefined;
+    let onClose: (() => void) | undefined;
+    let connCount = 0;
+    const runtimes = new HarnessRuntimes(async () => {
+      connCount += 1;
+      const attempt = connCount;
+      return {
+        host: { protocolVersion: "1", host: { name: "mock", version: "1" }, capabilities: { methods: [] } },
+        call: async <T>(method: string): Promise<T> => {
+          if (method === "session.subscribe") {
+            if (attempt === 1) {
+              return {
+                events: [{ seq: 1, ts: "2026-10-29T00:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "go" }] } }],
+                status: { running: false, streaming: [], runningTools: [], queue: { steer: 0, followUp: 0 } },
+                liveSeq: 0,
+              } satisfies SessionSubscribeResult as T;
+            }
+            return {
+              events: [],
+              status: {
+                running: true,
+                streaming: [
+                  { type: "text-delta", index: 0, text: "Par" },
+                  { type: "text-delta", index: 0, text: "tial" },
+                ],
+                runningTools: [],
+                queue: { steer: 0, followUp: 1 },
+              },
+              liveSeq: 5,
+            } satisfies SessionSubscribeResult as T;
+          }
+          return {} as T;
+        },
+        onNotification: (fn) => {
+          notify = fn;
+          return () => undefined;
+        },
+        onClose: (fn) => {
+          onClose = fn;
+        },
+        close: () => undefined,
+      };
+    }, [10]);
+    runtimesInUse = runtimes;
+
+    let uiMessages: UiMessage[] = [];
+    const queues: Array<{ steering: number; followUp: number }> = [];
+    runtimes.subscribe((_id, event) => {
+      if (event.type === "assistant-start") uiMessages = startAssistant(uiMessages);
+      else if (event.type === "retry-status") uiMessages = resetStreamingAssistant(uiMessages);
+      else if (event.type === "assistant-delta") uiMessages = streamAssistant(uiMessages, { text: event.text, thinking: event.thinking });
+      else if (event.type === "assistant-tool-calls") uiMessages = streamAssistant(uiMessages, { toolCalls: event.calls });
+      else if (event.type === "queue") queues.push({ steering: event.steering, followUp: event.followUp });
+    });
+
+    await runtimes.start("D:/repo", "harness:s-res");
+    notify?.("session/delta", { sessionId: "s-res", liveSeq: 1, delta: { type: "agent-start" } });
+    notify?.("session/delta", { sessionId: "s-res", liveSeq: 2, delta: { type: "llm-start" } });
+    notify?.("session/delta", { sessionId: "s-res", liveSeq: 3, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "Par" } } });
+    expect(uiMessages.at(-1)?.content).toBe("Par");
+
+    onClose?.();
+    await eventually(() => connCount >= 2 && queues.length > 0);
+    expect(uiMessages.at(-1)?.content).toBe("Partial");
+    expect(queues.at(-1)).toEqual({ steering: 0, followUp: 1 });
+
+    // Stale liveSeq 5 is dropped, liveSeq 6 appends smoothly.
+    notify?.("session/delta", { sessionId: "s-res", liveSeq: 5, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "dup" } } });
+    notify?.("session/delta", { sessionId: "s-res", liveSeq: 6, delta: { type: "llm-chunk", chunk: { type: "text-delta", index: 0, text: "!" } } });
+    expect(uiMessages.at(-1)?.content).toBe("Partial!");
+  });
+
+  it("replays mid-stream against a real Host and joins live deltas without dropping or duplicating text", async () => {
+    const slowReply = [
+      { type: "text-delta" as const, index: 0, text: "Alpha " },
+      { type: "text-delta" as const, index: 0, text: "Beta" },
+      { type: "finish" as const, reason: "stop" as const },
+    ];
+    const provider = new ScriptedProvider([slowReply], { chunkDelayMs: 120 });
+    const { runtimes, until } = await start(provider);
+    const first = await runtimes.start(dir);
+    await runtimes.prompt(first.runtimeId, { message: "stream", images: [] });
+    await until((event) => event.type === "assistant-delta");
+
+    const sessionFile = String((await runtimes.state(first.runtimeId)).sessionFile);
+    const second = await runtimes.start(dir, sessionFile);
+    const secondDeltas: string[] = [];
+    let secondDone = false;
+    runtimes.subscribe((id, event) => {
+      if (id !== second.runtimeId) return;
+      if (event.type === "assistant-delta") secondDeltas.push(event.text);
+      if (event.type === "turn-end") secondDone = true;
+    });
+
+    let replayed = await runtimes.messages(second.runtimeId);
+    await eventually(() => secondDone);
+    for (const text of secondDeltas) {
+      replayed = streamAssistant(replayed, { text });
+    }
+    expect(replayed.find((m) => m.role === "assistant")?.content).toBe("Alpha Beta");
+  });
+
+  it("syncSession fetches messages after bindSession and clears stale pre-snapshot pending deltas", async () => {
+    vi.stubGlobal("window", globalThis);
+    const callOrder: string[] = [];
+    let releaseBind: (() => void) | undefined;
+    const bindGate = new Promise<void>((resolve) => {
+      releaseBind = resolve;
+    });
+
+    let state: Partial<AppState> = {
+      runtimeId: "harness:r1",
+      cwd: "D:/repo",
+      sessionFile: "harness:s1",
+      sessionId: "s1",
+      model: { id: "m", name: "M", provider: "p" },
+      thinkingLevel: "medium",
+      settings: null,
+      messages: [],
+      runtimes: {
+        "harness:r1": {
+          runtimeId: "harness:r1",
+          cwd: "D:/repo",
+          sessionFile: "harness:s1",
+          isStreaming: true,
+          status: "running",
+          extensionRequest: null,
+          updatedAt: 0,
+        },
+      },
+      appendLog: () => undefined,
+    };
+
+    const setState = (updater: Partial<AppState> | ((prev: AppState) => Partial<AppState>)) => {
+      const patch = typeof updater === "function" ? updater(state as AppState) : updater;
+      state = { ...state, ...patch };
+    };
+    const getState = () => state as AppState;
+    const ctx = new StoreContext(setState as never, getState as never);
+
+    vi.spyOn(harnessRuntimes, "state").mockImplementation(async () => {
+      callOrder.push("state");
+      return { sessionFile: "harness:s1", sessionId: "s1", isStreaming: true, isCompacting: false };
+    });
+    vi.spyOn(harnessRuntimes, "models").mockResolvedValue([]);
+    vi.spyOn(harnessRuntimes, "commands").mockResolvedValue([]);
+    vi.spyOn(harnessRuntimes, "stats").mockResolvedValue({
+      userMessages: 0,
+      assistantMessages: 0,
+      toolCalls: 0,
+      toolResults: 0,
+      totalMessages: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: 0,
+    });
+    vi.spyOn(agent, "bindSession").mockImplementation(async () => {
+      callOrder.push("bindSession:start");
+      await bindGate;
+      callOrder.push("bindSession:end");
+    });
+    vi.spyOn(harnessRuntimes, "messages").mockImplementation(async () => {
+      callOrder.push("messages");
+      return [{ id: "snap-1", role: "assistant", content: "Snapshot", isStreaming: true, timestamp: 1 }];
+    });
+
+    const syncing = ctx.syncSession(ctx.connectionVersion, false);
+    await eventually(() => callOrder.includes("bindSession:start"));
+    expect(callOrder).not.toContain("messages");
+
+    // Pre-snapshot delta queued before messages() finishes must NOT clobber restoredMessages after timer fires.
+    ctx.queueAssistantDelta("harness:r1", { text: "STALE " });
+    releaseBind?.();
+    await syncing;
+    expect(callOrder.indexOf("bindSession:end")).toBeLessThan(callOrder.indexOf("messages"));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(state.messages).toEqual([{ id: "snap-1", role: "assistant", content: "Snapshot", isStreaming: true, timestamp: 1 }]);
+
+    // Subsequent live deltas append cleanly after snapshot commit.
+    ctx.queueAssistantDelta("harness:r1", { text: " + live" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(state.messages?.[0]?.content).toBe("Snapshot + live");
   });
 });

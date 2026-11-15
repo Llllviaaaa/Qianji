@@ -20,11 +20,13 @@ import {
   type RunOutcome,
 } from "@qianji/agent";
 import { BlockAssembler, type LlmRequest, type Message, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
-import { compactionPoint, deriveState, type EventOf, type ModelRef, type Session } from "@qianji/session";
+import { CONTINUATION_NAMESPACE, compactionPoint, deriveState, slidingCompactionPoint, type EventOf, type ModelRef, type Session } from "@qianji/session";
 import "@qianji/system-prompt";
-import "@qianji/tools";
+import { ACTIVATE_TOOLS_NAME, textOutput, type ToolOutput } from "@qianji/tools";
+import { buildCompactionWorkingSetAddendum } from "./rehydrate.ts";
 import { SUMMARY_CLIP_LEVELS, shrinkForSummary } from "./summary-input.ts";
 
+export { buildCompactionWorkingSetAddendum } from "./rehydrate.ts";
 export { SUMMARY_CLIP_LEVELS, shrinkForSummary } from "./summary-input.ts";
 
 export interface AgentLoopConfig {
@@ -45,17 +47,27 @@ export interface AgentLoopConfig {
   compactAtContextRatio?: number;
   /** Output budget of the compaction summary call. */
   summaryMaxTokens?: number;
+  /** Approximate recent tokens kept verbatim during mid-run proactive compaction (`turn >= 2`). Default `12_000`. */
+  keepRecentTokens?: number;
 }
 
 export const COMPACTION_SYSTEM = `You summarize a conversation between a user and a coding agent so the agent can continue the work with only your summary as context.`;
 
-export const COMPACTION_REQUEST = `Summarize the conversation above for the agent that will continue it. Include:
-- the user's goals and requests, including the current one, in their own words where it matters;
-- decisions made and constraints given;
-- files read or changed and what was learned about them;
-- commands run and their important results;
-- what is done, what is in progress and what remains.
+export const COMPACTION_REQUEST = `Summarize the conversation above so the agent can seamlessly continue the active task. Structure your summary clearly:
+- Current user request: state the active goal, constraints, exact file paths/symbols, and acceptance criteria;
+- Completed work: files read or modified, verified findings, commands run and their key outputs;
+- Remaining work & next action: what steps remain and the exact next concrete action to execute.
 Be specific (paths, names, values) and concise. Reply with the summary only.`;
+
+export const LENGTH_CONTINUATION_PROMPT =
+  "Your previous response hit the output token limit and was cut off mid-generation. Continue directly from where you stopped; if you were about to call a tool, invoke it now.";
+
+export const EMPTY_TURN_CONTINUATION_PROMPT =
+  "Your previous turn produced no visible response or tool call. Either invoke the next tool needed to advance the task, or provide a clear answer to the user.";
+
+export const MAX_LENGTH_CONTINUATIONS = 3;
+export const MAX_EMPTY_CONTINUATIONS = 2;
+export const MAX_PLUGIN_CONTINUATIONS = 2;
 
 interface Run {
   controller: AbortController;
@@ -68,6 +80,7 @@ interface Run {
 
 const IDLE_QUEUE = { steer: 0, followUp: 0 };
 const DEFAULT_COMPACT_RATIO = 0.8;
+const DEFAULT_KEEP_RECENT_TOKENS = 12_000;
 /** A context this small is never worth summarizing, so its model's window is not even looked up. */
 const MIN_COMPACT_TOKENS = 8_192;
 /** How long a model's context window is remembered, and how long its lookup may take. */
@@ -128,7 +141,7 @@ export class AgentLoop extends Service implements Agents {
 
   async compact(session: Session, signal?: AbortSignal): Promise<EventOf<"compaction"> | undefined> {
     if (this.runs.has(session.id)) throw new AgentBusyError(session.id);
-    return this.summarize(session, signal ?? new AbortController().signal, true);
+    return this.summarize(session, signal ?? new AbortController().signal, "keepLatestTurn");
   }
 
   status(sessionId: string): AgentStatus {
@@ -191,6 +204,9 @@ export class AgentLoop extends Service implements Agents {
     const { signal } = run.controller;
     await this.ctx.serial("agent/before-start", session);
     let compactedForLength = false;
+    let lengthContinuations = 0;
+    let emptyContinuations = 0;
+    let pluginContinuations = 0;
 
     for (let turn = 1; ; turn += 1) {
       if (signal.aborted) return "aborted";
@@ -211,11 +227,12 @@ export class AgentLoop extends Service implements Agents {
         && response.message.content.length === 0 && !compactedForLength) {
         // Nothing was said yet: shrink the context and try the same turn again.
         compactedForLength = true;
-        if (await this.summarize(session, signal) !== undefined) {
+        if (await this.summarize(session, signal, "full") !== undefined) {
           turn -= 1;
           continue;
         }
       }
+      if (response.reason !== "error") compactedForLength = false;
 
       session.append("assistant", {
         content: response.message.content,
@@ -242,9 +259,33 @@ export class AgentLoop extends Service implements Agents {
       await this.ctx.serial("agent/turn-end", session, turn);
       if (signal.aborted) return "aborted";
 
-      if (this.deliver(session, run, run.steer)) continue;
-      if (calls.length > 0) continue;
-      if (this.deliver(session, run, run.followUp)) continue;
+      if (this.deliver(session, run, run.steer) || calls.length > 0 || this.deliver(session, run, run.followUp)) {
+        lengthContinuations = 0;
+        emptyContinuations = 0;
+        pluginContinuations = 0;
+        continue;
+      }
+
+      const hasText = response.message.content.some((block) => block.type === "text" && block.text.trim() !== "");
+      if (response.reason === "length" && lengthContinuations < MAX_LENGTH_CONTINUATIONS) {
+        lengthContinuations += 1;
+        session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "length", text: LENGTH_CONTINUATION_PROMPT } });
+        continue;
+      }
+      if (!hasText && emptyContinuations < MAX_EMPTY_CONTINUATIONS) {
+        emptyContinuations += 1;
+        session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "empty", text: EMPTY_TURN_CONTINUATION_PROMPT } });
+        continue;
+      }
+      if (pluginContinuations < MAX_PLUGIN_CONTINUATIONS) {
+        const nudge = await this.ctx.serial("agent/before-stop", session, { turn, stop: response.reason, hasText });
+        if (signal.aborted) return "aborted";
+        if (typeof nudge === "string" && nudge.trim() !== "") {
+          pluginContinuations += 1;
+          session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "before-stop", text: nudge.trim() } });
+          continue;
+        }
+      }
       return "done";
     }
   }
@@ -283,21 +324,58 @@ export class AgentLoop extends Service implements Agents {
     return assembler.result();
   }
 
+  private isConcurrencySafeTool(name: string): boolean {
+    return name === ACTIVATE_TOOLS_NAME || this.ctx.tools.get(name)?.readOnly === true;
+  }
+
   private async runTools(session: Session, run: Run, calls: ToolCallBlock[], signal: AbortSignal): Promise<void> {
     const env = { sessionId: session.id, cwd: session.header.cwd, signal };
-    const pending = calls.map((call) => {
+    for (const call of calls) {
       session.append("tool-call", { callId: call.id, name: call.name, args: call.arguments });
-      run.runningTools.set(call.id, call.name);
-      this.delta(session, { type: "tool-start", callId: call.id, name: call.name });
-      return this.ctx.tools.execute({ id: call.id, name: call.name, args: { ...call.arguments } }, env);
-    });
-    // Parallel execution, results appended in call order for a deterministic log.
+    }
+
+    type IndexedCall = { call: ToolCallBlock; index: number };
+    const batches: IndexedCall[][] = [];
+    let currentConcurrent: IndexedCall[] | undefined;
     for (const [index, call] of calls.entries()) {
-      const output = await pending[index];
-      if (output === undefined) continue;
-      session.append("tool-result", { callId: call.id, name: call.name, content: output.content, isError: output.isError === true });
-      run.runningTools.delete(call.id);
-      this.delta(session, { type: "tool-end", callId: call.id, isError: output.isError === true });
+      const item: IndexedCall = { call, index };
+      if (this.isConcurrencySafeTool(call.name)) {
+        if (currentConcurrent === undefined) {
+          currentConcurrent = [item];
+          batches.push(currentConcurrent);
+        } else {
+          currentConcurrent.push(item);
+        }
+      } else {
+        currentConcurrent = undefined;
+        batches.push([item]);
+      }
+    }
+
+    const outputs: Array<ToolOutput | undefined> = new Array(calls.length);
+    try {
+      for (const batch of batches) {
+        await Promise.all(batch.map(async ({ call, index }) => {
+          run.runningTools.set(call.id, call.name);
+          this.delta(session, { type: "tool-start", callId: call.id, name: call.name });
+          try {
+            outputs[index] = await this.ctx.tools.execute({ id: call.id, name: call.name, args: { ...call.arguments } }, env);
+          } catch (error) {
+            const msg = signal.aborted ? "Aborted." : `${call.name} failed: ${error instanceof Error ? error.message : String(error)}`;
+            outputs[index] = textOutput(msg, true);
+          } finally {
+            run.runningTools.delete(call.id);
+          }
+        }));
+      }
+    } finally {
+      // Deterministic log order: every tool-call gets a matching tool-result even on failure/interruption.
+      for (const [index, call] of calls.entries()) {
+        const output = outputs[index] ?? textOutput(signal.aborted ? "Aborted." : "Tool execution interrupted.", true);
+        session.append("tool-result", { callId: call.id, name: call.name, content: output.content, isError: output.isError === true });
+        run.runningTools.delete(call.id);
+        this.delta(session, { type: "tool-end", callId: call.id, isError: output.isError === true });
+      }
     }
   }
 
@@ -311,7 +389,7 @@ export class AgentLoop extends Service implements Agents {
     if (explicit === undefined && used <= MIN_COMPACT_TOKENS) return;
     const limit = explicit ?? await this.contextLimit(state.model);
     if (limit === undefined || used <= limit) return;
-    await this.summarize(session, signal, keepLatestTurn);
+    await this.summarize(session, signal, keepLatestTurn ? "keepLatestTurn" : "sliding");
   }
 
   /** The token count past which `model`'s context counts as full, when its window is known. */
@@ -339,12 +417,19 @@ export class AgentLoop extends Service implements Agents {
 
   /**
    * Summarize the log and append a compaction; undefined when it failed.
-   * Mid-run the latest turn is what grew, so it is summarized too; on request
-   * the latest turn stays verbatim.
+   * Mid-run (`sliding`) keeps the recent step window verbatim while compacting
+   * earlier history; on turn 1 or manual compact (`keepLatestTurn`) the active
+   * user turn stays verbatim; emergency overflow (`full`) summarizes all history.
    */
-  private async summarize(session: Session, signal: AbortSignal, keepLatestTurn = false): Promise<EventOf<"compaction"> | undefined> {
+  private async summarize(
+    session: Session,
+    signal: AbortSignal,
+    mode: "full" | "keepLatestTurn" | "sliding" = "full",
+  ): Promise<EventOf<"compaction"> | undefined> {
     const model = session.state().model;
-    const throughSeq = compactionPoint(session.events, keepLatestTurn);
+    const throughSeq = mode === "sliding"
+      ? slidingCompactionPoint(session.events, this.config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS)
+      : compactionPoint(session.events, mode === "keepLatestTurn");
     if (model === undefined || throughSeq === undefined) return undefined;
     this.delta(session, { type: "compaction-start" });
     const head = deriveState(session.events.filter((event) => event.seq <= throughSeq));
@@ -366,12 +451,14 @@ export class AgentLoop extends Service implements Agents {
       if (response.reason !== "error" || response.error?.kind !== "context-length" || signal.aborted) break;
       response = await ask(shrinkForSummary(head.messages, level));
     }
-    const summary = response.message.content
+    const rawSummary = response.message.content
       .flatMap((block) => (block.type === "text" ? [block.text] : []))
       .join("")
       .trim();
-    const ok = response.reason !== "error" && response.reason !== "aborted" && summary !== "";
+    const ok = response.reason !== "error" && response.reason !== "aborted" && rawSummary !== "";
     if (!ok) this.ctx.logger("agent").warn("compacting %s failed: %s", session.id, response.error?.message ?? response.reason);
+    const addendum = ok ? buildCompactionWorkingSetAddendum(session.events, throughSeq) : "";
+    const summary = addendum !== "" ? `${rawSummary}\n\n${addendum}` : rawSummary;
     const event = ok ? session.append("compaction", { throughSeq, summary }) : undefined;
     this.delta(session, { type: "compaction-end", ok });
     return event;

@@ -12,6 +12,9 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { SecretStore } from "@qianji/llm";
+
+let tempSeq = 0;
 
 export interface SecretCodec {
   protect(plaintext: Buffer): Buffer;
@@ -83,7 +86,7 @@ export function writeSecretFile(file: string, value: object, codec: SecretCodec)
   const plaintext = Buffer.from(JSON.stringify(value), "utf8");
   try {
     mkdirSync(dirname(file), { recursive: true });
-    const temp = `${file}.${process.pid}.tmp`;
+    const temp = `${file}.${process.pid}.${++tempSeq}.tmp`;
     writeFileSync(temp, codec.protect(plaintext), { mode: 0o600 });
     renameSync(temp, file);
   } finally {
@@ -91,12 +94,42 @@ export function writeSecretFile(file: string, value: object, codec: SecretCodec)
   }
 }
 
+/** Read-write `{ secret: id }` store over `secrets.dat`, serialized with an internal mutex. */
+export function fileSecretStore(file: string, codec: SecretCodec): SecretStore {
+  let queue: Promise<void> = Promise.resolve();
+  const runExclusive = <T>(fn: () => Promise<T> | T): Promise<T> => {
+    const next = queue.then(fn, fn);
+    queue = next.then(() => undefined, () => undefined);
+    return next;
+  };
+
+  return {
+    async resolve(id) {
+      const value = readSecretFile<Record<string, unknown>>(file, codec)[id];
+      return typeof value === "string" && value !== "" ? value : undefined;
+    },
+    set(id, value) {
+      return runExclusive(() => {
+        const current = readSecretFile<Record<string, unknown>>(file, codec);
+        writeSecretFile(file, { ...current, [id]: value }, codec);
+      });
+    },
+    delete(id) {
+      return runExclusive(() => {
+        const current = readSecretFile<Record<string, unknown>>(file, codec);
+        if (!(id in current)) return false;
+        const next = { ...current };
+        delete next[id];
+        writeSecretFile(file, next, codec);
+        return true;
+      });
+    },
+  };
+}
+
 /** The `{ secret: id }` store over `secrets.dat`, read on each lookup so edits apply at once. */
 export function fileSecretResolver(file: string, codec: SecretCodec): (id: string) => Promise<string | undefined> {
-  return async (id) => {
-    const value = readSecretFile<Record<string, unknown>>(file, codec)[id];
-    return typeof value === "string" && value !== "" ? value : undefined;
-  };
+  return fileSecretStore(file, codec).resolve;
 }
 
 export interface McpServerSecrets {

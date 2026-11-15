@@ -1403,6 +1403,17 @@ export function apply(ctx: Context, rawConfig: SmartRewindPluginConfig = {}): vo
     },
   });
 
+  ctx.contributions.registerMenuItem({
+    id: "smart-rewind:thread-menu",
+    location: "thread.more",
+    label: "检查点时光机…",
+    order: 25,
+    when: ({ sessionFile }) => Boolean(sessionFile),
+    onSelect: () => {
+      openTimeline();
+    },
+  });
+
   ctx.contributions.registerComposerBanner({
     id: "smart-rewind:composer-banner",
     order: 10,

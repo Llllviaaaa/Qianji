@@ -18,6 +18,12 @@ export type SecretRef = { env: string } | { secret: string } | { value: string }
 
 export type SecretResolver = (id: string) => Promise<string | undefined>;
 
+export interface SecretStore {
+  resolve: SecretResolver;
+  set?(id: string, value: string): Promise<void> | void;
+  delete?(id: string): Promise<boolean> | boolean;
+}
+
 export function isSecretRef(value: unknown): value is SecretRef {
   if (typeof value !== "object" || value === null) return false;
   const keys = Object.keys(value);
@@ -26,18 +32,29 @@ export function isSecretRef(value: unknown): value is SecretRef {
   return (key === "env" || key === "secret" || key === "value") && typeof (value as Record<string, unknown>)[key] === "string";
 }
 
-/** Resolves SecretRefs for adapters; stores register themselves for `secret` refs. */
+function normalizeSecretId(id: string): string {
+  const trimmed = id.trim();
+  if (trimmed === "") throw new Error("Secret id must be non-empty");
+  return trimmed;
+}
+
+/** Resolves, stores, and deletes secrets; stores register themselves for `{ secret }` refs and plugin secrets. */
 export class Credentials extends Service {
-  private store: { resolve: SecretResolver } | undefined;
+  private store: SecretStore | undefined;
 
   constructor(ctx: Context) {
     super(ctx, "credentials");
   }
 
-  /** Install the resolver for `{ secret }` refs. Automatically cleans up with the caller's Cordis fiber. */
-  registerStore(resolver: SecretResolver): () => void {
+  /** Whether a registered store supports `set` and `delete`. */
+  get writable(): boolean {
+    return typeof this.store?.set === "function" && typeof this.store?.delete === "function";
+  }
+
+  /** Install the store or resolver for `{ secret }` refs. Automatically cleans up with the caller's Cordis fiber. */
+  registerStore(store: SecretResolver | SecretStore): () => void {
     if (this.store !== undefined) throw new Error("A secret store is already registered");
-    const entry = { resolve: resolver };
+    const entry: SecretStore = typeof store === "function" ? { resolve: store } : store;
     this.store = entry;
     let disposed = false;
     const once = (): void => {
@@ -64,6 +81,24 @@ export class Credentials extends Service {
     }
     if (this.store === undefined) throw new Error(`No secret store is available for "${ref.secret}"`);
     return this.store.resolve(ref.secret);
+  }
+
+  async get(id: string): Promise<string | undefined> {
+    const trimmed = normalizeSecretId(id);
+    return this.resolve({ secret: trimmed });
+  }
+
+  async set(id: string, value: string): Promise<void> {
+    const trimmed = normalizeSecretId(id);
+    if (value === "") throw new Error("Secret value must be non-empty");
+    if (this.store?.set === undefined) throw new Error(`No writable secret store is available for "${trimmed}"`);
+    await this.store.set(trimmed, value);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const trimmed = normalizeSecretId(id);
+    if (this.store?.delete === undefined) throw new Error(`No writable secret store is available for "${trimmed}"`);
+    return Boolean(await this.store.delete(trimmed));
   }
 
   /** How a ref is described to the UI, without the secret. */

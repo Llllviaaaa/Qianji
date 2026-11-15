@@ -186,7 +186,7 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
     {
       id: "prompt-context",
       name: "上下文与技能管理 (prompt-context)",
-      description: "注入工作区上下文文件（AGENTS.md / CLAUDE.md）、技能目录与自定义指令",
+      description: "注入工作区上下文（AGENTS.md / CLAUDE.md / .local 与 @path 引用）、路径规则（rules）、技能与 /init 指令",
       enabled: true,
       hasHost: true,
       hasClient: false,
@@ -243,7 +243,7 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
       hasHost: true,
       hasClient: false,
       plugin: plan,
-      inject: ["sessions", "tools"],
+      inject: ["sessions", "tools", "systemPrompt"],
     },
     {
       id: "intelligent-ui",
@@ -268,6 +268,7 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
         file: config.memory.file ?? join(dataDir, "memory.md"),
         userEnabled: config.memory.enabled,
         projectEnabled: config.memory.projectEnabled ?? config.memory.enabled,
+        ...(config.memory.inlineMaxChars === undefined ? {} : { inlineMaxChars: config.memory.inlineMaxChars }),
         ...(options.isWorkspaceTrusted === undefined ? {} : { isTrusted: options.isWorkspaceTrusted }),
       },
     },

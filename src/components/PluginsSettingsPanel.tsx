@@ -1,25 +1,69 @@
+import { useCallback, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { useQuery } from "@tanstack/react-query";
 import type { PluginInfo } from "@qianji/protocol";
 import { Boxes, ChevronDown, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { describeError } from "../lib/errors";
+import { queryKeys } from "../lib/queries";
+import { skillClient } from "../lib/skillClient";
+import { useAppStore } from "../store";
 import type { AppSettings } from "../types";
+import { ExtensionsModuleTabs, type ExtensionsSection } from "./plugins/ExtensionsModuleTabs";
 import { InstallPluginDialog } from "./plugins/InstallPluginDialog";
 import { PluginCard } from "./plugins/PluginCard";
 import type { PluginFilter } from "./plugins/pluginHelpers";
 import { PluginsEmptyHub } from "./plugins/PluginsEmptyHub";
 import { PluginsHeaderBar } from "./plugins/PluginsHeaderBar";
-import { SkillsSettingsSection } from "./plugins/SkillsSettingsSection";
 import { usePluginsPanelState } from "./plugins/usePluginsPanelState";
+import { McpSettingsPage } from "./settings/McpSettingsPage";
+import { DEFAULTS } from "./settings/settingsPrimitives";
+import { SkillsSettingsPage } from "./settings/SkillsSettingsPage";
 
 export interface PluginsSettingsPanelProps {
   cwd: string;
   form?: AppSettings;
   onSyncAppSetting?: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  initialSection?: ExtensionsSection;
+  onDismissHub?: () => void;
 }
 
-export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSettingsPanelProps) {
-  const isTauri = "__TAURI_INTERNALS__" in window;
-  const state = usePluginsPanelState(cwd, form);
+export function PluginsSettingsPanel({
+  cwd,
+  form,
+  onSyncAppSetting,
+  initialSection,
+  onDismissHub,
+}: PluginsSettingsPanelProps) {
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const storeSettings = useAppStore((s) => s.settings);
+  const effectiveForm = useMemo<AppSettings>(
+    () => ({ ...DEFAULTS, ...storeSettings, ...form, language: "zh-CN" }),
+    [form, storeSettings],
+  );
+  const handleSyncAppSetting = useCallback(
+    <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+      if (onSyncAppSetting) {
+        onSyncAppSetting(key, value);
+        return;
+      }
+      const current = useAppStore.getState().settings;
+      void useAppStore.getState().saveSettings({ ...DEFAULTS, ...current, [key]: value, language: "zh-CN" });
+    },
+    [onSyncAppSetting],
+  );
+
+  const [section, setSection] = useState<ExtensionsSection>(initialSection ?? "plugins");
+  const [prevInitial, setPrevInitial] = useState(initialSection);
+  if (prevInitial !== initialSection) {
+    setPrevInitial(initialSection);
+    setSection(initialSection ?? "plugins");
+  }
+
+  const state = usePluginsPanelState(cwd, effectiveForm);
+  const skillsQuery = useQuery({
+    queryKey: queryKeys.skills(cwd),
+    queryFn: () => skillClient.list(cwd),
+  });
 
   const isSearching = state.search.trim() !== "";
   const effectiveSystemOpen = isSearching || state.systemExpanded;
@@ -31,12 +75,17 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
 
   const filterTabs: ReadonlyArray<{ id: PluginFilter; label: string; count: number }> = [
     { id: "all", label: "全部", count: state.counts.all },
+    { id: "bundled", label: "官方插件", count: state.counts.bundled },
     { id: "builtin", label: "核心能力", count: state.counts.builtin },
     { id: "user", label: "已安装", count: state.counts.user },
     { id: "workspace", label: "项目级", count: state.counts.workspace },
-    { id: "skills", label: "技能包", count: state.skillsQuery.data?.length ?? 0 },
   ];
-  const hasBothGroups = state.installedList.length > 0 && state.coreList.length > 0;
+  const visibleGroups = [
+    state.installedList.length > 0 ? { id: "installed", title: "已安装扩展", items: state.installedList } : null,
+    state.bundledList.length > 0 ? { id: "bundled", title: "官方功能插件", items: state.bundledList } : null,
+    state.coreList.length > 0 ? { id: "core", title: "核心智能体能力", items: state.coreList } : null,
+  ].filter((g): g is { id: string; title: string; items: PluginInfo[] } => g !== null);
+  const showGroupHeadings = visibleGroups.length > 1 || (state.filter === "all" && state.bundledList.length > 0);
 
   const renderCard = (plugin: PluginInfo, compactSystem = false) => (
     <PluginCard
@@ -47,8 +96,8 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
       isTauri={isTauri}
       busy={busy}
       clientError={state.clientErrors[plugin.id]}
-      form={form}
-      onSyncAppSetting={onSyncAppSetting}
+      form={effectiveForm}
+      onSyncAppSetting={handleSyncAppSetting}
       mcpStatuses={state.mcpStatuses}
       mcpReconnecting={state.mcpReconnectMutation.isPending}
       onReconnectMcp={(serverId) => state.mcpReconnectMutation.mutate(serverId)}
@@ -63,49 +112,60 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
       confirmRemove={state.confirmRemoveId === plugin.id}
       onSetConfirmRemove={state.setConfirmRemoveId}
       onRunTask={(task) => state.actionMutation.mutate(task)}
+      onOpenMcpSection={() => setSection("mcp")}
     />
   );
 
   return (
     <div className="plugins-panel">
-      <PluginsHeaderBar
-        cwd={cwd}
-        busy={busy}
-        search={state.search}
-        onChangeSearch={state.setSearch}
-        filter={state.filter}
-        onChangeFilter={state.setFilter}
-        filterTabs={filterTabs}
-        updatableCount={state.updatableCount}
-        onOpenInstall={(ch) => {
-          state.setNotice(null);
-          state.setInstallChannel(ch);
-        }}
-        onRunTask={(task) => state.actionMutation.mutate(task)}
+      <ExtensionsModuleTabs
+        active={section}
+        onChange={setSection}
+        pluginsCount={state.counts.all}
+        skillsCount={skillsQuery.data?.length ?? 0}
+        mcpCount={effectiveForm.mcpServers.length}
       />
 
-      <AnimatePresence initial={false}>
-        {state.notice !== null && (
-          <motion.div
-            className={`plugins-notice ${state.notice.kind}`}
-            role="status"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.14 }}
-          >
-            <span>{state.notice.text}</span>
-            <button type="button" className="icon-button" aria-label="关闭提示" onClick={() => state.setNotice(null)}>
-              <X size={13} />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {state.filter === "skills" ? (
-        <SkillsSettingsSection cwd={cwd} search={state.search} onNotify={state.setNotice} />
+      {section === "skills" ? (
+        <SkillsSettingsPage cwd={cwd} onCloseSettings={onDismissHub} />
+      ) : section === "mcp" ? (
+        <McpSettingsPage cwd={cwd} form={effectiveForm} update={handleSyncAppSetting} onCloseSettings={onDismissHub} />
       ) : (
         <>
+          <PluginsHeaderBar
+            cwd={cwd}
+            busy={busy}
+            search={state.search}
+            onChangeSearch={state.setSearch}
+            filter={state.filter}
+            onChangeFilter={state.setFilter}
+            filterTabs={filterTabs}
+            updatableCount={state.updatableCount}
+            onOpenInstall={(ch) => {
+              state.setNotice(null);
+              state.setInstallChannel(ch);
+            }}
+            onRunTask={(task) => state.actionMutation.mutate(task)}
+          />
+
+          <AnimatePresence initial={false}>
+            {state.notice !== null && (
+              <motion.div
+                className={`plugins-notice ${state.notice.kind}`}
+                role="status"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.14 }}
+              >
+                <span>{state.notice.text}</span>
+                <button type="button" className="icon-button" aria-label="关闭提示" onClick={() => state.setNotice(null)}>
+                  <X size={13} />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {showTrustCard && currentTrust !== undefined && (
             <div className={`plugins-trust-banner${currentTrust.trusted ? " trusted" : ""}`}>
               <div className="plugins-trust-body">
@@ -140,7 +200,7 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
               <span>读取插件列表失败：{describeError(state.pluginsQuery.error)}</span>
               <button type="button" className="plugin-ghost-btn" onClick={() => void state.pluginsQuery.refetch()}>重试</button>
             </div>
-          ) : state.installedList.length === 0 && state.coreList.length === 0 && state.systemList.length === 0 ? (
+          ) : state.installedList.length === 0 && state.bundledList.length === 0 && state.coreList.length === 0 && state.systemList.length === 0 ? (
             <PluginsEmptyHub
               cwd={cwd}
               isTauri={isTauri}
@@ -155,28 +215,17 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
             />
           ) : (
             <div className="plugins-groups">
-              {state.installedList.length > 0 && (
-                <section className="plugins-group">
-                  {hasBothGroups && (
+              {visibleGroups.map((group) => (
+                <section key={group.id} className="plugins-group">
+                  {showGroupHeadings && (
                     <h2 className="plugins-group-heading">
-                      <span>已安装扩展</span>
-                      <em>{state.installedList.length}</em>
+                      <span>{group.title}</span>
+                      <em>{group.items.length}</em>
                     </h2>
                   )}
-                  <div className="plugins-bento-grid">{state.installedList.map((item) => renderCard(item))}</div>
+                  <div className="plugins-bento-grid">{group.items.map((item) => renderCard(item))}</div>
                 </section>
-              )}
-              {state.coreList.length > 0 && (
-                <section className="plugins-group">
-                  {hasBothGroups && (
-                    <h2 className="plugins-group-heading">
-                      <span>核心智能体能力</span>
-                      <em>{state.coreList.length}</em>
-                    </h2>
-                  )}
-                  <div className="plugins-bento-grid">{state.coreList.map((item) => renderCard(item))}</div>
-                </section>
-              )}
+              ))}
               {state.systemList.length > 0 && (
                 <section className="plugins-group">
                   <button
@@ -208,22 +257,22 @@ export function PluginsSettingsPanel({ cwd, form, onSyncAppSetting }: PluginsSet
               )}
             </div>
           )}
+
+          <AnimatePresence>
+            {state.installChannel !== null && (
+              <InstallPluginDialog
+                isTauri={isTauri}
+                initialChannel={state.installChannel}
+                onClose={() => state.setInstallChannel(null)}
+                onInstalled={(result, label) => {
+                  state.setInstallChannel(null);
+                  state.applyMutationResult(result, label);
+                }}
+              />
+            )}
+          </AnimatePresence>
         </>
       )}
-
-      <AnimatePresence>
-        {state.installChannel !== null && (
-          <InstallPluginDialog
-            isTauri={isTauri}
-            initialChannel={state.installChannel}
-            onClose={() => state.setInstallChannel(null)}
-            onInstalled={(result, label) => {
-              state.setInstallChannel(null);
-              state.applyMutationResult(result, label);
-            }}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }

@@ -60,6 +60,24 @@ static EXPLICIT_EXIT: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 unsafe extern "system" {
     fn SetThreadExecutionState(es_flags: u32) -> u32;
+    fn SetConsoleCtrlHandler(
+        handler: Option<unsafe extern "system" fn(u32) -> i32>,
+        add: i32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> i32 {
+    let reason = match ctrl_type {
+        0 => "ctrl_c",
+        1 => "ctrl_break",
+        2 => "console_close",
+        5 => "windows_logoff",
+        6 => "windows_shutdown",
+        _ => return 0,
+    };
+    desktop_log::mark_session_clean_exit(reason);
+    0
 }
 
 struct AppState {
@@ -244,6 +262,11 @@ pub fn run() {
             // Recorded inside `.setup` (after `tauri_plugin_single_instance`) so a second
             // launch that hands off focus and exits never overwrites `desktop-lifecycle.json`.
             desktop_log::mark_session_start(env!("CARGO_PKG_VERSION"));
+            #[cfg(windows)]
+            // SAFETY: `console_ctrl_handler` is a static `extern "system"` function using lock-free/safe logging.
+            unsafe {
+                let _ = SetConsoleCtrlHandler(Some(console_ctrl_handler), 1);
+            }
             initialize_tray(app)?;
             #[cfg(all(windows, not(debug_assertions)))]
             disable_app_devtools(app);
@@ -336,8 +359,13 @@ pub fn run() {
                 );
             }
         }
-        tauri::RunEvent::Exit if EXPLICIT_EXIT.load(Ordering::SeqCst) => {
-            desktop_log::mark_session_clean_exit("event_loop_exit");
+        tauri::RunEvent::Exit => {
+            let reason = if EXPLICIT_EXIT.load(Ordering::SeqCst) {
+                "event_loop_exit"
+            } else {
+                "os_event_loop_exit"
+            };
+            desktop_log::mark_session_clean_exit(reason);
         }
         _ => {}
     });

@@ -4,9 +4,22 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { PersistedEvent } from "@qianji/protocol";
+import type { PersistedEvent, SessionSubscribeResult } from "@qianji/protocol";
 import { effortForLevel, forkPointsOf, sessionTreeOf } from "../src/lib/hostSessions";
-import { TranscriptTranslator, currentBranch, historyToUi, planWidgetLines, resetStreamingAssistant, streamAssistant } from "../src/lib/transcript";
+import {
+  buildResumeEvents,
+  replaySessionToUi,
+  seedTranslatorFromStatus,
+} from "../src/lib/harnessReplay";
+import {
+  TranscriptTranslator,
+  currentBranch,
+  historyToUi,
+  planWidgetLines,
+  replayToUi,
+  resetStreamingAssistant,
+  streamAssistant,
+} from "../src/lib/transcript";
 
 const golden = (name: string): PersistedEvent[] => readFileSync(join(import.meta.dirname, "..", "packages", "agent-loop", "test", "golden", `${name}.jsonl`), "utf8")
   .trim()
@@ -127,5 +140,186 @@ describe("fork points and the session tree", () => {
     const ids = (nodes: typeof tree): unknown[] => nodes.map((node) => [node.entry.id, ids(node.children)]);
     expect(ids(tree)).toEqual([["2", [["3", [["4", [["5", []]]], ["7", []]]]]]]);
     expect(tree[0]?.entry).toMatchObject({ type: "message", parentId: null, message: { role: "user" } });
+  });
+});
+
+describe("mid-stream snapshot replay", () => {
+  it("records tool-call timestamps in historyToUi while keeping running false", () => {
+    const events: PersistedEvent[] = [
+      { seq: 1, ts: "2026-10-29T00:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "go" }] } },
+      {
+        seq: 2,
+        ts: "2026-10-29T00:00:01.000Z",
+        type: "assistant",
+        data: {
+          content: [{ type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } }],
+          model: { provider: "p", model: "m" },
+          usage: {},
+          stop: "tool-use",
+        },
+      },
+      { seq: 3, ts: "2026-10-29T00:00:02.500Z", type: "tool-call", data: { callId: "c1", name: "read", args: { path: "a.ts" } } },
+    ];
+    const msgs = historyToUi(events);
+    expect(msgs[1]?.toolCalls?.[0]).toMatchObject({
+      id: "c1",
+      running: false,
+      startedAt: Date.parse("2026-10-29T00:00:02.500Z"),
+    });
+  });
+
+  it("marks idle incomplete turns as interrupted and preserves completed turns via replayToUi", () => {
+    const incomplete: PersistedEvent[] = [
+      { seq: 1, ts: "2026-10-29T00:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "read" }] } },
+      {
+        seq: 2,
+        ts: "2026-10-29T00:00:01.000Z",
+        type: "assistant",
+        data: {
+          content: [{ type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } }],
+          model: { provider: "p", model: "m" },
+          usage: {},
+          stop: "tool-use",
+        },
+      },
+    ];
+    const replayed = replayToUi(incomplete);
+    expect(replayed.at(-1)).toMatchObject({ role: "assistant", isError: true });
+    expect(replayed[1]?.toolCalls?.[0]).toMatchObject({ running: false, isError: true });
+
+    const complete = replayToUi(golden("parallel-tools"), {
+      running: false,
+      streaming: [],
+      runningTools: [],
+      queue: { steer: 0, followUp: 0 },
+    });
+    expect(complete.map((m) => m.role)).toEqual(["user", "assistant", "assistant"]);
+  });
+
+  it("marks only active runningTools as running while preserving args and completed tools", () => {
+    const replay: SessionSubscribeResult = {
+      liveSeq: 4,
+      events: [
+        { seq: 1, ts: "2026-10-29T00:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "run tools" }] } },
+        {
+          seq: 2,
+          ts: "2026-10-29T00:00:01.000Z",
+          type: "assistant",
+          data: {
+            content: [
+              { type: "tool-call", id: "c0", name: "read", arguments: { path: "done.ts" } },
+              { type: "tool-call", id: "c1", name: "write", arguments: { path: "busy.ts", content: "ok" } },
+              { type: "tool-call", id: "c2", name: "write", arguments: { path: "queued.ts", content: "next" } },
+            ],
+            model: { provider: "p", model: "m" },
+            usage: {},
+            stop: "tool-use",
+          },
+        },
+        { seq: 3, ts: "2026-10-29T00:00:02.000Z", type: "tool-call", data: { callId: "c1", name: "write", args: { path: "busy.ts" } } },
+        { seq: 4, ts: "2026-10-29T00:00:03.000Z", type: "tool-result", data: { callId: "c0", name: "read", content: [{ type: "text", text: "done" }], isError: false } },
+      ],
+      status: {
+        running: true,
+        streaming: [],
+        runningTools: [
+          { callId: "c1", name: "write" },
+          { callId: "c-extra", name: "bash" },
+        ],
+        queue: { steer: 1, followUp: 2 },
+      },
+    };
+    const { messages, queueEvent } = replaySessionToUi(replay);
+    expect(queueEvent).toEqual({ type: "queue", steering: 1, followUp: 2 });
+    const calls = messages[1]?.toolCalls ?? [];
+    expect(calls[0]).toMatchObject({ id: "c0", running: false, result: "done", isError: false });
+    expect(calls[1]).toMatchObject({
+      id: "c1",
+      running: true,
+      args: { path: "busy.ts", content: "ok" },
+      startedAt: Date.parse("2026-10-29T00:00:02.000Z"),
+    });
+    expect(calls[2]).toMatchObject({ id: "c2", running: false });
+    expect(calls[3]).toMatchObject({ id: "c-extra", name: "bash", running: true });
+  });
+
+  it("replays streaming chunks with retry reset and seeds partial tool-call arguments for live continuation", () => {
+    const replay: SessionSubscribeResult = {
+      liveSeq: 9,
+      events: [
+        { seq: 1, ts: "2026-10-29T00:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "write file" }] } },
+      ],
+      status: {
+        running: true,
+        runningTools: [],
+        queue: { steer: 0, followUp: 0 },
+        streaming: [
+          { type: "text-delta", index: 0, text: "stale attempt" },
+          { type: "retry", attempt: 1, maxAttempts: 3, delayMs: 2_000, error: { kind: "network", message: "reset", retryable: true } },
+          { type: "thinking-delta", index: 0, text: "Plan step" },
+          { type: "text-delta", index: 1, text: "Writing " },
+          { type: "tool-call-start", index: 2, id: "tc-1", name: "write" },
+          { type: "tool-call-delta", index: 2, argumentsDelta: '{"path":"src/app' },
+          { type: "tool-call-delta", index: 2, argumentsDelta: '.ts","content":"he' },
+        ],
+      },
+    };
+    const { messages, translator, queueEvent } = replaySessionToUi(replay);
+    expect(queueEvent).toBeUndefined();
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      isStreaming: true,
+      thinking: "Plan step",
+      content: "Writing ",
+      toolCalls: [{ id: "tc-1", name: "write", args: { path: "src/app.ts" }, running: true }],
+    });
+
+    // Live chunks arriving afterwards continue assembling the partial JSON tool arguments.
+    const liveEvents = [
+      ...translator.delta({ type: "llm-chunk", chunk: { type: "tool-call-delta", index: 2, argumentsDelta: 'llo"}' } }),
+      ...translator.delta({ type: "llm-chunk", chunk: { type: "finish", reason: "tool-use" } }),
+    ];
+    expect(liveEvents.at(-1)).toEqual({
+      type: "assistant-tool-calls",
+      calls: [{ id: "tc-1", name: "write", args: { path: "src/app.ts", content: "hello" }, running: true }],
+    });
+
+    // seedTranslatorFromStatus gives identical tool-call continuation on attach.
+    const seeded = seedTranslatorFromStatus(replay.status);
+    const continued = [
+      ...seeded.delta({ type: "llm-chunk", chunk: { type: "tool-call-delta", index: 2, argumentsDelta: 'llo"}' } }),
+      ...seeded.delta({ type: "llm-chunk", chunk: { type: "finish", reason: "tool-use" } }),
+    ];
+    expect(continued).toEqual([
+      { type: "assistant-tool-calls", calls: [{ id: "tc-1", name: "write", args: { path: "src/app.ts", content: "hello" }, running: true }] },
+    ]);
+  });
+
+  it("buildResumeEvents replays active stream cleanly onto an existing streaming bubble without duplicating text", () => {
+    const translator = new TranscriptTranslator();
+    const events = buildResumeEvents(
+      {
+        running: true,
+        runningTools: [],
+        queue: { steer: 1, followUp: 0 },
+        streaming: [
+          { type: "text-delta", index: 0, text: "Par" },
+          { type: "text-delta", index: 0, text: "tial" },
+        ],
+      },
+      translator,
+    );
+
+    // Simulate store already holding "Par" before disconnect.
+    let messages = streamAssistant([], { text: "Par" }, 100);
+    for (const event of events) {
+      if (event.type === "retry-status") messages = resetStreamingAssistant(messages);
+      else if (event.type === "assistant-delta") messages = streamAssistant(messages, { text: event.text, thinking: event.thinking });
+      else if (event.type === "assistant-tool-calls") messages = streamAssistant(messages, { toolCalls: event.calls });
+    }
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe("Partial");
+    expect(events.at(-1)).toEqual({ type: "queue", steering: 1, followUp: 0 });
   });
 });

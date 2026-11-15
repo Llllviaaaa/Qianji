@@ -1,0 +1,36 @@
+{
+  "name": "goal-tracker",
+  "version": "0.1.0",
+  "description": "会话级长程目标设定、进度追踪横幅与结束前自动核查提醒（create_goal / get_goal / update_goal + /goal）。",
+  "qianji": {
+    "id": "goal-tracker",
+    "name": "目标追踪器",
+    "description": "会话级长程目标设定与进度追踪：提供 create_goal / get_goal / update_goal 工具、/goal 斜杠指令、输入框上方目标状态横幅与任务结束前自动核查提醒。",
+    "host": "./host.ts",
+    "client": "./client.tsx",
+    "contributes": {
+      "tools": ["create_goal", "get_goal", "update_goal"],
+      "commands": ["goal"],
+      "slots": ["composer.banners"]
+    },
+    "defaultConfig": {
+      "autoRemindBeforeStop": true,
+      "maxAutoContinues": 2
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "autoRemindBeforeStop": {
+          "type": "boolean",
+          "description": "当目标仍处于进行中时，在单轮回复结束前自动提醒模型核查或更新目标状态"
+        },
+        "maxAutoContinues": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "同一目标在结束前最多触发自动核查提醒的次数"
+        }
+      }
+    }
+  }
+}

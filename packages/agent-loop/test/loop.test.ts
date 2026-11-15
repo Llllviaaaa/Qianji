@@ -6,11 +6,19 @@ import { Context } from "@deepseek-ai/cordis";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentBusyError, type AgentDelta } from "@qianji/agent";
 import { LlmService } from "@qianji/llm";
-import { COMPACTION_PREFIX, Sessions, type Session } from "@qianji/session";
+import { COMPACTION_CONTINUE_SUFFIX, COMPACTION_PREFIX, Sessions, type Session } from "@qianji/session";
 import { SystemPrompt } from "@qianji/system-prompt";
 import { ScriptedProvider, errorReply, goldenLog, textReply, toolReply, useScriptedProvider, type ScriptedOptions, type ScriptedReply } from "@qianji/testkit";
 import { Tools, textOutput } from "@qianji/tools";
-import { AgentLoop, COMPACTION_REQUEST, shrinkForSummary, type AgentLoopConfig } from "../src/index.ts";
+import {
+  AgentLoop,
+  COMPACTION_REQUEST,
+  EMPTY_TURN_CONTINUATION_PROMPT,
+  LENGTH_CONTINUATION_PROMPT,
+  buildCompactionWorkingSetAddendum,
+  shrinkForSummary,
+  type AgentLoopConfig,
+} from "../src/index.ts";
 
 interface Harness {
   ctx: Context;
@@ -206,7 +214,9 @@ describe("agent loop", () => {
     const [, summaryCall, retry] = harness.provider.requests;
     expect(summaryCall?.tools).toBeUndefined();
     expect(summaryCall?.messages.at(-1)).toEqual({ role: "user", content: text(COMPACTION_REQUEST) });
-    expect(retry?.messages).toEqual([{ role: "user", content: text(`${COMPACTION_PREFIX}The user said hi.`) }]);
+    expect(retry?.messages).toEqual([
+      { role: "user", content: text(`${COMPACTION_PREFIX}The user said hi.${COMPACTION_CONTINUE_SUFFIX}`) },
+    ]);
   });
 
   it("compacts on request, keeping the latest turn", async () => {
@@ -286,7 +296,7 @@ describe("agent loop", () => {
     expect(size(verbatim)).toBeGreaterThan(100_000);
     expect(size(clipped)).toBeLessThan(30_000);
     expect(JSON.stringify(clipped?.messages)).toContain("characters omitted");
-    expect(retry?.messages).toEqual([{ role: "user", content: text(`${COMPACTION_PREFIX}Summary.`) }]);
+    expect(retry?.messages).toEqual([{ role: "user", content: text(`${COMPACTION_PREFIX}Summary.${COMPACTION_CONTINUE_SUFFIX}`) }]);
     expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
   });
 
@@ -330,5 +340,300 @@ describe("agent loop", () => {
     expect(seen).toEqual(["before-start", "turn-start 1", "turn-end 1", "turn-start 2", "turn-end 2", "settled done"]);
     const result = harness.session.events.find((event) => event.type === "tool-result");
     expect(result?.data).toMatchObject({ isError: true, content: text("Denied: not today") });
+  });
+
+  it("continues automatically on finish_reason length and bounds repeated truncations", async () => {
+    const truncated = [{ type: "text-delta" as const, index: 0, text: "Working on it..." }, { type: "finish" as const, reason: "length" as const }];
+    const harness = await setup([
+      truncated,
+      toolReply([{ id: "call-1", name: "echo", args: { text: "ok" } }]),
+      textReply("All finished."),
+    ]);
+    await run(harness, "Complete multi-step task");
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(harness.provider.requests).toHaveLength(3);
+    expect(harness.provider.requests[1]?.messages.at(-1)).toEqual({ role: "user", content: text(LENGTH_CONTINUATION_PROMPT) });
+
+    // Bounded at MAX_LENGTH_CONTINUATIONS (3): initial + 3 retries = 4 calls total
+    const bounded = await setup([truncated, truncated, truncated, truncated, textReply("unreachable")]);
+    await run(bounded, "Truncate repeatedly");
+    expect(bounded.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(bounded.provider.requests).toHaveLength(4);
+  });
+
+  it("retries automatically when a model stops with thinking only or empty text", async () => {
+    const thinkingOnly = [
+      { type: "thinking-delta" as const, index: 0, text: "thinking without acting" },
+      { type: "finish" as const, reason: "stop" as const },
+    ];
+    const harness = await setup([
+      thinkingOnly,
+      textReply("Here is the answer."),
+    ]);
+    await run(harness, "Investigate");
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(harness.provider.requests).toHaveLength(2);
+    expect(harness.provider.requests[1]?.messages.at(-1)).toEqual({
+      role: "user",
+      content: [...text("Investigate"), ...text(`\n\n${EMPTY_TURN_CONTINUATION_PROMPT}`)],
+    });
+  });
+
+  it("nudges continuation via agent/before-stop and stops after the bound when no tools run", async () => {
+    const harness = await setup([
+      textReply("I will check a.ts next."),
+      toolReply([{ id: "call-1", name: "echo", args: { text: "checked" } }]),
+      textReply("Done after checking."),
+    ]);
+    let stopChecks = 0;
+    harness.ctx.on("agent/before-stop", () => {
+      stopChecks += 1;
+      return stopChecks === 1 ? "Continue executing with tools instead of stopping." : undefined;
+    });
+    await run(harness, "Check a.ts");
+    expect(stopChecks).toBe(2);
+    expect(harness.provider.requests).toHaveLength(3);
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+
+    // Bounded by MAX_PLUGIN_CONTINUATIONS (2) even if listener always returns a nudge
+    const capped = await setup([textReply("1"), textReply("2"), textReply("3"), textReply("4")]);
+    capped.ctx.on("agent/before-stop", () => "Keep going");
+    await run(capped, "Stop test");
+    expect(capped.provider.requests).toHaveLength(3);
+    expect(capped.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+  });
+
+  it("performs mid-run sliding compaction keeping the newest complete step verbatim", async () => {
+    const heavyStep2 = [
+      ...toolReply([{ id: "call-2", name: "echo", args: { text: "step-2-recent" } }]).slice(0, -2),
+      { type: "usage" as const, usage: { inputTokens: 90_000, outputTokens: 100 } },
+      { type: "finish" as const, reason: "tool-use" as const },
+    ];
+    const harness = await setup([
+      toolReply([{ id: "call-1", name: "echo", args: { text: "step-1" } }]),
+      heavyStep2,
+      textReply("Earlier step-1 done."),
+      textReply("Final answer."),
+    ], {
+      loop: { compactAboveTokens: 50_000, keepRecentTokens: 500 },
+    });
+    await run(harness, "Investigate two steps");
+    // Requests: [turn 1, turn 2, sliding summary call (at start of turn 3), turn 3]
+    expect(harness.provider.requests).toHaveLength(4);
+    const [, , summaryCall, resumedCall] = harness.provider.requests;
+    expect(JSON.stringify(summaryCall?.messages)).toContain("step-1");
+    expect(JSON.stringify(summaryCall?.messages)).not.toContain("step-2-recent");
+    expect(resumedCall?.messages[0]).toEqual({
+      role: "user",
+      content: text(`${COMPACTION_PREFIX}Earlier step-1 done.${COMPACTION_CONTINUE_SUFFIX}`),
+    });
+    expect(JSON.stringify(resumedCall?.messages.slice(1))).toContain("step-2-recent");
+    expect(JSON.stringify(resumedCall?.messages.slice(1))).not.toContain("step-1");
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+  });
+
+  it("partitions consecutive readOnly tools into concurrent batches with serial write barriers", async () => {
+    const harness = await setup([
+      toolReply([
+        { id: "c1", name: "read_a", args: {} },
+        { id: "c2", name: "read_b", args: {} },
+        { id: "c3", name: "write_x", args: {} },
+        { id: "c4", name: "read_c", args: {} },
+      ]),
+      textReply("All done."),
+    ]);
+
+    const timeline: string[] = [];
+    const gates = new Map<string, () => void>();
+    const started = new Map<string, Promise<void>>();
+    const makeGateTool = (name: string, readOnly: boolean, out: string) => {
+      let markStarted = () => {};
+      started.set(name, new Promise<void>((resolve) => { markStarted = resolve; }));
+      harness.ctx.tools.register({
+        name,
+        readOnly,
+        description: name,
+        parameters: { type: "object", properties: {} },
+        execute: () => new Promise((resolve) => {
+          timeline.push(`start:${name}`);
+          markStarted();
+          gates.set(name, () => {
+            timeline.push(`end:${name}`);
+            resolve(textOutput(out));
+          });
+        }),
+      });
+    };
+
+    makeGateTool("read_a", true, "a");
+    makeGateTool("read_b", true, "b");
+    makeGateTool("write_x", false, "x");
+    makeGateTool("read_c", true, "c");
+
+    harness.ctx.agents.prompt(harness.session, text("Run batch"));
+
+    // Both consecutive readOnly tools overlap concurrently before write_x starts.
+    await Promise.all([started.get("read_a"), started.get("read_b")]);
+    expect(timeline).toEqual(["start:read_a", "start:read_b"]);
+
+    gates.get("read_a")?.();
+    gates.get("read_b")?.();
+    await started.get("write_x");
+    expect(timeline.slice(0, 5)).toEqual(["start:read_a", "start:read_b", "end:read_a", "end:read_b", "start:write_x"]);
+    expect(timeline).not.toContain("start:read_c");
+
+    gates.get("write_x")?.();
+    await started.get("read_c");
+    expect(timeline.slice(5, 7)).toEqual(["end:write_x", "start:read_c"]);
+
+    gates.get("read_c")?.();
+    await harness.ctx.agents.idle(harness.session.id);
+
+    expect(timeline).toEqual([
+      "start:read_a",
+      "start:read_b",
+      "end:read_a",
+      "end:read_b",
+      "start:write_x",
+      "end:write_x",
+      "start:read_c",
+      "end:read_c",
+    ]);
+
+    const toolCalls = harness.session.events.filter((event) => event.type === "tool-call").map((event) => event.data.callId);
+    const toolResults = harness.session.events
+      .filter((event) => event.type === "tool-result")
+      .map((event) => ({ callId: event.data.callId, text: event.data.content[0]?.type === "text" ? event.data.content[0].text : "" }));
+    expect(toolCalls).toEqual(["c1", "c2", "c3", "c4"]);
+    expect(toolResults).toEqual([
+      { callId: "c1", text: "a" },
+      { callId: "c2", text: "b" },
+      { callId: "c3", text: "x" },
+      { callId: "c4", text: "c" },
+    ]);
+  });
+
+  it("emits an error tool-result for every tool-call even when ctx.tools.execute rejects unexpectedly", async () => {
+    const harness = await setup([
+      toolReply([
+        { id: "c1", name: "read_ok", args: {} },
+        { id: "c2", name: "read_boom", args: {} },
+        { id: "c3", name: "echo", args: { text: "tail" } },
+      ]),
+      textReply("Recovered."),
+    ]);
+
+    harness.ctx.tools.register({
+      name: "read_ok",
+      readOnly: true,
+      description: "Read ok",
+      parameters: { type: "object", properties: {} },
+      execute: () => textOutput("ok"),
+    });
+    harness.ctx.tools.register({
+      name: "read_boom",
+      readOnly: true,
+      description: "Read boom",
+      parameters: { type: "object", properties: {} },
+      execute: () => textOutput("never"),
+    });
+
+    const origExecute = harness.ctx.tools.execute.bind(harness.ctx.tools);
+    harness.ctx.tools.execute = async (call, env) => {
+      if (call.name === "read_boom") throw new Error("unexpected execute rejection");
+      return origExecute(call, env);
+    };
+
+    await run(harness, "Trigger rejection");
+
+    const calls = harness.session.events.filter((event) => event.type === "tool-call");
+    const results = harness.session.events.filter((event) => event.type === "tool-result");
+    expect(calls.map((event) => event.data.callId)).toEqual(["c1", "c2", "c3"]);
+    expect(results.map((event) => ({ callId: event.data.callId, isError: event.data.isError }))).toEqual([
+      { callId: "c1", isError: false },
+      { callId: "c2", isError: true },
+      { callId: "c3", isError: false },
+    ]);
+    expect(results[1]?.data.content[0]).toEqual({ type: "text", text: "read_boom failed: unexpected execute rejection" });
+    expect(harness.ctx.agents.status(harness.session.id)).toMatchObject({ running: false, runningTools: [] });
+    const toolEnds = harness.deltas.filter((delta) => delta.type === "tool-end");
+    expect(toolEnds).toEqual([
+      { type: "tool-end", callId: "c1", isError: false },
+      { type: "tool-end", callId: "c2", isError: true },
+      { type: "tool-end", callId: "c3", isError: false },
+    ]);
+  });
+
+  it("rehydrates touched file paths and latest update_plan items after compaction while leaving echo-only compactions unchanged", async () => {
+    const echoOnlyEvents = [
+      { seq: 1, ts: "t", type: "user" as const, data: { content: text("hi") } },
+      { seq: 2, ts: "t", type: "tool-call" as const, data: { callId: "c1", name: "echo", args: { text: "ok" } } },
+    ];
+    expect(buildCompactionWorkingSetAddendum(echoOnlyEvents, 2)).toBe("");
+
+    const richEvents = [
+      { seq: 1, ts: "t", type: "tool-call" as const, data: { callId: "c1", name: "read", args: { path: "src/old.ts" } } },
+      { seq: 2, ts: "t", type: "tool-call" as const, data: { callId: "c2", name: "read", args: { path: "src/a.ts" } } },
+      { seq: 3, ts: "t", type: "tool-call" as const, data: { callId: "c3", name: "edit", args: { path: "src/a.ts" } } },
+      { seq: 4, ts: "t", type: "tool-call" as const, data: { callId: "c4", name: "write", args: { file_path: "src/b.ts" } } },
+      { seq: 5, ts: "t", type: "tool-call" as const, data: { callId: "c5", name: "read", args: { path: "src/c.ts" } } },
+      { seq: 6, ts: "t", type: "tool-call" as const, data: { callId: "c6", name: "read", args: { path: "src/d.ts" } } },
+      { seq: 7, ts: "t", type: "tool-call" as const, data: { callId: "c7", name: "read", args: { path: "src/e.ts" } } },
+      { seq: 8, ts: "t", type: "tool-call" as const, data: { callId: "c8", name: "read", args: { path: "src/f.ts" } } },
+      { seq: 9, ts: "t", type: "tool-call" as const, data: { callId: "c9", name: "read", args: { path: "src/g.ts" } } },
+      { seq: 10, ts: "t", type: "tool-call" as const, data: { callId: "c10", name: "read", args: { path: "src/h.ts" } } },
+      { seq: 11, ts: "t", type: "tool-call" as const, data: { callId: "c11", name: "update_plan", args: { items: [{ id: "0", text: "Stale plan", status: "pending" }] } } },
+      { seq: 12, ts: "t", type: "tool-call" as const, data: { callId: "c12", name: "update_plan", args: { plan: [{ step: "Finish edit", status: "in_progress" }, { step: "Run tests", status: "pending" }] } } },
+      { seq: 13, ts: "t", type: "tool-call" as const, data: { callId: "c13", name: "write", args: { path: "src/after-through-seq.ts" } } },
+    ];
+    const addendum = buildCompactionWorkingSetAddendum(richEvents, 12);
+    expect(addendum).toContain("[Working-set context]");
+    expect(addendum).toContain("src/a.ts (modified)");
+    expect(addendum).toContain("src/b.ts (modified)");
+    expect(addendum).toContain("src/h.ts (read)");
+    expect(addendum).not.toContain("src/old.ts");
+    expect(addendum).not.toContain("src/after-through-seq.ts");
+    expect(addendum).toContain("Finish edit");
+    expect(addendum).toContain("Run tests");
+    expect(addendum).not.toContain("Stale plan");
+
+    const harness = await setup([
+      toolReply([
+        { id: "c1", name: "read", args: { path: "src/main.ts" } },
+        { id: "c2", name: "edit", args: { path: "src/main.ts" } },
+        { id: "c3", name: "update_plan", args: { items: [{ id: "p1", text: "Patch main", status: "completed" }, { id: "p2", text: "Verify", status: "in_progress" }] } },
+      ]),
+      textReply("Updated main."),
+      textReply("Follow-up reply."),
+      textReply("Concise summary."),
+    ]);
+    harness.ctx.tools.register<{ path: string }>({
+      name: "read",
+      readOnly: true,
+      description: "Read",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      execute: ({ path }) => textOutput(`read:${path}`),
+    });
+    harness.ctx.tools.register<{ path: string }>({
+      name: "edit",
+      description: "Edit",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      execute: ({ path }) => textOutput(`edited:${path}`),
+    });
+    harness.ctx.tools.register<{ items: unknown[] }>({
+      name: "update_plan",
+      description: "Plan",
+      parameters: { type: "object", properties: { items: { type: "array" } }, required: ["items"] },
+      execute: () => textOutput("plan updated"),
+    });
+
+    await run(harness, "First");
+    await run(harness, "Second");
+    const compaction = await harness.ctx.agents.compact(harness.session);
+    expect(compaction?.data.summary).toContain("Concise summary.");
+    expect(compaction?.data.summary).toContain("[Working-set context]");
+    expect(compaction?.data.summary).toContain("src/main.ts (modified)");
+    expect(compaction?.data.summary).toContain("[completed] (p1) Patch main");
+    expect(compaction?.data.summary).toContain("[in_progress] (p2) Verify");
   });
 });

@@ -1,5 +1,6 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { McpServerStatus, PluginInfo } from "@qianji/protocol";
+import { requestOpenSettings } from "../../lib/shellBridge";
 import type { AppSettings } from "../../types";
 import { HooksCapabilityDrawer } from "./HooksCapabilityDrawer";
 import { McpCapabilityDrawer } from "./McpCapabilityDrawer";
@@ -16,6 +17,7 @@ export interface CoreCapabilityDrawerProps {
   onReconnectMcp: (serverId?: string) => void;
   onMcpServersUpdated: () => void;
   onNotify: (notice: Notice) => void;
+  onOpenMcpSection?: () => void;
 }
 
 export function CoreCapabilityDrawer({
@@ -29,19 +31,35 @@ export function CoreCapabilityDrawer({
   onReconnectMcp,
   onMcpServersUpdated,
   onNotify,
+  onOpenMcpSection,
 }: CoreCapabilityDrawerProps) {
   if (plugin.id === "mcp") {
     return (
-      <McpCapabilityDrawer
-        cwd={cwd}
-        form={form}
-        onSyncAppSetting={onSyncAppSetting}
-        mcpStatuses={mcpStatuses}
-        mcpReconnecting={mcpReconnecting}
-        onReconnectMcp={onReconnectMcp}
-        onMcpServersUpdated={onMcpServersUpdated}
-        onNotify={onNotify}
-      />
+      <>
+        <div className="plugin-mcp-open-page-bar">
+          <span>MCP 服务编排、工具开关以及 Resources / Prompts 检验已整合至「MCP 服务」标签页</span>
+          <button
+            type="button"
+            className="plugin-ghost-btn"
+            onClick={() => {
+              if (onOpenMcpSection) onOpenMcpSection();
+              else requestOpenSettings("mcp");
+            }}
+          >
+            打开 MCP 服务面板 →
+          </button>
+        </div>
+        <McpCapabilityDrawer
+          cwd={cwd}
+          form={form}
+          onSyncAppSetting={onSyncAppSetting}
+          mcpStatuses={mcpStatuses}
+          mcpReconnecting={mcpReconnecting}
+          onReconnectMcp={onReconnectMcp}
+          onMcpServersUpdated={onMcpServersUpdated}
+          onNotify={onNotify}
+        />
+      </>
     );
   }
 
@@ -234,7 +252,7 @@ export function CoreCapabilityDrawer({
         <div className="plugin-structured-row">
           <div className="plugin-structured-copy">
             <strong>项目上下文指令 (AGENTS.md / CLAUDE.md)</strong>
-            <small>进入工作区时自动注入项目根目录下的架构规范与构建约定文档</small>
+            <small>自动注入 AGENTS.md / CLAUDE.md（支持 .local 本地覆盖与 @path 引用）及 rules 路径规则，支持 /init 生成</small>
           </div>
           <div className="plugin-structured-control">
             <button

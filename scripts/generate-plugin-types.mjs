@@ -3,7 +3,7 @@
 // `@qianji/tools`, `@deepseek-ai/cordis`, `react`, `lucide-react`,
 // `dsh-better-sidebar`) so workspace plugins pass `tsc --noEmit` without
 // installing npm dependencies.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -19,6 +19,22 @@ function writePkgDts(baseDir, pkgName, content) {
     `${JSON.stringify({ name: pkgName, version: "0.0.0-qianji", types: "./index.d.ts" }, null, 2)}\n`,
     "utf8",
   );
+}
+
+function rewriteRelativeTsExtensions(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      rewriteRelativeTsExtensions(fullPath);
+      continue;
+    }
+    if (!entry.name.endsWith(".d.ts")) continue;
+    const raw = readFileSync(fullPath, "utf8");
+    const rewritten = raw.replace(/((?:from|import\s*\()\s*["']\.\.?\/[^"']+?)\.ts(["'])/g, "$1.js$2");
+    if (rewritten !== raw) {
+      writeFileSync(fullPath, rewritten, "utf8");
+    }
+  }
 }
 
 function emitTsDeclarations({ entryFile, rootDir, outDir, paths = {} }) {
@@ -39,6 +55,7 @@ function emitTsDeclarations({ entryFile, rootDir, outDir, paths = {} }) {
   };
   const program = ts.createProgram([entryFile], options);
   program.emit();
+  rewriteRelativeTsExtensions(outDir);
 }
 
 const REACT_INDEX_DTS = `export type Key = string | number | bigint;
@@ -77,9 +94,13 @@ export interface HTMLAttributes<T = Element> {
   dangerouslySetInnerHTML?: { __html: string };
   onClick?: (event: any) => void;
   onDoubleClick?: (event: any) => void;
+  onContextMenu?: (event: any) => void;
+  onMouseDown?: (event: any) => void;
+  onMouseUp?: (event: any) => void;
   onMouseEnter?: (event: any) => void;
   onMouseLeave?: (event: any) => void;
   onPointerDown?: (event: any) => void;
+  onPointerUp?: (event: any) => void;
   onKeyDown?: (event: any) => void;
   onKeyUp?: (event: any) => void;
   onFocus?: (event: any) => void;
@@ -276,10 +297,17 @@ export const AlertTriangle: LucideIcon;
 export const Activity: LucideIcon;
 export const ArrowRight: LucideIcon;
 export const Blocks: LucideIcon;
+export const BookOpen: LucideIcon;
+export const Bot: LucideIcon;
+export const ChartPie: LucideIcon;
 export const Check: LucideIcon;
+export const CheckCircle2: LucideIcon;
 export const ChevronDown: LucideIcon;
 export const ChevronRight: LucideIcon;
+export const CircleAlert: LucideIcon;
+export const Clock: LucideIcon;
 export const Code2: LucideIcon;
+export const Compass: LucideIcon;
 export const Copy: LucideIcon;
 export const Database: LucideIcon;
 export const ExternalLink: LucideIcon;
@@ -287,98 +315,53 @@ export const Eye: LucideIcon;
 export const FileCode2: LucideIcon;
 export const FileText: LucideIcon;
 export const Folder: LucideIcon;
+export const GitBranch: LucideIcon;
+export const GitCompare: LucideIcon;
 export const Globe: LucideIcon;
 export const History: LucideIcon;
+export const Image: LucideIcon;
 export const Info: LucideIcon;
 export const Layers: LucideIcon;
+export const Link2: LucideIcon;
+export const ListChecks: LucideIcon;
 export const LoaderCircle: LucideIcon;
+export const MessageSquare: LucideIcon;
+export const MessageSquareReply: LucideIcon;
 export const Play: LucideIcon;
+export const Plug: LucideIcon;
 export const Plus: LucideIcon;
+export const Quote: LucideIcon;
 export const RefreshCw: LucideIcon;
 export const RotateCcw: LucideIcon;
 export const Search: LucideIcon;
 export const Settings2: LucideIcon;
+export const Share2: LucideIcon;
 export const Sparkles: LucideIcon;
+export const Target: LucideIcon;
 export const Terminal: LucideIcon;
 export const Trash2: LucideIcon;
+export const Undo2: LucideIcon;
+export const Workflow: LucideIcon;
 export const Wrench: LucideIcon;
 export const X: LucideIcon;
 export const Zap: LucideIcon;
 `;
 
 const CORDIS_HOST_AND_CLIENT_AUGMENTATION = `
-import type { ToolDefinition, ToolOutput } from "@qianji/tools";
+import type { Agents, AgentDelta, BeforeStopContext, RunOutcome } from "@qianji/agent";
+import type { Commands } from "@qianji/commands";
+import type { Credentials, LlmRequest, LlmResponseInfo, LlmService, StreamChunk } from "@qianji/llm";
+import type { Pricing, PricingCallRecord } from "@qianji/pricing";
+import type { AgentModeName, PermissionModeName } from "@qianji/protocol";
+import type { RpcService } from "@qianji/rpc";
+import type { Session, SessionDelta, SessionEvent, Sessions } from "@qianji/session";
+import type { SystemPrompt } from "@qianji/system-prompt";
+import type { ToolCall, ToolDecision, ToolEnv, ToolOutput, Tools } from "@qianji/tools";
+import type { Ui } from "@qianji/ui";
 import type {
   ClientContributionService,
   ClientStylesService,
 } from "@qianji/client";
-
-export interface HostToolsService {
-  register<P extends Record<string, unknown> = Record<string, unknown>>(tool: ToolDefinition<P>): () => void;
-  get(name: string): ToolDefinition | undefined;
-  listDefinitions(): ToolDefinition[];
-  schemas(sessionId?: string): Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
-  execute(
-    call: { id: string; name: string; args: Record<string, unknown> },
-    env: { sessionId: string; cwd: string; signal: AbortSignal },
-  ): Promise<ToolOutput>;
-}
-
-export interface CommandEnv {
-  sessionId: string;
-  cwd: string;
-  signal: AbortSignal;
-}
-
-export interface CommandResult {
-  output?: string;
-  prompt?: string;
-  clientAction?: string;
-  isError?: boolean;
-}
-
-export interface HostCommandDefinition {
-  name: string;
-  description: string;
-  argsHint?: string;
-  source?: string;
-  execute(args: string, env: CommandEnv): Promise<CommandResult> | CommandResult;
-}
-
-export interface HostCommandsService {
-  register(command: HostCommandDefinition): () => void;
-  registerProvider(provider: (cwd?: string) => Iterable<HostCommandDefinition>): () => void;
-  list(cwd?: string): Array<{ name: string; description: string; argsHint?: string; source?: string }>;
-}
-
-export interface PromptEnv {
-  sessionId: string;
-  cwd: string;
-  model: { provider: string; model: string; contextWindow?: number };
-  tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
-  agentMode?: "agent" | "plan" | "ask";
-  signal?: AbortSignal;
-}
-
-export interface HostSystemPromptService {
-  section(
-    id: string,
-    render: (env: PromptEnv) => string | undefined | Promise<string | undefined>,
-    options?: { order?: number },
-  ): () => void;
-  build(env: PromptEnv): Promise<string>;
-}
-
-export interface RpcCall {
-  signal: AbortSignal;
-  clientId?: string;
-}
-
-export interface HostRpcService {
-  method<P = unknown, R = unknown>(name: string, handler: (params: P, call: RpcCall) => Promise<R> | R): () => void;
-  methods(): string[];
-  broadcast(method: string, params?: unknown): void;
-}
 
 export interface WebRouteRequestLike {
   url?: string;
@@ -409,6 +392,26 @@ export interface HostWebServerService {
   registerUpgrade(route: WebUpgradeRoute): () => void;
 }
 
+export interface HostSessionModes {
+  permission: PermissionModeName;
+  agentMode: AgentModeName;
+  effective: PermissionModeName;
+}
+
+export interface HostPermissionsService {
+  modes(session: Session): HostSessionModes;
+  defaultModes(): HostSessionModes;
+  defaultModesForSession(session?: Session): HostSessionModes;
+  set(session: Session, change: { permission?: PermissionModeName; agentMode?: AgentModeName }): number;
+}
+
+export interface HostInfoService {
+  readonly version: string;
+  readonly protocolVersion: number;
+  readonly dataDir: string;
+  readonly startedAt: Date;
+}
+
 export interface BetterSidebarService {
   readonly version: string;
   registerTab(descriptor: {
@@ -435,12 +438,69 @@ export interface BetterSidebarService {
   openTab(seed: { type?: string; id?: string; path?: string }, scope?: { cwd?: string }): void;
 }
 
+export interface Events {
+  "tools/pre-execute"(call: ToolCall, env: ToolEnv): Promise<ToolDecision | undefined> | ToolDecision | undefined;
+  "tools/execute"(call: ToolCall, env: ToolEnv, next: () => Promise<ToolOutput>): Promise<ToolOutput>;
+  "tools/result"(call: ToolCall, env: ToolEnv, output: ToolOutput): void;
+  "session/created"(session: Session): void;
+  "session/event"(session: Session, event: SessionEvent): void;
+  "session/delta"(session: Session, liveSeq: number, delta: SessionDelta | AgentDelta): void;
+  "session/flush"(session: Session): Promise<void>;
+  "session/unloaded"(sessionId: string): void;
+  "session/deleted"(sessionId: string): void;
+  "agent/before-start"(session: Session): Promise<void> | void;
+  "agent/turn-start"(session: Session, turn: number): Promise<void> | void;
+  "agent/turn-end"(session: Session, turn: number): Promise<void> | void;
+  "agent/before-stop"(session: Session, context: BeforeStopContext): Promise<string | undefined> | string | undefined;
+  "agent/settled"(session: Session, outcome: RunOutcome): Promise<void>;
+  "llm/request"(request: LlmRequest, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>;
+  "llm/response"(response: LlmResponseInfo): void;
+  "llm/protocols-changed"(): void;
+  "commands/changed"(reason: string): void;
+  "mcp/changed"(): void;
+  "pricing/recorded"(record: PricingCallRecord): void;
+}
+
+export interface LoggerMessage {
+  sn: number;
+  ts: number;
+  name: string;
+  type: "error" | "info" | "warn" | "debug";
+  level: number;
+  args: unknown[];
+  fiber?: WeakRef<Fiber>;
+}
+
+export interface Exporter {
+  colors?: number | false;
+  maxLength?: number;
+  levels?: Record<string, number>;
+  formatters?: Record<string, (value: unknown, exporter: Exporter, message: LoggerMessage) => unknown>;
+  export(message: LoggerMessage): void;
+}
+
+export interface Logger {
+  exporter(exporter: Exporter): () => void;
+}
+
+export declare namespace Logger {
+  function format(exporter: Exporter, message: LoggerMessage): string;
+}
+
 export interface Context {
-  tools: HostToolsService;
-  commands: HostCommandsService;
-  systemPrompt: HostSystemPromptService;
-  rpc: HostRpcService;
+  tools: Tools;
+  commands: Commands;
+  systemPrompt: SystemPrompt;
+  rpc: RpcService;
   webServer: HostWebServerService;
+  sessions: Sessions;
+  agents: Agents;
+  llm: LlmService;
+  credentials: Credentials;
+  permissions: HostPermissionsService;
+  ui: Ui;
+  pricing: Pricing;
+  hostInfo: HostInfoService;
   contributions: ClientContributionService;
   styles: ClientStylesService;
   betterSidebar: BetterSidebarService;
@@ -454,32 +514,39 @@ export function generatePluginTypes({
   rmSync(targetDir, { recursive: true, force: true });
   mkdirSync(targetDir, { recursive: true });
 
-  // 1. Emit real `.d.ts` from `@qianji/protocol` and `@qianji/tools`.
-  emitTsDeclarations({
-    entryFile: join(repoRoot, "packages", "protocol", "src", "index.ts"),
-    rootDir: join(repoRoot, "packages", "protocol", "src"),
-    outDir: join(targetDir, "@qianji", "protocol"),
-  });
-  writeFileSync(
-    join(targetDir, "@qianji", "protocol", "package.json"),
-    `${JSON.stringify({ name: "@qianji/protocol", version: "0.0.0-qianji", types: "./index.d.ts" }, null, 2)}\n`,
-    "utf8",
-  );
-  writePkgDts(targetDir, "@pid/protocol", 'export * from "@qianji/protocol";\n');
-
-  emitTsDeclarations({
-    entryFile: join(repoRoot, "packages", "tools", "src", "index.ts"),
-    rootDir: join(repoRoot, "packages", "tools", "src"),
-    outDir: join(targetDir, "@qianji", "tools"),
-    paths: {
-      "@deepseek-ai/cordis": ["./src/types/cordis.d.ts"],
-    },
-  });
-  writeFileSync(
-    join(targetDir, "@qianji", "tools", "package.json"),
-    `${JSON.stringify({ name: "@qianji/tools", version: "0.0.0-qianji", types: "./index.d.ts" }, null, 2)}\n`,
-    "utf8",
-  );
+  // 1. Emit real `.d.ts` for all shared Host `@qianji/*` packages (and `@pid/*` aliases) in topological order.
+  const sharedPackageOrder = [
+    "protocol",
+    "kernel",
+    "llm",
+    "commands",
+    "ui",
+    "rpc",
+    "tools",
+    "system-prompt",
+    "session",
+    "agent",
+    "pricing",
+  ];
+  const emitPaths = {
+    "@deepseek-ai/cordis": ["./src/types/cordis.d.ts"],
+  };
+  for (const pkg of sharedPackageOrder) {
+    const outDir = join(targetDir, "@qianji", pkg);
+    emitTsDeclarations({
+      entryFile: join(repoRoot, "packages", pkg, "src", "index.ts"),
+      rootDir: join(repoRoot, "packages", pkg, "src"),
+      outDir,
+      paths: { ...emitPaths },
+    });
+    writeFileSync(
+      join(outDir, "package.json"),
+      `${JSON.stringify({ name: `@qianji/${pkg}`, version: "0.0.0-qianji", types: "./index.d.ts" }, null, 2)}\n`,
+      "utf8",
+    );
+    writePkgDts(targetDir, `@pid/${pkg}`, `export * from "@qianji/${pkg}";\n`);
+    emitPaths[`@qianji/${pkg}`] = [join(outDir, "index.d.ts")];
+  }
 
   // 2. Emit `@deepseek-ai/cordis` & `cordis` with merged Host + Client Context services.
   const baseCordisDts = readFileSync(join(repoRoot, "src", "types", "cordis.d.ts"), "utf8");
@@ -508,21 +575,38 @@ export interface UiToolCall {
   endedAt?: number;
 }
 
+export interface ImageContent {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
 export interface UiMessage {
   id: string;
+  entryId?: string;
   role: "user" | "assistant" | "terminal" | "notice";
   content: string;
+  noticeKind?: "compaction" | "branch";
+  images?: ImageContent[];
   timestamp: number;
   thinking?: string;
+  model?: string;
   isError?: boolean;
+  isAborted?: boolean;
   isStreaming?: boolean;
+  durationMs?: number;
   toolCalls?: UiToolCall[];
 }
 
 export interface AttachmentPayload {
+  path?: string;
+  fileName?: string;
   name?: string;
   mimeType: string;
-  data: string;
+  size?: number;
+  kind?: "image" | "text" | "file";
+  data?: string;
+  text?: string;
 }
 
 export interface SessionStats {
@@ -565,7 +649,7 @@ export interface HomeQuickActionSlotContext extends WorkbenchSlotContext {
   sendPrompt: (prompt: string) => void;
 }
 
-export type BuiltinSettingsPageId = "general" | "appearance" | "providers" | "plugins";
+export type BuiltinSettingsPageId = "general" | "appearance" | "providers" | "mcp" | "skills" | "plugins";
 
 export interface SettingsSlotContext extends WorkbenchSlotContext {
   page: string;
@@ -921,6 +1005,87 @@ export declare function openSettingsPage(pageId?: string): boolean;
 export declare function openPluginPage(pageId: string): boolean;
 export declare function useClientContributions(): Record<string, readonly unknown[]>;
 export declare const clientContributions: ClientContributionService;
+
+export type RewindMode = "both" | "conversation" | "code";
+
+export interface RewindInspection {
+  entryId: string;
+  sessionId: string;
+  userSeq: number;
+  hasCheckpoint: boolean;
+  changed: boolean;
+  files: string[];
+}
+
+export interface RewindExecutionResult {
+  ok: boolean;
+  mode: RewindMode;
+  sessionId: string;
+  toSeq: number;
+  rewindSeq?: number;
+  restoredFiles: string[];
+}
+
+export interface ComposerDraftSnapshot {
+  text: string;
+  attachments: AttachmentPayload[];
+}
+
+export interface RewindTurnSummary {
+  message: UiMessage;
+  turnNumber: number;
+  totalTurns: number;
+  subsequentMessageCount: number;
+}
+
+export interface RewindTargetSummary extends RewindTurnSummary {
+  entryId: string;
+  sessionId: string;
+  userSeq: number;
+  hasCheckpoint: boolean;
+  changed: boolean;
+  files: string[];
+}
+
+export interface PerformedRewindResult {
+  ok: true;
+  mode: RewindMode;
+  entryId: string;
+  sessionId: string;
+  turnNumber: number;
+  totalTurns: number;
+  toSeq: number;
+  rewindSeq?: number;
+  restoredFiles: string[];
+  refilledText: string;
+  refilledAttachments: AttachmentPayload[];
+  stashedDraft: ComposerDraftSnapshot | null;
+}
+
+export interface RewindControllerApi {
+  onDraftSent(listener: () => void): () => void;
+  getComposerDraft(): ComposerDraftSnapshot;
+  setComposerDraft(options: { text: string; attachments?: AttachmentPayload[]; focus?: boolean }): void;
+  listRewindableTurns(): RewindTurnSummary[];
+  inspectMessage(messageId: string): Promise<RewindTargetSummary | null>;
+  performRewind(params: {
+    message: UiMessage;
+    entryId?: string;
+    mode?: RewindMode;
+    protectDraft?: boolean;
+  }): Promise<PerformedRewindResult | null>;
+  undoBranchRewind(params: {
+    sessionId: string;
+    rewindSeq: number;
+    restoreDraft?: ComposerDraftSnapshot | null;
+  }): Promise<boolean>;
+}
+
+export declare function messageImagesToAttachments(
+  message: Pick<UiMessage, "id" | "images">,
+): AttachmentPayload[];
+export declare const rewindController: RewindControllerApi;
+
 export type ClientPluginApply<C = Record<string, unknown>> = (ctx: Context, config: C) => void;
 `;
   writePkgDts(targetDir, "@qianji/client", clientSdkDts);
@@ -952,6 +1117,7 @@ export declare const SIDEBAR_SERVICE_VERSION: string;
           module: "ESNext",
           moduleResolution: "bundler",
           jsx: "react-jsx",
+          allowImportingTsExtensions: true,
           strict: true,
           skipLibCheck: true,
           noEmit: true,

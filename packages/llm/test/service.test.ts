@@ -226,6 +226,77 @@ describe("LlmService", () => {
     dispose();
     expect(ctx.llm.listProviders()).toEqual([]);
   });
+
+  it("applies bounded deterministic jitter on backoff and bypasses jitter for Retry-After", async () => {
+    for (const [sample, attempt1Expected, attempt2Expected] of [
+      [0, 8, 16],
+      [0.5, 10, 20],
+      [1, 12, 24],
+    ] as const) {
+      const c = new Context();
+      await c.plugin(Credentials);
+      await c.plugin(LlmService, { maxAttempts: 3, baseDelayMs: 10, jitterRatio: 0.2, random: () => sample });
+      try {
+        expect(c.llm.retryDelay(1)).toBe(attempt1Expected);
+        expect(c.llm.retryDelay(2)).toBe(attempt2Expected);
+
+        const adapter = scripted(() => throws(overloaded), () => throws(overloaded), ok);
+        c.llm.registerAdapter(info, adapter);
+        const retries: Array<Extract<StreamChunk, { type: "retry" }>> = [];
+        for await (const chunk of c.llm.stream(request)) {
+          if (chunk.type === "retry") retries.push(chunk);
+        }
+        expect(retries.map((r) => r.delayMs)).toEqual([attempt1Expected, attempt2Expected]);
+      } finally {
+        await c.fiber.dispose();
+      }
+    }
+
+    const retryAfterCtx = new Context();
+    await retryAfterCtx.plugin(Credentials);
+    await retryAfterCtx.plugin(LlmService, { maxAttempts: 2, baseDelayMs: 500, jitterRatio: 0.5, random: () => 0 });
+    try {
+      expect(retryAfterCtx.llm.retryDelay(1, 15)).toBe(15);
+      expect(retryAfterCtx.llm.retryDelay(1, 120_000)).toBe(60_000);
+      expect(retryAfterCtx.llm.retryDelay(1, -10)).toBe(0);
+
+      const rateLimited = new LlmError({ kind: "rate-limit", message: "slow down", retryable: true, retryAfter: 0.015 });
+      retryAfterCtx.llm.registerAdapter(info, scripted(() => throws(rateLimited), ok));
+      const retries: Array<Extract<StreamChunk, { type: "retry" }>> = [];
+      for await (const chunk of retryAfterCtx.llm.stream(request)) {
+        if (chunk.type === "retry") retries.push(chunk);
+      }
+      expect(retries.map((r) => r.delayMs)).toEqual([15]);
+    } finally {
+      await retryAfterCtx.fiber.dispose();
+    }
+  });
+
+  it("does not reject LlmService.stream() when an llm/response listener throws", async () => {
+    const ctx = await setup();
+    ctx.llm.registerAdapter(info, scripted(ok));
+    ctx.on("llm/response", () => {
+      throw new Error("listener exploded");
+    });
+
+    const result = await assemble(ctx.llm.stream(request));
+    expect(result.reason).toBe("stop");
+    expect(result.message.content).toEqual([{ type: "text", text: "hello" }]);
+  });
+
+  it("steps down reasoning effort when retrying empty response streams", async () => {
+    const ctx = await setup();
+    const emptyErr = new LlmError({ kind: "server", message: "fake returned an empty response stream (0 output tokens)", retryable: true });
+    const adapter = scripted(() => throws(emptyErr), () => throws(emptyErr), ok);
+    ctx.llm.registerAdapter(info, adapter);
+
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of ctx.llm.stream({ ...request, effort: "xhigh" })) chunks.push(chunk);
+    expect(adapter.calls.map((c) => c.effort)).toEqual(["xhigh", "high", "medium"]);
+    const retries = chunks.filter((c): c is Extract<StreamChunk, { type: "retry" }> => c.type === "retry");
+    expect(retries.map((r) => r.effort)).toEqual(["high", "medium"]);
+    expect(chunks.at(-1)).toEqual({ type: "finish", reason: "stop" });
+  });
 });
 
 describe("Credentials", () => {
@@ -280,5 +351,41 @@ describe("Credentials", () => {
     expect(isSecretRef({ env: "X", value: "y" })).toBe(false);
     expect(isSecretRef({ key: "x" })).toBe(false);
     expect(ctx.credentials.describe({ value: "sk-secret" })).not.toContain("sk-secret");
+  });
+
+  it("supports get, set, and delete on a writable store and rejects writes on a read-only store", async () => {
+    const ctx = await setup();
+    expect(ctx.credentials.writable).toBe(false);
+    await expect(ctx.credentials.set("im/bot", "tok")).rejects.toThrow("No writable secret store");
+    await expect(ctx.credentials.delete("im/bot")).rejects.toThrow("No writable secret store");
+
+    const disposeReadOnly = ctx.credentials.registerStore(async () => "ro");
+    expect(ctx.credentials.writable).toBe(false);
+    expect(await ctx.credentials.get(" im/bot ")).toBe("ro");
+    await expect(ctx.credentials.set("im/bot", "tok")).rejects.toThrow("No writable secret store");
+    await expect(ctx.credentials.delete("im/bot")).rejects.toThrow("No writable secret store");
+    disposeReadOnly();
+
+    const backing = new Map<string, string>();
+    const disposeWritable = ctx.credentials.registerStore({
+      resolve: async (id) => backing.get(id),
+      set: async (id, value) => {
+        backing.set(id, value);
+      },
+      delete: async (id) => backing.delete(id),
+    });
+    expect(ctx.credentials.writable).toBe(true);
+    await expect(ctx.credentials.get("   ")).rejects.toThrow("Secret id must be non-empty");
+    await expect(ctx.credentials.set("   ", "v")).rejects.toThrow("Secret id must be non-empty");
+    await expect(ctx.credentials.set("im/bot", "")).rejects.toThrow("Secret value must be non-empty");
+    await expect(ctx.credentials.delete("   ")).rejects.toThrow("Secret id must be non-empty");
+
+    await ctx.credentials.set(" im/bot ", "secret-123");
+    expect(await ctx.credentials.get("im/bot")).toBe("secret-123");
+    expect(await ctx.credentials.resolve({ secret: "im/bot" })).toBe("secret-123");
+    expect(await ctx.credentials.delete("im/bot")).toBe(true);
+    expect(await ctx.credentials.delete("im/bot")).toBe(false);
+    expect(await ctx.credentials.get("im/bot")).toBeUndefined();
+    disposeWritable();
   });
 });

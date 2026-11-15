@@ -122,9 +122,10 @@ export function PrimarySidebarShell({
                 notifications={notifications}
                 cwd={newTask ? draftWorkspace : cwd}
                 newTaskActive={newTask && hubView === null}
-                activeHub={hubView === "scheduled" ? "scheduled" : null}
+                activeHub={hubView === "scheduled" ? "scheduled" : hubView === "plugins" ? "plugins" : null}
                 onNewSession={() => navigateFromSidebar({ kind: "home", workspace: draftWorkspace || cwd })}
                 onOpenScheduled={() => navigateFromSidebar({ kind: "hub", view: "scheduled" })}
+                onOpenPlugins={() => navigateFromSidebar({ kind: "hub", view: "plugins" })}
                 onOpenSession={(session) => navigateFromSidebar({ kind: "session", cwd: session.cwd, file: session.file })}
                 onOpenNotification={(notification) => {
                   markNotificationRead(notification.id);

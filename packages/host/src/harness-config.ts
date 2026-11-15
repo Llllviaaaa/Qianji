@@ -5,10 +5,10 @@
  * {
  *   "permissions": { "defaultPermission": "ask", "shellAllowPrefixes": ["git status"], "toolRules": [] },
  *   "hooks": { "hooks": [], "inheritEnvironment": false },
- *   "memory": { "enabled": true },
+ *   "memory": { "enabled": true, "inlineMaxChars": 4000 },
  *   "plan": { "enabled": true },
  *   "mcp": { "servers": [], "confirmTools": true },
- *   "subagents": { "enabled": true, "concurrency": 3 },
+ *   "subagents": { "enabled": true, "concurrency": 3, "allowShell": true },
  *   "computer": { "enabled": true, "helper": "C:/.../qianji.exe", "confirmActions": true },
  *   "browser": { "enabled": true, "headless": true, "confirmActions": true, "profileDir": "…", "idleMinutes": 10 },
  *   "schedule": { "enabled": true }
@@ -30,8 +30,8 @@ import type { Config as SubagentsConfig } from "@qianji/subagents";
 export interface HarnessConfig {
   permissions: PermissionsConfig;
   hooks: HooksConfig;
-  /** `file` defaults to `<dataDir>/memory.md`; `projectEnabled` toggles `<cwd>/.pid/memory.md` independently. */
-  memory: { enabled: boolean; projectEnabled?: boolean; file?: string };
+  /** `file` defaults to `<dataDir>/memory.md`; `projectEnabled` toggles `<cwd>/.qianji/memory.md` independently; `inlineMaxChars` bounds prompt inlining. */
+  memory: { enabled: boolean; projectEnabled?: boolean; file?: string; inlineMaxChars?: number };
   /** AGENTS.md / CLAUDE.md in the system prompt. */
   contextFiles: { enabled: boolean };
   plan: { enabled: boolean };
@@ -110,6 +110,9 @@ function applyHarnessLayer(config: HarnessConfig, file: string): string[] {
       enabled: memory.enabled !== false,
       ...(typeof memory.projectEnabled === "boolean" ? { projectEnabled: memory.projectEnabled } : {}),
       ...(typeof memory.file === "string" ? { file: memory.file } : {}),
+      ...(typeof memory.inlineMaxChars === "number" && Number.isFinite(memory.inlineMaxChars) && memory.inlineMaxChars > 0
+        ? { inlineMaxChars: Math.floor(memory.inlineMaxChars) }
+        : {}),
     };
   }
   const contextFiles = section("contextFiles");

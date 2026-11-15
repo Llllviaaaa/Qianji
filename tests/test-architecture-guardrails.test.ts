@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { ESLint } from "eslint";
@@ -315,6 +315,115 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
         diagnostics,
         [],
         `Reference doc ts/tsx snippets failed tsc --noEmit against plugin-types:\n${diagnostics.join("\n")}`,
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("compiles a host IM bridge plugin using sessions, agents, ui.attach, credentials, and events against offline plugin-types", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "qj-guardrail-im-plugin-"));
+    try {
+      const pluginTypesDir = join(tempRoot, "plugin-types");
+      generatePluginTypes({ repoRoot: REPO_ROOT, targetDir: pluginTypesDir });
+      const pluginDir = join(tempRoot, "im-bridge");
+      mkdirSync(pluginDir, { recursive: true });
+
+      writeFileSync(
+        join(pluginDir, "package.json"),
+        `${JSON.stringify(
+          {
+            name: "qianji-plugin-im-bridge-check",
+            version: "0.1.0",
+            description: "Typecheck fixture for IM bridge Host plugin APIs",
+            qianji: {
+              id: "im-bridge-check",
+              name: "IM Bridge Check",
+              host: "./index.ts",
+              inject: ["sessions", "agents", "llm", "credentials", "permissions", "ui"],
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      writeFileSync(
+        join(pluginDir, "index.ts"),
+        `import type { Context } from "@deepseek-ai/cordis";
+
+export const name = "im-bridge-check";
+export const inject = ["sessions", "agents", "llm", "credentials", "permissions", "ui"];
+
+export async function apply(ctx: Context): Promise<void> {
+  const providers = ctx.llm.listProviders();
+  for (const provider of providers) {
+    const models = await ctx.llm.listModels(provider.id);
+    void models[0]?.thinkingLevels;
+  }
+
+  const session = ctx.sessions.create({
+    cwd: ".",
+    model: { provider: "deepseek", model: "deepseek-chat" },
+    effort: "medium",
+  });
+  session.setModel({ provider: "deepseek", model: "deepseek-reasoner" });
+  session.setEffort("high");
+  ctx.permissions.set(session, { permission: "ask", agentMode: "agent" });
+
+  const userEvent = ctx.agents.prompt(session, [{ type: "text", text: "hello" }]);
+  if (ctx.agents.status(session.id).running) {
+    ctx.agents.steer(session, [{ type: "text", text: "steer" }]);
+    ctx.agents.followUp(session, [{ type: "text", text: "followUp" }]);
+  }
+  void userEvent.seq;
+  void ctx.agents.compact(session);
+
+  ctx.on("session/delta", (_s, _seq, delta) => {
+    void delta.type;
+  });
+  ctx.on("session/event", (_s, event) => {
+    void event.type;
+  });
+  ctx.on("agent/settled", async (_s, outcome) => {
+    void outcome;
+  });
+  ctx.on("tools/pre-execute", (call) => {
+    if (call.name === "bash") return { allow: true };
+    return undefined;
+  });
+
+  ctx.ui.attach({
+    request: (pending) => {
+      if (pending.request.kind === "select") {
+        ctx.ui.respond(pending.requestId, pending.request.options[0]);
+      }
+    },
+    cancel: () => {},
+    notify: () => {},
+  });
+
+  await ctx.credentials.set("im/bot-token", "secret");
+  await ctx.credentials.get("im/bot-token");
+  await ctx.credentials.delete("im/bot-token");
+}
+`,
+        "utf8",
+      );
+
+      writeExternalPluginTsconfig(pluginDir, pluginTypesDir, ["index.ts"]);
+      const diagnostics = runProgrammaticTypecheck(pluginDir);
+      assert.deepEqual(
+        diagnostics,
+        [],
+        `IM bridge plugin failed tsc --noEmit against plugin-types:\n${diagnostics.join("\n")}`,
+      );
+      const verified = await verifyPluginDirectory(pluginDir);
+      assert.equal(
+        verified.ok,
+        true,
+        `IM bridge plugin failed verifyPluginDirectory: ${verified.errors.join("; ")}`,
       );
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });

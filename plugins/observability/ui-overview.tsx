@@ -72,6 +72,11 @@ function buildIncidentPrompt(item: CrashRecord): string {
     `- 发生平面: ${PLANE_LABELS[item.plane]} (${item.plane})`,
     `- 异常类型: ${CRASH_KIND_LABELS[item.kind]} (${item.kind})`,
     `- 时间戳: ${item.timestamp}`,
+    ...((item.occurrences ?? 1) > 1
+      ? [
+          `- 重复次数: ${item.occurrences} 次${item.firstSeenAt ? `（首次发生于 ${item.firstSeenAt}）` : ""}`,
+        ]
+      : []),
     ...(item.pluginId ? [`- 归因插件: ${item.pluginId}`] : []),
     ...(item.exitCode !== undefined ? [`- 退出码: ${item.exitCode}`] : []),
     `- 摘要: ${item.summary}`,
@@ -231,6 +236,14 @@ export function OverviewTab({
                   {isUnread && <span className="obs-dot danger" title="未读异常" />}
                   <span className="obs-badge info">{PLANE_LABELS[item.plane]}</span>
                   <span className="obs-badge danger">{CRASH_KIND_LABELS[item.kind]}</span>
+                  {(item.occurrences ?? 1) > 1 && (
+                    <span
+                      className="obs-badge warn mono"
+                      title={item.firstSeenAt ? `首次发生于 ${formatTime(item.firstSeenAt)}` : undefined}
+                    >
+                      ×{item.occurrences}
+                    </span>
+                  )}
                   {item.pluginId && (
                     <button
                       type="button"

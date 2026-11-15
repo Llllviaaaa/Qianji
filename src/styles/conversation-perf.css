@@ -1,0 +1,15 @@
+/*
+ * Settled conversation turn CSS virtualization.
+ *
+ * Applies content-visibility: auto to settled assistant turns in the main
+ * transcript while excluding actively streaming, nav-landed, or interactive
+ * widget turns. Browsers natively keep focused/selected subtrees rendered under
+ * content-visibility: auto while preserving their last-remembered intrinsic size;
+ * toggling a focus-within exclusion on mousedown would discard unrecorded height
+ * and shift layout mid-click.
+ */
+
+.codex-shot .conversation article.dshc-turn:not([data-turn-open]):not([data-dsh-claude-turn-nav-landed]):not(:has(.dshc-turn-widgets)):not(:has(.dshc-answer[data-streaming])) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}

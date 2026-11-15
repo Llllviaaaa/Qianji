@@ -271,4 +271,133 @@ describe("openai-compat adapter", () => {
       "high",
     ]);
   });
+
+  it("includes reasoning_content on intra-turn tool-call loops after the last user turn and falls back on 400", async () => {
+    const { ctx, server } = await setup();
+    const intraTurnRequest: LlmRequest = {
+      ...request,
+      messages: [
+        { role: "user", content: [{ type: "text", text: "first turn" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "old turn reasoning" },
+            { type: "text", text: "Done first." },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "inspect now" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "need read_file" },
+            { type: "tool-call", id: "call_2", name: "read", arguments: { path: "b.ts" } },
+          ],
+        },
+        { role: "tool-result", callId: "call_2", content: [{ type: "text", text: "ok" }], isError: false },
+      ],
+    };
+
+    server.reply({ sse: fixture("reasoning-text.sse") });
+    await assemble(ctx.llm.stream(intraTurnRequest));
+    const sentMessages = (server.requests[0].body as { messages: Array<Record<string, unknown>> }).messages;
+    expect(sentMessages[2]).not.toHaveProperty("reasoning_content");
+    expect(sentMessages[4]).toMatchObject({
+      role: "assistant",
+      reasoning_content: "need read_file",
+      content: null,
+      tool_calls: [{ id: "call_2" }],
+    });
+
+    // Strict relay rejecting `reasoning_content` gets an automatic retry without it, and remembers the model.
+    server.reply(
+      { status: 400, json: { error: { message: "Extra inputs are not permitted: reasoning_content" } } },
+      { sse: fixture("reasoning-text.sse") },
+    );
+    const recovered = await assemble(ctx.llm.stream(intraTurnRequest));
+    expect(recovered.reason).toBe("stop");
+    expect((server.requests[2].body as { messages: Array<Record<string, unknown>> }).messages[4]).not.toHaveProperty("reasoning_content");
+
+    server.reply({ sse: fixture("reasoning-text.sse") });
+    await assemble(ctx.llm.stream(intraTurnRequest));
+    expect((server.requests[3].body as { messages: Array<Record<string, unknown>> }).messages[4]).not.toHaveProperty("reasoning_content");
+  });
+
+  it("merges consecutive user messages, skips empty assistant messages, and normalizes relay tool_calls quirks", async () => {
+    const { ctx, server } = await setup();
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{"tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\\"path\\":\\"a.ts\\"}"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"id":"c2","type":"function","function":{"name":"ls","arguments":"{}"}}]}}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const res = await assemble(ctx.llm.stream({
+      ...request,
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Compacted summary." }] },
+        { role: "assistant", content: [{ type: "thinking", text: "aborted before output" }] },
+        { role: "user", content: [{ type: "text", text: "Actual prompt." }] },
+      ],
+    }));
+
+    expect((server.requests[0].body as { messages: Array<Record<string, unknown>> }).messages).toEqual([
+      { role: "system", content: "Be brief." },
+      { role: "user", content: "Compacted summary.\n\nActual prompt." },
+    ]);
+    expect(res.reason).toBe("tool-use");
+    expect(res.message.content).toEqual([
+      { type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } },
+      { type: "tool-call", id: "c2", name: "ls", arguments: {} },
+    ]);
+  });
+
+  it("retries empty 0-token stop streams and MALFORMED_FUNCTION_CALL finish reasons while mapping SAFETY to refusal", async () => {
+    const { ctx, server } = await setup();
+
+    server.reply(
+      {
+        sse: [
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          'data: {"usage":{"prompt_tokens":120,"completion_tokens":0}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+      },
+      { sse: fixture("reasoning-text.sse") },
+    );
+    const emptyRecovered = await assemble(ctx.llm.stream(request));
+    expect(emptyRecovered.reason).toBe("stop");
+    expect(emptyRecovered.message.content).toEqual([
+      { type: "thinking", text: "The user wants a greeting." },
+      { type: "text", text: "Hello there!" },
+    ]);
+    expect(server.requests).toHaveLength(2);
+
+    server.reply(
+      {
+        sse: [
+          'data: {"choices":[{"delta":{},"finish_reason":"MALFORMED_FUNCTION_CALL"}]}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+      },
+      { sse: fixture("reasoning-text.sse") },
+    );
+    const malformedRecovered = await assemble(ctx.llm.stream(request));
+    expect(malformedRecovered.reason).toBe("stop");
+    expect(server.requests).toHaveLength(4);
+
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{},"finish_reason":"SAFETY"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const safetyRefusal = await assemble(ctx.llm.stream(request));
+    expect(safetyRefusal.reason).toBe("refusal");
+    expect(server.requests).toHaveLength(5);
+  });
 });

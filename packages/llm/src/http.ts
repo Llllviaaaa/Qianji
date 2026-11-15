@@ -4,6 +4,18 @@ import { parseSse, type SseEvent } from "./sse.ts";
 /** Maximum silence while waiting for response headers or the next SSE byte chunk before resetting the connection. */
 export const DEFAULT_SSE_IDLE_TIMEOUT_MS = 90_000;
 
+const freshConnectionSignals = new WeakSet<AbortSignal>();
+
+/** Marks requests tied to `signal` to request `Connection: close` rather than reusing stale keep-alive sockets. */
+export function markFreshConnectionSignal(signal: AbortSignal): void {
+  freshConnectionSignals.add(signal);
+}
+
+function hasHeaderCaseInsensitive(headers: Record<string, string>, target: string): boolean {
+  const lower = target.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === lower);
+}
+
 async function* withIdleTimeout(
   body: AsyncIterable<Uint8Array>,
   idleTimeoutMs: number,
@@ -64,9 +76,17 @@ export async function* postSse(
   try {
     let response: Response;
     try {
+      const requestHeaders: Record<string, string> = {
+        "content-type": "application/json",
+        accept: "text/event-stream",
+        ...headers,
+      };
+      if (freshConnectionSignals.has(signal) && !hasHeaderCaseInsensitive(headers, "connection")) {
+        requestHeaders.connection = "close";
+      }
       response = await fetch(url, {
         method: "POST",
-        headers: { "content-type": "application/json", accept: "text/event-stream", ...headers },
+        headers: requestHeaders,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
