@@ -197,6 +197,15 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
         contextFiles: config.contextFiles.enabled,
         instructions: config.prompt.instructions,
         bundledSkillsDirs: options.bundledSkillsDirs ?? (() => resolveDesktopBundledSkillRoots()),
+        pluginSkills: (cwd?: string) => {
+          const manager = options.pluginManager?.();
+          if (!manager) return [];
+          return manager.activeSkillRoots(cwd).map((root) => ({
+            pluginId: root.pluginId,
+            dir: root.dir,
+            scope: root.tier === "workspace" ? "project" : root.tier === "builtin" ? "builtin" : "user",
+          }));
+        },
       },
     },
     {
@@ -498,6 +507,7 @@ export function builtinPluginDefinitions(
       hasClient: false,
       plugin: toolBash,
       inject: ["tools"],
+      config: { spillDir: join(dataDir, "spill") },
     },
     {
       id: "checkpoints",

@@ -130,6 +130,7 @@ export async function runHeadless(argv: readonly string[], out: NodeJS.WritableS
   host.ctx.logger.exporter(exporter);
   await host.start();
   const reportedProblems = new Set<string>();
+  const managerRef: { current: PluginManager | undefined } = { current: undefined };
   const pluginManager = new PluginManager(host.ctx, {
     dataDir: options.dataDir,
     version: "headless",
@@ -145,11 +146,13 @@ export async function runHeadless(argv: readonly string[], out: NodeJS.WritableS
       const computerHelper = process.env.QIANJI_COMPUTER_HELPER || process.env.PID_COMPUTER_HELPER;
       return builtinPluginDefinitions(options.dataDir, config, {
         permission,
+        pluginManager: () => managerRef.current,
         ...(computerHelper ? { computerHelper } : {}),
         ...(codec === undefined ? {} : { codec }),
       });
     },
   });
+  managerRef.current = pluginManager;
   await pluginManager.sync({ workspace: options.cwd });
 
   const { ctx } = host;

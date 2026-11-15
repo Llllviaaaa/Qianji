@@ -170,4 +170,42 @@ describe("@qianji/llm-openai-responses adapter", () => {
       reasoningTokens: 110,
     });
   });
+
+  it("normalizes tool IDs identically across function_call and function_call_output, drops orphans, and sanitizes broken args", () => {
+    const longId = "toolu/gemini.long:" + "k".repeat(70);
+    const body = openaiResponses.buildRequestBody({
+      provider: "openai",
+      model: "gpt-5.2",
+      messages: [
+        { role: "tool-result", callId: "orphan_resp", isError: false, content: [{ type: "text", text: "ignore" }] },
+        { role: "user", content: [{ type: "text", text: "run" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "Foreign reasoning", signature: "gem-sig", signatureProvider: "gemini" },
+            { type: "text", text: "Calling tool." },
+            { type: "tool-call", id: longId, name: "bash", arguments: { __invalidJson: "{bad" } },
+          ],
+        },
+        { role: "tool-result", callId: longId, isError: false, content: [{ type: "text", text: "ok" }] },
+      ],
+    });
+
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input).toHaveLength(4);
+    expect(input[0]).toEqual({ role: "user", content: [{ type: "input_text", text: "run" }] });
+    expect(input[1]).toEqual({ role: "assistant", content: [{ type: "output_text", text: "Calling tool." }] });
+
+    const fc = input[2] as { type: string; call_id: string; name: string; arguments: string };
+    expect(fc.type).toBe("function_call");
+    expect(fc.call_id.length).toBeLessThanOrEqual(64);
+    expect(fc.call_id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(fc.arguments).toBe("{}");
+
+    expect(input[3]).toEqual({
+      type: "function_call_output",
+      call_id: fc.call_id,
+      output: "ok",
+    });
+  });
 });

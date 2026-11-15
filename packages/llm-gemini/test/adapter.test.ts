@@ -206,7 +206,7 @@ describe("@qianji/llm-gemini adapter", () => {
     expect(seenUrl).toBe("/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse");
     expect(assembled.reason).toBe("tool-use");
     expect(assembled.message.content).toEqual([
-      { type: "thinking", text: "Let me check git status.", signature: "sig-abc" },
+      { type: "thinking", text: "Let me check git status.", signature: "sig-abc", signatureProvider: "gemini" },
       { type: "tool-call", id: "fc-1", name: "bash", arguments: { command: "git status" } },
     ]);
     expect(assembled.usage).toEqual({
@@ -260,5 +260,60 @@ describe("@qianji/llm-gemini adapter", () => {
     expect(exhausted.reason).toBe("error");
     expect(exhausted.error?.kind).toBe("server");
     expect(exhausted.error?.message).toContain("finishReason=OTHER");
+  });
+
+  it("strips foreign Anthropic signatures, normalizes tool IDs identically, drops orphans, and sanitizes broken args", () => {
+    const longRawId = "toolu/claude." + "z".repeat(70);
+    const body = gemini.buildRequestBody({
+      provider: "google",
+      model: "gemini-2.5-pro",
+      messages: [
+        { role: "tool-result", callId: "orphan-call", isError: false, content: [{ type: "text", text: "stale" }] },
+        { role: "user", content: [{ type: "text", text: "continue" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "Claude reasoning", signature: "ant-secret-sig", signatureProvider: "anthropic" },
+            { type: "text", text: "Running tool." },
+            { type: "tool-call", id: longRawId, name: "read_file", arguments: { __invalidJson: "{bad" } },
+          ],
+        },
+        { role: "tool-result", callId: longRawId, isError: false, content: [{ type: "text", text: "file text" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "Gemini reasoning", signature: "gem-sig-1", signatureProvider: "gemini" },
+            { type: "text", text: "Done." },
+          ],
+        },
+      ],
+    });
+
+    const contents = body.contents as Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+    expect(contents).toHaveLength(4);
+
+    const firstModelParts = contents[1]?.parts ?? [];
+    expect(firstModelParts).toHaveLength(2);
+    expect(firstModelParts[0]).toEqual({ text: "Running tool." });
+    const functionCall = (firstModelParts[1]?.functionCall ?? {}) as Record<string, unknown>;
+    expect(firstModelParts[1]?.thoughtSignature).toBeUndefined();
+    expect(typeof functionCall.id).toBe("string");
+    expect((functionCall.id as string).length).toBeLessThanOrEqual(64);
+    expect(functionCall.id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(functionCall.name).toBe("read_file");
+    expect(functionCall.args).toEqual({});
+
+    expect(contents[2]).toEqual({
+      role: "user",
+      parts: [{ functionResponse: { id: functionCall.id, name: "read_file", response: { output: "file text" } } }],
+    });
+
+    expect(contents[3]).toEqual({
+      role: "model",
+      parts: [
+        { text: "Gemini reasoning", thought: true, thoughtSignature: "gem-sig-1" },
+        { text: "Done." },
+      ],
+    });
   });
 });

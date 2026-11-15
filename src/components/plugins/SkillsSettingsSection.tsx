@@ -19,7 +19,8 @@ export interface SkillsSettingsSectionProps {
 
 const NO_SKILLS: SkillInfo[] = [];
 
-function scopeBadgeLabel(scope: SkillScope, readOnly?: boolean): string {
+function scopeBadgeLabel(scope: SkillScope, readOnly?: boolean, pluginId?: string): string {
+  if (pluginId) return `插件 · ${pluginId}`;
   if (scope === "builtin") return "内置只读";
   if (scope === "project") return "项目级";
   return readOnly ? "全局只读" : "全局用户";
@@ -58,7 +59,7 @@ export function SkillsSettingsSection({ cwd, search, onNotify, onCloseSettings }
     return skills.filter((item) => {
       if (scopeFilter !== "all" && item.scope !== scopeFilter) return false;
       if (needle === "") return true;
-      return `${item.name} ${item.description} ${item.path}`.toLowerCase().includes(needle);
+      return `${item.name} ${item.description} ${item.pluginId ?? ""} ${item.path}`.toLowerCase().includes(needle);
     });
   }, [skills, scopeFilter, needle]);
 
@@ -282,7 +283,7 @@ export function SkillsSettingsSection({ cwd, search, onNotify, onCloseSettings }
                     <div className="skill-item-title-row">
                       <strong>{skill.name}</strong>
                       <span className={`skill-scope-badge${skill.scope === "project" ? " project" : ""}`}>
-                        {scopeBadgeLabel(skill.scope, skill.readOnly)}
+                        {scopeBadgeLabel(skill.scope, skill.readOnly, skill.pluginId)}
                       </span>
                       <span className="skill-slash-tag">/skill:{skill.name}</span>
                       {!skill.enabled && <span className="skill-disabled-badge">已停用</span>}
@@ -350,7 +351,9 @@ export function SkillsSettingsSection({ cwd, search, onNotify, onCloseSettings }
                     <div className="skill-editor-footer">
                       {isReadOnly ? (
                         <small className="skill-item-path">
-                          内置技能随千机版本自动升级；如需定制，可在全局或项目目录创建同名技能覆盖。
+                          {skill.pluginId
+                            ? `由插件 "${skill.pluginId}" 随包提供（只读）；如需覆盖，可在全局或项目目录创建同名技能。`
+                            : "内置技能随千机版本自动升级；如需定制，可在全局或项目目录创建同名技能覆盖。"}
                         </small>
                       ) : confirmDeletePath === skill.path ? (
                         <div className="skill-delete-confirm">

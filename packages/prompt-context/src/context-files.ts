@@ -183,6 +183,7 @@ export interface ExpandImportsOptions {
   visited?: Set<string>;
   depth?: number;
   budget?: { remaining: number };
+  onDependency?: (filePath: string) => void;
 }
 
 function isBlockedImportTarget(resolvedPath: string): boolean {
@@ -259,6 +260,7 @@ function resolveImportCandidate(
   sourceDir: string,
   isGlobalSource: boolean,
   boundaryDir: string,
+  onDependency?: (filePath: string) => void,
 ): string | undefined {
   let resolved: string | undefined;
   let effectiveBoundary = boundaryDir;
@@ -267,14 +269,26 @@ function resolveImportCandidate(
     const home = homedir();
     resolved = resolve(home, candidate.slice(2));
     effectiveBoundary = home;
+    if (isPathInside(resolved, effectiveBoundary) && !isBlockedImportTarget(resolved)) {
+      onDependency?.(resolved);
+    }
   } else if (candidate.startsWith("./") || candidate.startsWith("../")) {
     resolved = resolve(sourceDir, candidate);
+    if (isPathInside(resolved, effectiveBoundary) && !isBlockedImportTarget(resolved)) {
+      onDependency?.(resolved);
+    }
   } else {
     const localCandidate = resolve(sourceDir, candidate);
+    if (isPathInside(localCandidate, effectiveBoundary) && !isBlockedImportTarget(localCandidate)) {
+      onDependency?.(localCandidate);
+    }
     if (isExistingFile(localCandidate)) {
       resolved = localCandidate;
     } else {
       const rootCandidate = resolve(boundaryDir, candidate);
+      if (isPathInside(rootCandidate, effectiveBoundary) && !isBlockedImportTarget(rootCandidate)) {
+        onDependency?.(rootCandidate);
+      }
       if (isExistingFile(rootCandidate)) {
         resolved = rootCandidate;
       }
@@ -373,7 +387,13 @@ export function expandContextImports(
     const sourceDir = dirname(absSource);
     for (const token of tokens) {
       if (budget.remaining <= 0) break;
-      const resolved = resolveImportCandidate(token, sourceDir, isGlobalSource, boundaryDir);
+      const resolved = resolveImportCandidate(
+        token,
+        sourceDir,
+        isGlobalSource,
+        boundaryDir,
+        options.onDependency,
+      );
       if (resolved === undefined) continue;
       const canonicalKey = normalizeComparePath(safeRealpath(resolved));
       if (visited.has(canonicalKey)) continue;
@@ -386,6 +406,7 @@ export function expandContextImports(
         visited,
         depth: depth + 1,
         budget,
+        ...(options.onDependency === undefined ? {} : { onDependency: options.onDependency }),
       });
       if (expandedChild !== "") {
         blocks.push(`<imported-file path="${resolved}">\n${expandedChild}\n</imported-file>`);

@@ -46,25 +46,15 @@
   overflow-x: auto;
 }
 
-/* ── Dedicated MCP & Skills Settings Pages ─────────────────────────── */
+/* ── Core Extension Drawers (Skills & MCP) ────────────────────────── */
 
-.mcp-page-stack,
-.skills-page-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.skills-drawer-search {
+  flex: 1 1 220px;
+  max-width: 320px;
 }
 
-.skills-page-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.skills-page-header .plugins-search-box {
-  flex: 1 1 280px;
+.mcp-drawer-inspector-wrap {
+  margin-top: 10px;
 }
 
 .mcp-overview-card,

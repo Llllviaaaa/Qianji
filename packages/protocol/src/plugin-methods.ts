@@ -64,6 +64,8 @@ export interface PluginInfo {
   hasHost: boolean;
   /** True when the plugin declares a client UI bundle. */
   hasClient: boolean;
+  /** True when a disk-backed plugin provides a companion `skills/` directory. */
+  hasSkills?: boolean;
   /** Relative URL path on the Host WebServer (`/plugins/<encodedId>/client.js`) when `hasClient` is true. */
   clientPath?: string;
   /** Content revision hash of the client bundle, when `hasClient` is true; changes trigger UI HMR. */

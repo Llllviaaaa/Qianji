@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import type { McpServerStatus, PluginInfo, PluginMutationResult } from "@qianji/protocol";
+import type { McpServerStatus, PluginInfo, PluginMutationResult, SkillInfo } from "@qianji/protocol";
 import { Check } from "lucide-react";
 import { pluginClient } from "../../lib/pluginClient";
 import type { AppSettings } from "../../types";
@@ -18,13 +18,14 @@ export interface PluginCardDrawerProps {
   mcpReconnecting: boolean;
   onReconnectMcp: (serverId?: string) => void;
   onMcpServersUpdated: () => void;
+  skills?: readonly SkillInfo[];
   onNotify: (notice: Notice) => void;
   configDraft: string;
   onChangeConfigDraft: (next: string) => void;
   onCloseDrawer: () => void;
   onSaveConfig: (plugin: PluginInfo) => void;
   onRunTask: (task: { run: () => Promise<PluginMutationResult>; label: string }) => void;
-  onOpenMcpSection?: () => void;
+  onCloseSettings?: () => void;
 }
 
 export function PluginCardDrawer({
@@ -38,13 +39,14 @@ export function PluginCardDrawer({
   mcpReconnecting,
   onReconnectMcp,
   onMcpServersUpdated,
+  skills,
   onNotify,
   configDraft,
   onChangeConfigDraft,
   onCloseDrawer,
   onSaveConfig,
   onRunTask,
-  onOpenMcpSection,
+  onCloseSettings,
 }: PluginCardDrawerProps) {
   const isExternal = plugin.tier === "user" || plugin.tier === "workspace";
   const isStructuredCore = !isExternal
@@ -73,8 +75,9 @@ export function PluginCardDrawer({
           mcpReconnecting={mcpReconnecting}
           onReconnectMcp={onReconnectMcp}
           onMcpServersUpdated={onMcpServersUpdated}
+          skills={skills}
           onNotify={onNotify}
-          onOpenMcpSection={onOpenMcpSection}
+          onCloseSettings={onCloseSettings}
         />
 
         <details className="plugin-raw-json-details">

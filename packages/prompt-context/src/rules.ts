@@ -4,9 +4,10 @@
  * activation for glob rules and nested subdirectory context files.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import "@qianji/tools";
+import { getCachedAlwaysRuleBlocks, getCachedDiscoveredRules } from "./cache.ts";
 import {
   expandContextImports,
   findProjectBoundary,
@@ -47,8 +48,13 @@ const PROJECT_RULE_DIRS = [
   [".qianji", "rules"],
 ] as const;
 
-function walkRuleFiles(rootDir: string, prefix = ""): Array<{ rel: string; full: string }> {
+function walkRuleFiles(
+  rootDir: string,
+  prefix = "",
+  walkedDirs?: string[],
+): Array<{ rel: string; full: string }> {
   if (!isExistingDirectory(rootDir)) return [];
+  walkedDirs?.push(rootDir);
   const entries = readdirSync(rootDir, { withFileTypes: true });
   const results: Array<{ rel: string; full: string }> = [];
 
@@ -57,7 +63,7 @@ function walkRuleFiles(rootDir: string, prefix = ""): Array<{ rel: string; full:
     const full = join(rootDir, entry.name);
     const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
     if (entry.isDirectory()) {
-      results.push(...walkRuleFiles(full, rel));
+      results.push(...walkRuleFiles(full, rel, walkedDirs));
     } else if (entry.isFile() && /\.(?:md|mdc)$/i.test(entry.name)) {
       results.push({ rel, full });
     }
@@ -71,8 +77,11 @@ function collectRulesFromDir(
   rulesDir: string,
   meta: { idPrefix: string; scope: "user" | "project"; baseDir: string; boundaryDir: string },
   target: Map<string, ProjectRule>,
+  deps?: string[],
 ): void {
-  for (const { rel, full } of walkRuleFiles(rulesDir)) {
+  deps?.push(rulesDir);
+  for (const { rel, full } of walkRuleFiles(rulesDir, "", deps)) {
+    deps?.push(full);
     let size: number;
     try {
       size = statSync(full).size;
@@ -113,60 +122,84 @@ function collectRulesFromDir(
  */
 export function discoverRules(dataDir: string, cwd: string): ProjectRule[] {
   const resolvedCwd = resolve(cwd);
-  const boundary = findProjectBoundary(resolvedCwd);
-  const rules = new Map<string, ProjectRule>();
+  const key = `${resolve(dataDir)}\0${resolvedCwd}`;
+  return getCachedDiscoveredRules(key, () => {
+    const boundary = findProjectBoundary(resolvedCwd);
+    const rules = new Map<string, ProjectRule>();
+    const deps: string[] = [dataDir, join(dataDir, "rules")];
 
-  collectRulesFromDir(
-    join(dataDir, "rules"),
-    {
-      idPrefix: "user",
-      scope: "user",
-      baseDir: resolvedCwd,
-      boundaryDir: dataDir,
-    },
-    rules,
-  );
+    collectRulesFromDir(
+      join(dataDir, "rules"),
+      {
+        idPrefix: "user",
+        scope: "user",
+        baseDir: resolvedCwd,
+        boundaryDir: dataDir,
+      },
+      rules,
+      deps,
+    );
 
-  const dirs: string[] = [];
-  let cur = resolvedCwd;
-  const boundaryKey = normalizeComparePath(boundary);
-  for (;;) {
-    dirs.unshift(cur);
-    if (normalizeComparePath(cur) === boundaryKey) break;
-    const parent = dirname(cur);
-    if (parent === cur) break;
-    cur = parent;
-  }
-
-  for (const dir of dirs) {
-    const dirKey = normalizeComparePath(dir);
-    for (const parts of PROJECT_RULE_DIRS) {
-      collectRulesFromDir(
-        join(dir, ...parts),
-        {
-          idPrefix: `project:${dirKey}`,
-          scope: "project",
-          baseDir: dir,
-          boundaryDir: boundary,
-        },
-        rules,
-      );
+    const dirs: string[] = [];
+    let cur = resolvedCwd;
+    const boundaryKey = normalizeComparePath(boundary);
+    for (;;) {
+      dirs.unshift(cur);
+      if (normalizeComparePath(cur) === boundaryKey) break;
+      const parent = dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
     }
-  }
 
-  return [...rules.values()];
+    // Track boundary markers along ancestors up to root so adding `.git` / `.qianji` invalidates rules.
+    let ancestor = resolvedCwd;
+    const root = parse(ancestor).root;
+    for (;;) {
+      deps.push(join(ancestor, ".git"), join(ancestor, ".qianji"), join(ancestor, ".pid"));
+      if (ancestor === root) break;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+
+    for (const dir of dirs) {
+      const dirKey = normalizeComparePath(dir);
+      for (const parts of PROJECT_RULE_DIRS) {
+        deps.push(join(dir, parts[0]), join(dir, ...parts));
+        collectRulesFromDir(
+          join(dir, ...parts),
+          {
+            idPrefix: `project:${dirKey}`,
+            scope: "project",
+            baseDir: dir,
+            boundaryDir: boundary,
+          },
+          rules,
+          deps,
+        );
+      }
+    }
+
+    return { value: [...rules.values()], deps };
+  });
 }
 
 export function renderAlwaysRules(rules: readonly ProjectRule[], dataDir: string): string[] {
-  return rules
-    .filter((rule) => rule.mode === "always")
-    .map((rule) => {
+  const always = rules.filter((rule) => rule.mode === "always");
+  if (always.length === 0) return [];
+  const signature = always.map((rule) => `${rule.id}\0${rule.path}\0${rule.boundaryDir}\0${rule.body}`).join("\n");
+  const cacheKey = `${resolve(dataDir)}\0${always.map((rule) => rule.id).join(",")}`;
+  return getCachedAlwaysRuleBlocks(cacheKey, signature, (onDep) =>
+    always.map((rule) => {
+      onDep(rule.path);
       const expanded = expandContextImports(rule.body, rule.path, {
         dataDir,
         boundaryDir: rule.boundaryDir,
+        onDependency: onDep,
       });
       return `<rule-file path="${rule.path}">\n${expanded}\n</rule-file>`;
-    });
+    }),
+  );
 }
 
 export function renderScopedRulesIndex(rules: readonly ProjectRule[]): string | undefined {

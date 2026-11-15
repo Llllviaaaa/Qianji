@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,11 +11,15 @@ import {
   globToRegExp,
   grep,
   grepWithNode,
+  inspectFileBeforeRead,
   lineHash,
   ls,
   matchesGlob,
+  MAX_IMAGE_BYTES,
+  MAX_TEXT_READ_BYTES,
   parseTscDiagnostics,
   read,
+  stripBom,
   write,
 } from "../src/index.ts";
 
@@ -241,5 +245,95 @@ describe("readOnly metadata", () => {
     expect(diagnostics.readOnly).toBe(true);
     expect(write.readOnly).not.toBe(true);
     expect(edit.readOnly).not.toBe(true);
+  });
+});
+
+describe("file hygiene guards and UTF-8 BOM preservation", () => {
+  it("strips UTF-8 BOM on read (including lineHash calculation) and preserves BOM across oldText and hashline edits", async () => {
+    const bomPath = join(cwd, "bom.ts");
+    const bomBytes = Buffer.from("\uFEFFconst a = 1;\nconst b = 2;\n", "utf8");
+    expect([...bomBytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    writeFileSync(bomPath, bomBytes);
+
+    expect(stripBom("\uFEFFhello")).toEqual({ hasBom: true, text: "hello" });
+    expect(stripBom("hello")).toEqual({ hasBom: false, text: "hello" });
+
+    const plainRead = await call(read, { path: "bom.ts" });
+    expect(plainRead.isError).toBe(false);
+    expect(plainRead.text).toBe("const a = 1;\nconst b = 2;\n");
+    expect(plainRead.text.startsWith("\uFEFF")).toBe(false);
+
+    const hashlineRead = await call(read, { path: "bom.ts", hashlines: true });
+    expect(hashlineRead.isError).toBe(false);
+    const expectedLine1 = `1:${lineHash("const a = 1;")}| const a = 1;`;
+    expect(hashlineRead.text.split("\n")[0]).toBe(expectedLine1);
+
+    const oldTextEdit = await call(edit, {
+      path: "bom.ts",
+      edits: [{ oldText: "const b = 2;", newText: "const b = 20;" }],
+    });
+    expect(oldTextEdit.isError).toBe(false);
+    const afterOldText = readFileSync(bomPath);
+    expect([...afterOldText.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(afterOldText.toString("utf8")).toBe("\uFEFFconst a = 1;\nconst b = 20;\n");
+
+    const hashlineEdit = await call(edit, {
+      path: "bom.ts",
+      edits: [{ anchor: `1:${lineHash("const a = 1;")}`, op: "replace", newText: "const a = 10;" }],
+    });
+    expect(hashlineEdit.isError).toBe(false);
+    const afterHashline = readFileSync(bomPath);
+    expect([...afterHashline.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(afterHashline.toString("utf8")).toBe("\uFEFFconst a = 10;\nconst b = 20;\n");
+  });
+
+  it("rejects binary files with NUL bytes and UTF-16 BOM files with clear errors including byte size", async () => {
+    const binPath = join(cwd, "data.bin");
+    const payload = Buffer.from([0x48, 0x69, 0x00, 0x21, 0x0a]);
+    writeFileSync(binPath, payload);
+
+    const binDirect = inspectFileBeforeRead(binPath, false);
+    expect(binDirect).toContain("NUL");
+    expect(binDirect).toContain(`${payload.length} bytes`);
+
+    const binRead = await call(read, { path: "data.bin" });
+    expect(binRead.isError).toBe(true);
+    expect(binRead.text).toContain("5 bytes");
+
+    const binEdit = await call(edit, { path: "data.bin", edits: [{ oldText: "Hi", newText: "Bye" }] });
+    expect(binEdit.isError).toBe(true);
+    expect(binEdit.text).toContain("5 bytes");
+
+    const utf16Path = join(cwd, "utf16.txt");
+    const utf16Bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("hello", "utf16le")]);
+    writeFileSync(utf16Path, utf16Bytes);
+    const utf16Read = await call(read, { path: "utf16.txt" });
+    expect(utf16Read.isError).toBe(true);
+    expect(utf16Read.text).toContain(`${utf16Bytes.length} bytes`);
+    expect(utf16Read.text).toContain("UTF-16");
+  });
+
+  it("rejects images larger than 4.5MB and huge text files before full readFileSync", async () => {
+    const bigPng = join(cwd, "huge.png");
+    writeFileSync(bigPng, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const overImageSize = MAX_IMAGE_BYTES + 1;
+    truncateSync(bigPng, overImageSize);
+
+    const imgOutput = await read.execute({ path: "huge.png" }, env());
+    expect(imgOutput.isError).toBe(true);
+    expect(imgOutput.content.some((block) => block.type === "image")).toBe(false);
+    const imgText = imgOutput.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+    expect(imgText).toContain(`${overImageSize} bytes`);
+    expect(imgText).toContain("4.5 MB");
+
+    const bigTxt = join(cwd, "huge.log");
+    writeFileSync(bigTxt, "");
+    const overTextSize = MAX_TEXT_READ_BYTES + 1;
+    truncateSync(bigTxt, overTextSize);
+
+    const txtRes = await call(read, { path: "huge.log" });
+    expect(txtRes.isError).toBe(true);
+    expect(txtRes.text).toContain(`${overTextSize} bytes`);
+    expect(txtRes.text).toContain("32 MB");
   });
 });

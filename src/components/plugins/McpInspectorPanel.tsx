@@ -6,7 +6,7 @@ import { describeError } from "../../lib/errors";
 import { mcpClient } from "../../lib/mcpClient";
 import { queryKeys } from "../../lib/queries";
 import { rewindController } from "../../lib/rewindController";
-import type { Notice } from "../plugins/pluginHelpers";
+import type { Notice } from "./pluginHelpers";
 
 export interface McpInspectorPanelProps {
   connectedServers: readonly McpServerStatus[];

@@ -4,18 +4,12 @@
  * and safe @path imports), path-scoped rules, available skills
  * (`<dir>/<skill>/SKILL.md`), `/init`, and the environment.
  */
-import { readFileSync } from "node:fs";
 import type { Context } from "@deepseek-ai/cordis";
 import type { CommandDefinition } from "@qianji/commands";
 import "@qianji/protocol";
 import "@qianji/rpc";
 import { SectionOrder, type PromptEnv } from "@qianji/system-prompt";
-import {
-  contextFiles,
-  expandContextImports,
-  findProjectBoundary,
-  isPathInside,
-} from "./context-files.ts";
+import { getCachedContextBlocks, pinSessionDate } from "./cache.ts";
 import { createInitCommand } from "./init-command.ts";
 import {
   discoverRules,
@@ -23,7 +17,20 @@ import {
   renderAlwaysRules,
   renderScopedRulesIndex,
 } from "./rules.ts";
-import { findSkills, readDisabledSkillKeys, registerSkillRpc, skillDirs } from "./skills.ts";
+import { findSkills, readDisabledSkillKeys, registerSkillRpc, skillDirs, type PluginSkillSource } from "./skills.ts";
+
+export {
+  clearPromptContextCaches,
+  getCacheStats,
+  getCachedContextBlocks,
+  isSnapshotValid,
+  MAX_PINNED_SESSIONS,
+  pinSessionDate,
+  takeSnapshots,
+  type CacheBucketName,
+  type CacheStats,
+  type PathSnapshot,
+} from "./cache.ts";
 
 export {
   contextFiles,
@@ -61,6 +68,7 @@ export {
   skillDirs,
   skillsStatePath,
   type ManagedSkillEntry,
+  type PluginSkillSource,
   type Skill,
 } from "./skills.ts";
 
@@ -72,6 +80,8 @@ export interface Config {
   dataDir: string;
   /** Optional read-only built-in skill directories (`resources/harness/bundled-skills` or repo `skills/`). */
   bundledSkillsDirs?: readonly string[] | (() => readonly string[]);
+  /** Optional read-only companion skill directories contributed by enabled plugins. */
+  pluginSkills?: (cwd?: string) => readonly PluginSkillSource[];
   /** Override for "today", for tests. */
   now?: () => Date;
   /** Include AGENTS.md / CLAUDE.md, .local overrides, and rules/. Default true. */
@@ -92,6 +102,10 @@ export const GUIDELINES = `Guidelines:
 
 export function apply(ctx: Context, config: Config): void {
   const now = config.now ?? (() => new Date());
+  const pinnedDates = new Map<string, string>();
+  ctx.on("session/deleted" as never, ((sessionId: string) => {
+    pinnedDates.delete(sessionId);
+  }) as never);
 
   ctx.effect(() => ctx.systemPrompt.section("identity", () => IDENTITY, { order: SectionOrder.identity }), `${name}: identity`);
   ctx.effect(() => ctx.systemPrompt.section("guidelines", () => GUIDELINES, { order: SectionOrder.guidelines }), `${name}: guidelines`);
@@ -103,24 +117,8 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.effect(() => ctx.systemPrompt.section("context-files", ({ cwd }: PromptEnv) => {
     if (config.contextFiles === false) return undefined;
-    const files = contextFiles(config.dataDir, cwd);
-    const rules = discoverRules(config.dataDir, cwd);
-    const boundary = findProjectBoundary(cwd);
-
-    const contextBlocks: string[] = [];
-    for (const file of files) {
-      const raw = readFileSync(file, "utf8").trim();
-      if (raw === "") continue;
-      const expanded = expandContextImports(raw, file, {
-        dataDir: config.dataDir,
-        boundaryDir: isPathInside(file, config.dataDir) ? config.dataDir : boundary,
-      });
-      if (expanded !== "") {
-        contextBlocks.push(`<context-file path="${file}">\n${expanded}\n</context-file>`);
-      }
-    }
-
-    const alwaysRuleBlocks = renderAlwaysRules(rules, config.dataDir);
+    const contextBlocks = getCachedContextBlocks(config.dataDir, cwd);
+    const alwaysRuleBlocks = renderAlwaysRules(discoverRules(config.dataDir, cwd), config.dataDir);
     if (contextBlocks.length === 0 && alwaysRuleBlocks.length === 0) return undefined;
 
     return [
@@ -138,7 +136,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => ctx.systemPrompt.section("skills", ({ cwd, tools }: PromptEnv) => {
     if (!tools.some((tool) => tool.name === "read")) return undefined;
     const disabled = readDisabledSkillKeys(config.dataDir);
-    const skills = findSkills(skillDirs(config.dataDir, cwd, config.bundledSkillsDirs), { disabled });
+    const skills = findSkills(skillDirs(config.dataDir, cwd, config.bundledSkillsDirs, config.pluginSkills), { disabled });
     if (skills.length === 0) return undefined;
     return [
       "Skills are instructions for specific tasks. When a task matches a skill's description, read its SKILL.md with the read tool before starting and follow it.",
@@ -148,11 +146,11 @@ export function apply(ctx: Context, config: Config): void {
     ].join("\n");
   }, { order: SectionOrder.skills }), `${name}: skills`);
 
-  ctx.effect(() => ctx.systemPrompt.section("environment", ({ cwd }: PromptEnv) => [
+  ctx.effect(() => ctx.systemPrompt.section("environment", ({ sessionId, cwd }: PromptEnv) => [
     "Environment:",
     `- Working directory: ${cwd}`,
     `- Platform: ${process.platform}`,
-    `- Date: ${now().toISOString().slice(0, 10)}`,
+    `- Date: ${pinSessionDate(sessionId, now, pinnedDates)}`,
   ].join("\n"), { order: SectionOrder.environment }), `${name}: environment`);
 
   ctx.inject(["tools"], (toolsCtx) => {
@@ -164,7 +162,7 @@ export function apply(ctx: Context, config: Config): void {
     inner.effect(() => inner.commands.registerProvider((cwd) => {
       const targetCwd = cwd && cwd.trim() !== "" ? cwd : process.cwd();
       const disabled = readDisabledSkillKeys(config.dataDir);
-      return findSkills(skillDirs(config.dataDir, targetCwd, config.bundledSkillsDirs), { disabled }).map((skill): CommandDefinition => ({
+      return findSkills(skillDirs(config.dataDir, targetCwd, config.bundledSkillsDirs, config.pluginSkills), { disabled }).map((skill): CommandDefinition => ({
         name: `skill:${skill.name}`,
         description: skill.description,
         argsHint: "[任务说明]",

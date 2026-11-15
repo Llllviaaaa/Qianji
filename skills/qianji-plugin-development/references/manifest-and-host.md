@@ -46,10 +46,35 @@ Every Qianji plugin directory has a `package.json` with a `qianji` field:
 
 ### Key Manifest Fields
 - `qianji.id`: Unique kebab-case identifier (`^[a-z0-9][a-z0-9._-]{0,63}$`). Must not collide with reserved host transport gateways (`web-server`, `rpc-gateway`).
-- `qianji.host`: Optional relative path to Host entry (`./index.ts` or `./index.js`). Omit for pure UI/theme plugins.
-- `qianji.client`: Optional relative path to Client entry (`./client.tsx` or `./client.ts`). Omit for pure Host tool plugins.
+- `qianji.host`: Optional relative path to Host entry (`./index.ts` or `./index.js`). Omit for pure UI, theme, or skill-only plugins.
+- `qianji.client`: Optional relative path to Client entry (`./client.tsx` or `./client.ts`). Omit for pure Host tool or skill-only plugins.
+- `qianji.skills`: Optional relative directory of companion Agent Skills (containing `<skill-name>/SKILL.md`). Defaults to `"./skills"` automatically if a `skills/` subdirectory contains at least one `SKILL.md`. A plugin may provide `skills/` alongside `host`/`client`, or ship as a zero-code skill pack with neither `host` nor `client`.
 - `qianji.inject`: Host Cordis services required before `apply(ctx, config)` activates (e.g. `["tools", "rpc"]`).
 - `qianji.configSchema`: JSON Schema (`object` with `boolean`, `string`, `enum`, `number` / `integer` properties). Settings → Plugins automatically renders a graphical configuration form from this schema and persists user values to `~/.qianji/plugins.json`.
+
+### Companion Skills & Zero-Code Skill Packs
+
+When an enabled (and, for workspace plugins, trusted) plugin provides `skills/<skill-name>/SKILL.md`, Host mounts those read-only skills into `@qianji/prompt-context` automatically and exposes `/skill:<skill-name>` in Settings → Extensions (`prompt-context`). Disabling, removing, or untrusting the plugin immediately unmounts its skills.
+
+```text
+team-playbook/
+├── package.json
+└── skills/
+    └── deploy-check/
+        └── SKILL.md
+```
+
+```json
+{
+  "name": "qianji-plugin-team-playbook",
+  "version": "0.1.0",
+  "qianji": {
+    "id": "team-playbook",
+    "name": "Team Playbook",
+    "skills": "./skills"
+  }
+}
+```
 
 ---
 

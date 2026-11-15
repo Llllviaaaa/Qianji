@@ -8,9 +8,11 @@ import {
   INTERRUPTED_TOOL_RESULT,
   MemoryStorage,
   Sessions,
+  charTokens,
   compactionPoint,
   currentBranch,
   deriveState,
+  estimateEventTokens,
   forkEvents,
   settledSeq,
   slidingCompactionPoint,
@@ -431,5 +433,171 @@ describe("sessions service", () => {
     expect(slidingCompactionPoint(all, 10)).toBe(a3.seq);
     // Single-step log falls back to compactionPoint(events, false)
     expect(slidingCompactionPoint([u1, a1], 10_000)).toBe(a1.seq);
+  });
+});
+
+describe("CJK token estimation & session hygiene", () => {
+  it("weights ASCII chars at 0.25 tokens and non-ASCII/CJK chars at 0.75 tokens", () => {
+    expect(charTokens("abcd")).toBe(1);
+    expect(charTokens("你好世界")).toBe(3);
+    expect(charTokens("ab你好")).toBe(2);
+
+    const asciiUser = ev("user", { content: text("a".repeat(400)) });
+    const cjkUser = ev("user", { content: text("中".repeat(400)) });
+    expect(estimateEventTokens(cjkUser)).toBeGreaterThan(estimateEventTokens(asciiUser) * 2);
+
+    const cjkEvents = log(() => {
+      const u1 = ev("user", { content: text("中".repeat(200)) });
+      const a1 = assistant(text("文".repeat(200)));
+      const u2 = ev("user", { content: text("测".repeat(200)) });
+      const a2 = assistant(text("试".repeat(200)));
+      return [u1, a1, u2, a2];
+    });
+    const cjkCut = slidingCompactionPoint(cjkEvents, 350);
+    expect(cjkCut).toBe(cjkEvents[1].seq);
+  });
+
+  it("infers ThinkingBlock signatureProvider from model and preserves explicit or generic values", () => {
+    const events = log(() => [
+      ev("user", { content: text("think") }),
+      ev("assistant", {
+        content: [
+          { type: "thinking", text: "gem", signature: "g-sig" },
+          { type: "thinking", text: "kept", signature: "k-sig", signatureProvider: "custom" },
+          { type: "thinking", text: "nosig" },
+          { type: "text", text: "done-gem" },
+        ],
+        model: { provider: "google", model: "gemini-2.5-pro" },
+        usage,
+        stop: "stop",
+      }),
+      ev("assistant", {
+        content: [
+          { type: "thinking", text: "claude", signature: "a-sig" },
+          { type: "text", text: "done-claude" },
+        ],
+        model: { provider: "bedrock", model: "claude-sonnet-4" },
+        usage,
+        stop: "stop",
+      }),
+      ev("assistant", {
+        content: [
+          { type: "thinking", text: "generic", signature: "m-sig" },
+          { type: "text", text: "done-generic" },
+        ],
+        model,
+        usage,
+        stop: "stop",
+      }),
+    ]);
+
+    const state = deriveState(events);
+    expect(state.messages).toHaveLength(4);
+    const gemMsg = state.messages[1];
+    expect(gemMsg?.role).toBe("assistant");
+    if (gemMsg?.role === "assistant") {
+      expect(gemMsg.content[0]).toMatchObject({ type: "thinking", signatureProvider: "gemini" });
+      expect(gemMsg.content[1]).toMatchObject({ type: "thinking", signatureProvider: "custom" });
+      expect(gemMsg.content[2]).toEqual({ type: "thinking", text: "nosig" });
+    }
+    const claudeMsg = state.messages[2];
+    if (claudeMsg?.role === "assistant") {
+      expect(claudeMsg.content[0]).toMatchObject({ type: "thinking", signatureProvider: "anthropic" });
+    }
+    const genericMsg = state.messages[3];
+    if (genericMsg?.role === "assistant") {
+      expect(genericMsg.content[0]).toEqual({ type: "thinking", text: "generic", signature: "m-sig" });
+    }
+  });
+
+  it("drops orphan __invalidJson tool-call blocks on stop=error while preserving valid or paired calls", () => {
+    const events = log(() => [
+      ev("user", { content: text("run") }),
+      // Only a broken orphan __invalidJson tool-call on stop=error -> entire assistant message dropped
+      ev("assistant", {
+        content: [{ type: "tool-call", id: "bad-only", name: "bash", arguments: { __invalidJson: "{bad" } }],
+        model,
+        usage,
+        stop: "error",
+      }),
+      // Text + broken orphan on stop=error -> broken tool-call dropped, partial non-tool error reply skipped
+      ev("assistant", {
+        content: [
+          { type: "text", text: "partial text" },
+          { type: "tool-call", id: "bad-with-text", name: "bash", arguments: { __invalidJson: "{partial" } },
+        ],
+        model,
+        usage,
+        stop: "error",
+      }),
+      // Valid tool-call + broken orphan on stop=error -> valid tool-call kept, orphan dropped
+      ev("assistant", {
+        content: [
+          { type: "tool-call", id: "valid-on-err", name: "bash", arguments: { cmd: "pwd" } },
+          { type: "tool-call", id: "bad-sibling", name: "bash", arguments: { __invalidJson: "{broken" } },
+        ],
+        model,
+        usage,
+        stop: "error",
+      }),
+      ev("tool-result", {
+        callId: "valid-on-err",
+        name: "bash",
+        content: text("/work"),
+        isError: false,
+      }),
+      // Paired __invalidJson tool-call + non-error stop __invalidJson -> both kept
+      ev("assistant", {
+        content: [{ type: "tool-call", id: "paired-bad", name: "bash", arguments: { __invalidJson: "{ok" } }],
+        model,
+        usage,
+        stop: "error",
+      }),
+      ev("tool-result", {
+        callId: "paired-bad",
+        name: "bash",
+        content: text("error output"),
+        isError: true,
+      }),
+      ev("assistant", {
+        content: [{ type: "tool-call", id: "non-error-bad", name: "bash", arguments: { __invalidJson: "{tooluse" } }],
+        model,
+        usage,
+        stop: "tool-use",
+      }),
+      ev("tool-result", {
+        callId: "non-error-bad",
+        name: "bash",
+        content: text("tool-use output"),
+        isError: false,
+      }),
+    ]);
+
+    const state = deriveState(events);
+    expect(state.messages.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "tool-result",
+      "assistant",
+      "tool-result",
+      "assistant",
+      "tool-result",
+    ]);
+    const validErrMsg = state.messages[1];
+    if (validErrMsg?.role === "assistant") {
+      expect(validErrMsg.content).toEqual([
+        { type: "tool-call", id: "valid-on-err", name: "bash", arguments: { cmd: "pwd" } },
+      ]);
+    }
+    const pairedMsg = state.messages[3];
+    if (pairedMsg?.role === "assistant") {
+      expect(pairedMsg.content).toHaveLength(1);
+      expect(pairedMsg.content[0]).toMatchObject({ type: "tool-call", id: "paired-bad" });
+    }
+    const toolUseMsg = state.messages[5];
+    if (toolUseMsg?.role === "assistant") {
+      expect(toolUseMsg.content).toHaveLength(1);
+      expect(toolUseMsg.content[0]).toMatchObject({ type: "tool-call", id: "non-error-bad" });
+    }
   });
 });

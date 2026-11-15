@@ -61,6 +61,17 @@ describe("BlockAssembler", () => {
     });
   });
 
+  it("records signatureProvider from thinking-signature chunks", () => {
+    const assembler = new BlockAssembler();
+    assembler.push({ type: "thinking-delta", index: 0, text: "plan" });
+    assembler.push({ type: "thinking-signature", index: 0, signature: "part1-", provider: "anthropic" });
+    assembler.push({ type: "thinking-signature", index: 0, signature: "part2", provider: "anthropic" });
+    assembler.push({ type: "finish", reason: "stop" });
+    expect(assembler.result().message.content).toEqual([
+      { type: "thinking", text: "plan", signature: "part1-part2", signatureProvider: "anthropic" },
+    ]);
+  });
+
   it("keeps malformed tool arguments for the loop to report", () => {
     const assembler = new BlockAssembler();
     assembler.push({ type: "tool-call-start", index: 0, id: "t", name: "x" });

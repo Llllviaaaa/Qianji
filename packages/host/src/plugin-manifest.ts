@@ -17,6 +17,7 @@ export interface DiscoveredPluginManifest {
   workspace?: string;
   hostEntry?: string;
   clientEntry?: string;
+  skillsDir?: string;
   assetsDir?: string;
   dshClientCompat: boolean;
   configSchema?: Record<string, unknown>;
@@ -51,6 +52,22 @@ const CLIENT_CANDIDATES = [
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasAnySkillMarkdown(dir: string): boolean {
+  try {
+    if (!statSync(dir).isDirectory()) return false;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const skillFile = join(dir, entry.name, "SKILL.md");
+      if (existsSync(skillFile) && statSync(skillFile).isFile()) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -261,8 +278,24 @@ export function readPluginManifest(dir: string, tier: PluginTier, workspace?: st
     }
   }
 
-  if (hostEntry === undefined && clientEntry === undefined) {
-    throw new Error(`Plugin "${rawId}" in ${rootDir} defines neither a host entry nor a client entry`);
+  let skillsDir: string | undefined;
+  if (pidField?.skills === false) {
+    skillsDir = undefined;
+  } else if (typeof pidField?.skills === "string") {
+    const resolvedSkills = resolveInsideDir(rootDir, pidField.skills);
+    if (resolvedSkills === undefined || !statSync(resolvedSkills).isDirectory()) {
+      throw new Error(`Plugin "${rawId}" skills directory not found: ${pidField.skills}`);
+    }
+    skillsDir = resolvedSkills;
+  } else {
+    const defaultSkills = resolveInsideDir(rootDir, "skills");
+    if (defaultSkills !== undefined && hasAnySkillMarkdown(defaultSkills)) {
+      skillsDir = defaultSkills;
+    }
+  }
+
+  if (hostEntry === undefined && clientEntry === undefined && skillsDir === undefined) {
+    throw new Error(`Plugin "${rawId}" in ${rootDir} defines neither a host entry, a client entry, nor a skills directory`);
   }
 
   const assetsSpec = typeof pidField?.assets === "string" ? pidField.assets : "assets";
@@ -288,6 +321,7 @@ export function readPluginManifest(dir: string, tier: PluginTier, workspace?: st
     ...(workspace === undefined ? {} : { workspace: canonicalPath(workspace) }),
     ...(hostEntry === undefined ? {} : { hostEntry }),
     ...(clientEntry === undefined ? {} : { clientEntry }),
+    ...(skillsDir === undefined ? {} : { skillsDir }),
     ...(assetsDir === undefined ? {} : { assetsDir }),
     dshClientCompat: dshCompat,
     ...(configSchema === undefined ? {} : { configSchema }),

@@ -1,10 +1,12 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { McpServerStatus, PluginInfo } from "@qianji/protocol";
-import { requestOpenSettings } from "../../lib/shellBridge";
+import type { McpServerStatus, PluginInfo, SkillInfo } from "@qianji/protocol";
 import type { AppSettings } from "../../types";
 import { HooksCapabilityDrawer } from "./HooksCapabilityDrawer";
 import { McpCapabilityDrawer } from "./McpCapabilityDrawer";
+import { SkillsCapabilityDrawer } from "./SkillsCapabilityDrawer";
 import type { Notice } from "./pluginHelpers";
+
+const NO_SKILLS: SkillInfo[] = [];
 
 export interface CoreCapabilityDrawerProps {
   plugin: PluginInfo;
@@ -16,8 +18,9 @@ export interface CoreCapabilityDrawerProps {
   mcpReconnecting: boolean;
   onReconnectMcp: (serverId?: string) => void;
   onMcpServersUpdated: () => void;
+  skills?: readonly SkillInfo[];
   onNotify: (notice: Notice) => void;
-  onOpenMcpSection?: () => void;
+  onCloseSettings?: () => void;
 }
 
 export function CoreCapabilityDrawer({
@@ -30,36 +33,35 @@ export function CoreCapabilityDrawer({
   mcpReconnecting,
   onReconnectMcp,
   onMcpServersUpdated,
+  skills = NO_SKILLS,
   onNotify,
-  onOpenMcpSection,
+  onCloseSettings,
 }: CoreCapabilityDrawerProps) {
   if (plugin.id === "mcp") {
     return (
-      <>
-        <div className="plugin-mcp-open-page-bar">
-          <span>MCP 服务编排、工具开关以及 Resources / Prompts 检验已整合至「MCP 服务」标签页</span>
-          <button
-            type="button"
-            className="plugin-ghost-btn"
-            onClick={() => {
-              if (onOpenMcpSection) onOpenMcpSection();
-              else requestOpenSettings("mcp");
-            }}
-          >
-            打开 MCP 服务面板 →
-          </button>
-        </div>
-        <McpCapabilityDrawer
-          cwd={cwd}
-          form={form}
-          onSyncAppSetting={onSyncAppSetting}
-          mcpStatuses={mcpStatuses}
-          mcpReconnecting={mcpReconnecting}
-          onReconnectMcp={onReconnectMcp}
-          onMcpServersUpdated={onMcpServersUpdated}
-          onNotify={onNotify}
-        />
-      </>
+      <McpCapabilityDrawer
+        cwd={cwd}
+        pluginEnabled={plugin.enabled}
+        form={form}
+        onSyncAppSetting={onSyncAppSetting}
+        mcpStatuses={mcpStatuses}
+        mcpReconnecting={mcpReconnecting}
+        onReconnectMcp={onReconnectMcp}
+        onMcpServersUpdated={onMcpServersUpdated}
+        onNotify={onNotify}
+        onCloseSettings={onCloseSettings}
+      />
+    );
+  }
+
+  if (plugin.id === "prompt-context") {
+    return (
+      <SkillsCapabilityDrawer
+        cwd={cwd}
+        skills={skills}
+        onNotify={onNotify}
+        onCloseSettings={onCloseSettings}
+      />
     );
   }
 

@@ -151,17 +151,33 @@ describe("anthropic adapter", () => {
     expect(adapter.buildRequestBody({ ...request, model: "claude-sonnet-4-6", temperature: 0.5 }).temperature).toBe(0.5);
   });
 
-  it("puts cache breakpoints on the static prefix and the conversation tail of session requests", () => {
-    const body = adapter.buildRequestBody({ ...request, model: "claude-opus-5-5", sessionId: "s1" });
+  it("puts up to three cache breakpoints on tools, system, and conversation tail of session requests", () => {
+    const body = adapter.buildRequestBody({
+      ...request,
+      model: "claude-opus-5-5",
+      sessionId: "s1",
+      tools: [
+        { name: "ls", description: "List dir", parameters: { type: "object" } },
+        { name: "read", description: "Read a file", parameters: { type: "object" } },
+      ],
+    });
+    const tools = body.tools as Array<Record<string, unknown>>;
+    expect(tools[0]?.cache_control).toBeUndefined();
+    expect(tools[1]?.cache_control).toEqual({ type: "ephemeral" });
     expect(body.system).toEqual([{ type: "text", text: "Be brief.", cache_control: { type: "ephemeral" } }]);
     const messages = body.messages as Array<{ content: Array<Record<string, unknown>> }>;
     expect(messages.at(-1)?.content.at(-1)).toMatchObject({ type: "tool_result", tool_use_id: "toolu_b", cache_control: { type: "ephemeral" } });
-    // At most 4 breakpoints are allowed; these requests use two.
-    expect(JSON.stringify(body).split("cache_control").length - 1).toBe(2);
+    // Breakpoints: tools.at(-1), system, and conversation tail (3 total, within Anthropic's 4-breakpoint limit).
+    expect(JSON.stringify(body).split("cache_control").length - 1).toBe(3);
 
-    // Without a system prompt the tool definitions end the static prefix.
+    // Without a system prompt the tool definitions and conversation tail still get breakpoints (2 total).
     const noSystem = adapter.buildRequestBody({ ...request, system: undefined, sessionId: "s1" });
     expect((noSystem.tools as Array<Record<string, unknown>>).at(-1)?.cache_control).toEqual({ type: "ephemeral" });
+    expect(JSON.stringify(noSystem).split("cache_control").length - 1).toBe(2);
+
+    // Without tools, system and conversation tail get breakpoints (2 total).
+    const noTools = adapter.buildRequestBody({ ...request, tools: [], sessionId: "s1" });
+    expect(JSON.stringify(noTools).split("cache_control").length - 1).toBe(2);
 
     // Thinking blocks cannot carry a breakpoint; the last earlier block that can gets it.
     const endsInThinking = adapter.buildRequestBody({
@@ -175,6 +191,43 @@ describe("anthropic adapter", () => {
     const tail = (endsInThinking.messages as Array<{ content: Array<Record<string, unknown>> }>).at(-1)?.content;
     expect(tail?.[0]).toMatchObject({ type: "text", cache_control: { type: "ephemeral" } });
     expect(tail?.[1]?.cache_control).toBeUndefined();
+  });
+
+  it("downgrades foreign thinking blocks, strips foreign signatures, normalizes tool IDs, and drops orphans", () => {
+    const longCallId = "call/gemini.sub:" + "q".repeat(70);
+    const body = adapter.buildRequestBody({
+      ...request,
+      messages: [
+        { role: "tool-result", callId: "orphan-before", content: [{ type: "text", text: "stale" }], isError: false },
+        { role: "user", content: [{ type: "text", text: "switch model" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "Gemini thought", signature: "gem-sig", signatureProvider: "gemini" },
+            { type: "thinking", text: "   ", signature: "gem-blank", signatureProvider: "gemini" },
+            { type: "thinking", text: "Claude thought", signature: "ant-sig", signatureProvider: "anthropic" },
+            { type: "tool-call", id: longCallId, name: "read", arguments: { __invalidJson: "{oops" } },
+          ],
+        },
+        { role: "tool-result", callId: longCallId, content: [{ type: "text", text: "ok" }], isError: false },
+        { role: "tool-result", callId: "orphan-after", content: [{ type: "text", text: "dropped" }], isError: true },
+      ],
+    });
+    const messages = body.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(messages).toHaveLength(3);
+    const assistantContent = messages[1]?.content ?? [];
+    expect(assistantContent[0]).toEqual({ type: "text", text: "<thinking>\nGemini thought\n</thinking>" });
+    expect(assistantContent[1]).toEqual({ type: "thinking", thinking: "Claude thought", signature: "ant-sig" });
+    const toolUse = assistantContent[2];
+    expect(toolUse?.type).toBe("tool_use");
+    expect(typeof toolUse?.id).toBe("string");
+    expect((toolUse?.id as string).length).toBeLessThanOrEqual(64);
+    expect(toolUse?.id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(toolUse?.input).toEqual({});
+
+    expect(messages[2]?.content).toEqual([
+      { type: "tool_result", tool_use_id: toolUse?.id, is_error: false, content: [{ type: "text", text: "ok" }] },
+    ]);
   });
 
   it("leaves one-off requests uncached", () => {
@@ -191,7 +244,7 @@ describe("anthropic adapter", () => {
       message: {
         role: "assistant",
         content: [
-          { type: "thinking", text: "Need to read the file.", signature: "EqQBCgIYAhIM" },
+          { type: "thinking", text: "Need to read the file.", signature: "EqQBCgIYAhIM", signatureProvider: "anthropic" },
           { type: "text", text: "Let me look." },
           { type: "tool-call", id: "toolu_01", name: "read", arguments: { path: "a.ts" } },
         ],
