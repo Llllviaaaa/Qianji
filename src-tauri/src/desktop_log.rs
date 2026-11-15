@@ -824,7 +824,10 @@ mod tests {
 
         let panic_occurred_after = AtomicBool::new(true);
         let clean_exited_after = AtomicBool::new(false);
-        assert!(!try_claim_clean_exit(&panic_occurred_after, &clean_exited_after));
+        assert!(!try_claim_clean_exit(
+            &panic_occurred_after,
+            &clean_exited_after
+        ));
         assert!(!clean_exited_after.load(Ordering::SeqCst));
     }
 }

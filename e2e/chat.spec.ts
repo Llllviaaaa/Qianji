@@ -53,6 +53,7 @@ test("rewind a message, then edit one and send it again", async ({ app, harness 
   // Rewinding the second message takes it and its reply away and restores the text into Composer.
   await userRow(app, "second question").hover();
   await userRow(app, "second question").getByRole("button", { name: "回退消息和改动" }).click();
+  await app.locator("[data-smart-rewind-dialog]").getByRole("button", { name: "回退并放回输入框" }).click();
   await expect(userBubble(app, "second question")).toHaveCount(0);
   await expect(answer(app, "Second answer.")).toHaveCount(0);
   await expect(composer(app)).toHaveValue("second question");
@@ -195,6 +196,7 @@ test("side chat fills workbench width, syncs permission, resets cleanly, and iso
   // Rewinding a message in Main Chat while Side Chat is mounted restores text to Main Chat's composer.
   await userRow(app, "second main turn").hover();
   await userRow(app, "second main turn").getByRole("button", { name: "回退消息和改动" }).click();
+  await app.locator("[data-smart-rewind-dialog]").getByRole("button", { name: "回退并放回输入框" }).click();
   await expect(composer(mainStage)).toHaveValue("second main turn");
   await expect(composer(sidebar)).toHaveValue("");
 });

@@ -360,6 +360,7 @@ describe("Streaming Markdown & React Performance Hardening", () => {
     expect(perfCss).toContain("article.dshc-turn");
     expect(perfCss).toContain(":not([data-turn-open])");
     expect(perfCss).toContain(":not([data-dsh-claude-turn-nav-landed])");
-    expect(perfCss).toContain(":not(:focus-within)");
+    expect(perfCss).toContain(":not(:has(.dshc-turn-widgets))");
+    expect(perfCss).not.toContain(":not(:focus-within)");
   });
 });

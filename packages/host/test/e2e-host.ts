@@ -6,6 +6,7 @@
  */
 import { ScriptedProvider, useScriptedProvider } from "@qianji/testkit";
 import { builtinPluginDefinitions, corePlugins } from "../src/agent-plugins.ts";
+import { resolveDesktopBundledPluginRoots } from "../src/control.ts";
 import { readEffectiveHarnessConfig } from "../src/harness-config.ts";
 import { createHost, type Host } from "../src/host.ts";
 import { PluginManager } from "../src/plugin-manager.ts";
@@ -47,6 +48,7 @@ export async function startE2eHost(options: E2eHostOptions): Promise<E2eHost> {
   const pluginManager = new PluginManager(host.ctx, {
     dataDir,
     version: "0.0.0-e2e",
+    bundledPluginsDirs: () => resolveDesktopBundledPluginRoots(),
     builtins: (trustedWorkspace) => builtinPluginDefinitions(
       dataDir,
       readEffectiveHarnessConfig(dataDir, trustedWorkspace).config,
