@@ -173,4 +173,62 @@ describe("per-session restrictions", () => {
     expect(firstText(direct)).toBe("visited:https://example.com");
     expect(ctx.tools.schemas("s2").map((schema) => schema.name)).toContain("browser_inspect");
   });
+
+  it("keeps activate_tools description invariant across partial activations and forwards onProgress", async () => {
+    const ctx = await setup();
+    ctx.tools.register({
+      name: "browser_navigate",
+      description: "Navigate browser",
+      group: "browser",
+      groupDescription: "Web browser automation",
+      deferred: true,
+      parameters: { type: "object", properties: {} },
+      execute: () => textOutput("ok"),
+    });
+    ctx.tools.register({
+      name: "computer_click",
+      description: "Click screen",
+      group: "computer",
+      groupDescription: "Desktop UI control",
+      deferred: true,
+      parameters: { type: "object", properties: {} },
+      execute: () => textOutput("ok"),
+    });
+    ctx.tools.register({
+      name: "streamer",
+      description: "Stream progress",
+      parameters: { type: "object", properties: {} },
+      execute: (_args, callEnv) => {
+        callEnv.onProgress?.("step 1");
+        callEnv.onProgress?.("step 2");
+        return textOutput("done");
+      },
+    });
+
+    const beforeDesc = ctx.tools.schemas("s-cache").find((s) => s.name === "activate_tools")?.description;
+    expect(beforeDesc).toContain("browser (1 tools: Web browser automation)");
+    expect(beforeDesc).toContain("computer (1 tools: Desktop UI control)");
+
+    await ctx.tools.execute(
+      { id: "act-browser", name: "activate_tools", args: { names: ["browser"] } },
+      { ...env(), sessionId: "s-cache" },
+    );
+    const afterPartial = ctx.tools.schemas("s-cache");
+    expect(afterPartial.map((s) => s.name)).toContain("browser_navigate");
+    expect(afterPartial.find((s) => s.name === "activate_tools")?.description).toBe(beforeDesc);
+
+    await ctx.tools.execute(
+      { id: "act-computer", name: "activate_tools", args: { names: ["computer"] } },
+      { ...env(), sessionId: "s-cache" },
+    );
+    expect(ctx.tools.schemas("s-cache").some((s) => s.name === "activate_tools")).toBe(false);
+
+    const chunks: string[] = [];
+    const res = await ctx.tools.execute(
+      { id: "stream-1", name: "streamer", args: {} },
+      { ...env(), onProgress: (text) => chunks.push(text) },
+    );
+    expect(firstText(res)).toBe("done");
+    expect(chunks).toEqual(["step 1", "step 2"]);
+  });
 });

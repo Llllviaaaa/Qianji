@@ -16,6 +16,8 @@ import {
   EMPTY_TURN_CONTINUATION_PROMPT,
   LENGTH_CONTINUATION_PROMPT,
   buildCompactionWorkingSetAddendum,
+  prepareSummaryMessages,
+  serializeConversation,
   shrinkForSummary,
   type AgentLoopConfig,
 } from "../src/index.ts";
@@ -635,5 +637,280 @@ describe("agent loop", () => {
     expect(compaction?.data.summary).toContain("src/main.ts (modified)");
     expect(compaction?.data.summary).toContain("[completed] (p1) Patch main");
     expect(compaction?.data.summary).toContain("[in_progress] (p2) Verify");
+  });
+
+  it("serializes compaction history as pure text with structured headings, omitting wire tool/image blocks", async () => {
+    for (const heading of ["## Goal", "## Constraints & Preferences", "## Progress", "## Key Decisions", "## Next Steps"]) {
+      expect(COMPACTION_REQUEST).toContain(heading);
+    }
+
+    const sampleMessages = [
+      { role: "user" as const, content: text(`${COMPACTION_PREFIX}Earlier summary body.`) },
+      {
+        role: "user" as const,
+        content: [
+          { type: "text" as const, text: "Inspect screenshot" },
+          { type: "image" as const, mimeType: "image/png", data: "BASE64DATA" },
+        ],
+      },
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "thinking" as const, text: "internal reasoning" },
+          { type: "text" as const, text: "Running tool" },
+          { type: "tool-call" as const, id: "tc-1", name: "echo", arguments: { text: "hi" } },
+        ],
+      },
+      {
+        role: "tool-result" as const,
+        callId: "tc-1",
+        content: [
+          { type: "text" as const, text: "hi" },
+          { type: "image" as const, mimeType: "image/png", data: "MOREBASE64" },
+        ],
+        isError: false,
+      },
+    ];
+
+    const prepared = prepareSummaryMessages(sampleMessages);
+    expect(JSON.stringify(prepared)).not.toContain("BASE64DATA");
+    expect(JSON.stringify(prepared)).toContain("[image omitted]");
+
+    const serialized = serializeConversation(sampleMessages);
+    expect(serialized).toHaveLength(1);
+    expect(serialized[0]?.role).toBe("user");
+    const serializedText = serialized[0]?.content.map((b) => (b.type === "text" ? b.text : "")).join("\n") ?? "";
+    expect(serializedText).toContain("<previous-summary>\nEarlier summary body.\n</previous-summary>");
+    expect(serializedText).toContain("<conversation>");
+    expect(serializedText).toContain("</conversation>");
+    expect(serializedText).toContain("[image omitted]");
+    expect(serializedText).not.toContain("BASE64DATA");
+    expect(JSON.stringify(serialized)).not.toContain('"type":"tool-call"');
+    expect(JSON.stringify(serialized)).not.toContain('"type":"tool-result"');
+    expect(JSON.stringify(serialized)).not.toContain('"type":"image"');
+
+    // End-to-end 2nd compaction keeps wire messages pure text + COMPACTION_REQUEST without tools
+    const harness = await setup([
+      toolReply([{ id: "call-1", name: "echo", args: { text: "one" } }]),
+      textReply("First answer."),
+      textReply("Second answer."),
+      textReply("Compaction #1."),
+      textReply("Third answer."),
+      textReply("Fourth answer."),
+      textReply("Compaction #2."),
+    ]);
+    await run(harness, "Prompt 1");
+    await run(harness, "Prompt 2");
+    await harness.ctx.agents.compact(harness.session);
+    await run(harness, "Prompt 3");
+    await run(harness, "Prompt 4");
+    await harness.ctx.agents.compact(harness.session);
+
+    const secondCompactionReq = harness.provider.requests.at(-1);
+    expect(secondCompactionReq?.tools).toBeUndefined();
+    expect(secondCompactionReq?.messages).toHaveLength(2);
+    expect(secondCompactionReq?.messages.every((m) => m.role === "user")).toBe(true);
+    expect(secondCompactionReq?.messages[1]).toEqual({ role: "user", content: text(COMPACTION_REQUEST) });
+    const historyBlock = secondCompactionReq?.messages[0]?.content[0];
+    expect(historyBlock?.type).toBe("text");
+    if (historyBlock?.type === "text") {
+      expect(historyBlock.text).toContain("<previous-summary>");
+      expect(historyBlock.text).toContain("Compaction #1.");
+      expect(historyBlock.text).toContain("<conversation>");
+    }
+  });
+
+  it("carries forward working-set files and latest plan across multiple compactions", () => {
+    const events = [
+      { seq: 1, ts: "t", type: "tool-call" as const, data: { callId: "c0", name: "read", args: { path: "src/evicted.ts" } } },
+      {
+        seq: 2,
+        ts: "t",
+        type: "compaction" as const,
+        data: {
+          throughSeq: 1,
+          summary: [
+            "Summary #1.",
+            "",
+            "[Working-set context]",
+            "Recent files touched:",
+            "- src/f1.ts (modified)",
+            "- src/f2.ts (read)",
+            "- src/f3.ts (read)",
+            "- src/f4.ts (read)",
+            "- src/f5.ts (read)",
+            "- src/evicted.ts (read)",
+            "Latest plan:",
+            "- [completed] (p1) Step 1",
+            "- [in_progress] (p2) Step 2",
+          ].join("\n"),
+        },
+      },
+      { seq: 3, ts: "t", type: "tool-call" as const, data: { callId: "c1", name: "read", args: { path: "src/f2.ts" } } },
+      { seq: 4, ts: "t", type: "tool-call" as const, data: { callId: "c2", name: "edit", args: { path: "src/f6.ts" } } },
+      { seq: 5, ts: "t", type: "tool-call" as const, data: { callId: "c3", name: "write", args: { path: "src/f7.ts" } } },
+      { seq: 6, ts: "t", type: "tool-call" as const, data: { callId: "c4", name: "read", args: { path: "src/f8.ts" } } },
+    ];
+
+    const addendum = buildCompactionWorkingSetAddendum(events, 6);
+    expect(addendum).toContain("[Working-set context]");
+    expect(addendum).not.toContain("src/evicted.ts");
+    expect(addendum).toContain("src/f1.ts (modified)");
+    expect(addendum).toContain("src/f2.ts (read)");
+    expect(addendum).toContain("src/f6.ts (modified)");
+    expect(addendum).toContain("src/f8.ts (read)");
+    expect(addendum).toContain("- [completed] (p1) Step 1");
+    expect(addendum).toContain("- [in_progress] (p2) Step 2");
+  });
+
+  it("includes trailing events after the last assistant turn in proactive compaction threshold checks", async () => {
+    const harness = await setup([
+      textReply("One.", { inputTokens: 60_000, outputTokens: 500 }),
+      textReply("Summary with trailing tokens."),
+      textReply("Two."),
+    ]);
+    Object.assign(harness.provider, {
+      listModels: async () => [{ id: "test-model", contextWindow: 100_000 }],
+    });
+
+    await run(harness, "First");
+    // Append a trailing tool-result whose CJK content adds ~30k estimated tokens (> 80% of 100k when combined with 60.5k)
+    harness.session.append("tool-call", { callId: "c-big", name: "echo", args: { text: "x" } });
+    harness.session.append("tool-result", {
+      callId: "c-big",
+      name: "echo",
+      content: text("中".repeat(40_000)),
+      isError: false,
+    });
+    await run(harness, "Follow-up question");
+
+    const compactionEvents = harness.session.events.filter((e) => e.type === "compaction");
+    expect(compactionEvents).toHaveLength(1);
+    expect(compactionEvents[0]?.data.summary).toContain("Summary with trailing tokens.");
+    const finalAnswerReq = harness.provider.requests.at(-1);
+    expect(finalAnswerReq?.messages).toEqual([
+      { role: "user", content: text(`${COMPACTION_PREFIX}Summary with trailing tokens.`) },
+      { role: "user", content: text("Follow-up question") },
+    ]);
+  });
+
+  it("preempts later tool batches on queued steer while maintaining 1:1 tool-call/result pairing", async () => {
+    let slowRoStarted = () => {};
+    const roStarted = new Promise<void>((resolve) => { slowRoStarted = resolve; });
+    let releaseSlowRo = () => {};
+    let mutCount = 0;
+    let fastAfterMutCount = 0;
+
+    const harness = await setup([
+      toolReply([
+        { id: "c1", name: "slow_ro", args: {} },
+        { id: "c2", name: "fast_ro", args: { phase: "batch0" } },
+        { id: "c3", name: "write_mut", args: {} },
+        { id: "c4", name: "fast_ro", args: { phase: "batch2" } },
+      ]),
+      textReply("Steered course."),
+    ]);
+
+    harness.ctx.tools.register({
+      name: "slow_ro",
+      readOnly: true,
+      description: "Slow read-only tool",
+      parameters: { type: "object", properties: {} },
+      execute: () => new Promise((resolve) => {
+        slowRoStarted();
+        releaseSlowRo = () => resolve(textOutput("slow done"));
+      }),
+    });
+    harness.ctx.tools.register<{ phase: string }>({
+      name: "fast_ro",
+      readOnly: true,
+      description: "Fast read-only tool",
+      parameters: { type: "object", properties: { phase: { type: "string" } }, required: ["phase"] },
+      execute: ({ phase }) => {
+        if (phase === "batch2") fastAfterMutCount += 1;
+        return textOutput(`fast:${phase}`);
+      },
+    });
+    harness.ctx.tools.register({
+      name: "write_mut",
+      description: "Mutating tool",
+      parameters: { type: "object", properties: {} },
+      execute: () => {
+        mutCount += 1;
+        return textOutput("mutated");
+      },
+    });
+
+    harness.ctx.agents.prompt(harness.session, text("Start multi-batch"));
+    await roStarted;
+    harness.ctx.agents.steer(harness.session, text("Abort remaining batches"));
+    releaseSlowRo();
+    await harness.ctx.agents.idle(harness.session.id);
+
+    expect(mutCount).toBe(0);
+    expect(fastAfterMutCount).toBe(0);
+
+    const toolCalls = harness.session.events.filter((e) => e.type === "tool-call");
+    const toolResults = harness.session.events.filter((e) => e.type === "tool-result");
+    expect(toolCalls.map((e) => e.data.callId)).toEqual(["c1", "c2", "c3", "c4"]);
+    expect(toolResults.map((e) => e.data.callId)).toEqual(["c1", "c2", "c3", "c4"]);
+    expect(toolResults[0]?.data.isError).toBe(false);
+    expect(toolResults[1]?.data.isError).toBe(false);
+    expect(toolResults[2]?.data).toMatchObject({
+      callId: "c3",
+      isError: true,
+      content: [{ type: "text", text: "Skipped due to queued user steering message." }],
+    });
+    expect(toolResults[3]?.data).toMatchObject({
+      callId: "c4",
+      isError: true,
+      content: [{ type: "text", text: "Skipped due to queued user steering message." }],
+    });
+
+    const skippedEnds = harness.deltas.filter((d) => d.type === "tool-end" && (d.callId === "c3" || d.callId === "c4"));
+    expect(skippedEnds).toEqual([
+      { type: "tool-end", callId: "c3", isError: true },
+      { type: "tool-end", callId: "c4", isError: true },
+    ]);
+
+    const secondReq = harness.provider.requests[1];
+    expect(secondReq?.messages.at(-1)).toEqual({ role: "user", content: text("Abort remaining batches") });
+  });
+
+  it("emits live tool-progress deltas before tool-end and ignores late progress after completion", async () => {
+    let savedOnProgress: ((text: string) => void) | undefined;
+    const harness = await setup([
+      toolReply([{ id: "c1", name: "prog", args: {} }]),
+      textReply("Completed."),
+    ]);
+
+    harness.ctx.tools.register({
+      name: "prog",
+      description: "Tool emitting progress",
+      parameters: { type: "object", properties: {} },
+      execute: async (_args, env) => {
+        savedOnProgress = env.onProgress;
+        env.onProgress?.("step 1");
+        await Promise.resolve();
+        env.onProgress?.("step 2");
+        return textOutput("final output");
+      },
+    });
+
+    await run(harness, "Run progress tool");
+    savedOnProgress?.("late update");
+
+    const progressDeltas = harness.deltas.filter((d) => d.type === "tool-progress");
+    expect(progressDeltas).toEqual([
+      { type: "tool-progress", callId: "c1", name: "prog", text: "step 1" },
+      { type: "tool-progress", callId: "c1", name: "prog", text: "step 2" },
+    ]);
+
+    const startIndex = harness.deltas.findIndex((d) => d.type === "tool-start" && d.callId === "c1");
+    const firstProgIndex = harness.deltas.findIndex((d) => d.type === "tool-progress" && d.callId === "c1");
+    const endIndex = harness.deltas.findIndex((d) => d.type === "tool-end" && d.callId === "c1");
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    expect(firstProgIndex).toBeGreaterThan(startIndex);
+    expect(endIndex).toBeGreaterThan(firstProgIndex);
   });
 });

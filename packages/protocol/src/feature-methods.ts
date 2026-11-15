@@ -82,6 +82,8 @@ export interface SkillInfo {
   enabled: boolean;
   trusted: boolean;
   readOnly?: boolean;
+  /** Plugin id when contributed by an enabled plugin's `skills/` directory. */
+  pluginId?: string;
 }
 
 export interface SkillListParams {

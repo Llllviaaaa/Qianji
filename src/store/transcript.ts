@@ -6,7 +6,7 @@ import { requestOpenSettings } from "../lib/shellBridge";
 import { appendManagedQueue, insertManagedQueueItem, moveManagedQueueItem, removeManagedQueueItem } from "../lib/managedQueue";
 import { completionNotification, isSilentUiRequest, uiRequestNotification } from "../lib/eventNotifications";
 import { agentBrowserFromResult, computerFromResult, isGrokBrowserTool, isGrokComputerTool } from "../lib/toolPanels";
-import { completeAssistant, endToolCall, interruptTurn, replaceOrAppend, resetStreamingAssistant, startAssistant, startToolCall } from "../lib/transcript";
+import { completeAssistant, endToolCall, interruptTurn, progressToolCall, replaceOrAppend, resetStreamingAssistant, startAssistant, startToolCall } from "../lib/transcript";
 import type { ManagedQueuedMessage } from "../types";
 import type { GetState, SetState, StoreContext } from "./context";
 import type { TranscriptSlice } from "./types";
@@ -103,6 +103,9 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
           return;
         case "tool-start":
           set((state) => ({ messages: startToolCall(state.messages, event.callId, event.name, event.args) }));
+          return;
+        case "tool-progress":
+          set((state) => ({ messages: progressToolCall(state.messages, event.callId, event.name, event.text) }));
           return;
         case "tool-end":
           set((state) => ({

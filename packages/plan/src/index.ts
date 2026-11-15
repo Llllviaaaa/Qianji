@@ -9,8 +9,7 @@ import "@qianji/agent";
 import "@qianji/commands";
 import { ErrorCode, type PlanGetResult } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
-import { customEvents, latestCustom, type Session } from "@qianji/session";
-import { SectionOrder } from "@qianji/system-prompt";
+import { currentBranch, customEvents, latestCustom, type Session } from "@qianji/session";
 import { textOutput, type ToolDefinition } from "@qianji/tools";
 import { validatePlanState, type PlanItemStatus, type PlanState } from "./core.ts";
 
@@ -20,18 +19,14 @@ export const name = "qianji-plan";
 export const inject = ["sessions", "tools"];
 export const NAMESPACE = "qianji-plan";
 export const LEGACY_NAMESPACE = "pid-plan";
+export const DRIFT_REMINDER_EVENT_THRESHOLD = 12;
 
 const EMPTY: PlanState = { explanation: "", items: [] };
 
 /** The session's plan on its current branch; an unreadable one counts as empty. */
 export function planOf(session: Session): PlanState {
   const stored = latestCustom<PlanState>(session.events, [NAMESPACE, LEGACY_NAMESPACE]);
-  if (stored === undefined) return EMPTY;
-  try {
-    return validatePlanState({ explanation: stored.explanation ?? "", items: stored.items ?? [] });
-  } catch {
-    return EMPTY;
-  }
+  return parsePlanEventData(stored) ?? EMPTY;
 }
 
 export function setPlan(session: Session, plan: PlanState): PlanState {
@@ -109,6 +104,41 @@ export function formatPlanPromptSection(plan: PlanState): string | undefined {
   return lines.join("\n");
 }
 
+function parsePlanEventData(raw: unknown): PlanState | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const candidate = raw as Partial<PlanState>;
+  try {
+    return validatePlanState({ explanation: candidate.explanation ?? "", items: candidate.items ?? [] });
+  } catch {
+    return undefined;
+  }
+}
+
+export function formatPlanDriftReminder(plan: PlanState): string | undefined {
+  const section = formatPlanPromptSection(plan);
+  if (section === undefined) return undefined;
+  return `<plan-reminder>\n${section}\n</plan-reminder>`;
+}
+
+function findPendingDriftReminder(session: Session): string | undefined {
+  const branch = currentBranch(session.events);
+  let lastPlanIndex = -1;
+  for (let i = branch.length - 1; i >= 0; i -= 1) {
+    const event = branch[i];
+    if (event?.type === "custom" && (event.data.ns === NAMESPACE || event.data.ns === LEGACY_NAMESPACE)) {
+      lastPlanIndex = i;
+      break;
+    }
+  }
+  if (lastPlanIndex === -1) return undefined;
+  const eventsSincePlan = branch.length - 1 - lastPlanIndex;
+  if (eventsSincePlan <= DRIFT_REMINDER_EVENT_THRESHOLD) return undefined;
+  const latestPlanEvent = branch[lastPlanIndex];
+  if (latestPlanEvent?.type !== "custom") return undefined;
+  const plan = parsePlanEventData(latestPlanEvent.data.data);
+  return plan === undefined ? undefined : formatPlanDriftReminder(plan);
+}
+
 function isExecutableAgentSession(ctx: Context, session: Session): boolean {
   if (session.header.side === true) return false;
   const perms = ctx.get("permissions" as never) as { modes?: (s: Session) => { agentMode?: string; effective?: string } } | undefined;
@@ -127,31 +157,36 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.on("session/deleted", (id) => void nudgedPlanSeq.delete(id)), `${name}: cleanup deleted`);
   ctx.effect(() => ctx.on("session/unloaded", (id) => void nudgedPlanSeq.delete(id)), `${name}: cleanup unloaded`);
 
-  ctx.inject(["systemPrompt"], (promptCtx) => {
-    promptCtx.effect(
-      () => promptCtx.systemPrompt.section(
-        "plan",
-        async ({ sessionId }) => {
-          const session = await promptCtx.sessions.get(sessionId);
-          return session === undefined ? undefined : formatPlanPromptSection(planOf(session));
-        },
-        { order: SectionOrder.environment - 50 },
-      ),
-      `${name}: system prompt`,
-    );
-  });
+  // Inject drift reminders into the trailing user/tool-result message instead of
+  // mutating the system prompt so the upstream KV cache prefix stays invariant.
+  ctx.effect(() => ctx.on("llm/request", (request, next) => {
+    if (request.sessionId !== undefined && request.sessionId !== "") {
+      const session = ctx.sessions.peek(request.sessionId);
+      if (session !== undefined) {
+        const reminder = findPendingDriftReminder(session);
+        if (reminder !== undefined) {
+          for (let i = request.messages.length - 1; i >= 0; i -= 1) {
+            const msg = request.messages[i];
+            if (msg !== undefined && (msg.role === "user" || msg.role === "tool-result")) {
+              request.messages[i] = {
+                ...msg,
+                content: [...msg.content, { type: "text", text: `\n\n${reminder}` }],
+              };
+              break;
+            }
+          }
+        }
+      }
+    }
+    return next();
+  }), `${name}: llm request drift reminder`);
 
   ctx.effect(() => ctx.on("agent/before-stop", (session, info) => {
     if (info.stop !== "stop" || !isExecutableAgentSession(ctx, session)) return undefined;
     const latestEvent = customEvents(session.events, [NAMESPACE, LEGACY_NAMESPACE]).at(-1);
     if (latestEvent === undefined) return undefined;
-    const raw = latestEvent.data.data as Partial<PlanState> | undefined;
-    let plan: PlanState;
-    try {
-      plan = validatePlanState({ explanation: raw?.explanation ?? "", items: raw?.items ?? [] });
-    } catch {
-      return undefined;
-    }
+    const plan = parsePlanEventData(latestEvent.data.data);
+    if (plan === undefined) return undefined;
     const remaining = plan.items.filter((item) => item.status !== "completed");
     if (remaining.length === 0) return undefined;
     if (nudgedPlanSeq.get(session.id) === latestEvent.seq) return undefined;

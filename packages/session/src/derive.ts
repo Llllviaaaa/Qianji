@@ -3,7 +3,8 @@
  * sliding-window compaction). Everything here is a pure function of the
  * event list, so tests can assert on JSONL fixtures directly.
  */
-import type { AssistantMessage, Effort, Message, ToolResultMessage } from "@qianji/llm";
+import type { AssistantContent, AssistantMessage, Effort, Message, ToolResultMessage } from "@qianji/llm";
+import { estimateEventTokens } from "./tokens.ts";
 import type { ModelRef, SessionEvent, SessionHeader, SessionModelUsage, SessionSummary } from "./types.ts";
 
 /** The note a compaction summary is sent to the model under. */
@@ -82,6 +83,56 @@ function pushUserNote(messages: Message[], text: string): void {
   messages.push({ role: "user", content: [{ type: "text", text }] });
 }
 
+function inferSignatureProvider(model: ModelRef | undefined): "gemini" | "anthropic" | undefined {
+  if (model === undefined) return undefined;
+  if (/gemini/i.test(model.model) || /gemini|google/i.test(model.provider)) return "gemini";
+  if (/claude/i.test(model.model) || /anthropic/i.test(model.provider)) return "anthropic";
+  return undefined;
+}
+
+function isBrokenOrphanToolCall(block: AssistantContent, recordedToolResults: ReadonlySet<string>): boolean {
+  return (
+    block.type === "tool-call"
+    && typeof block.arguments === "object"
+    && block.arguments !== null
+    && "__invalidJson" in block.arguments
+    && !recordedToolResults.has(block.id)
+  );
+}
+
+/**
+ * Clean historical assistant content: drop orphan broken `__invalidJson` tool calls
+ * from errored turns and infer `signatureProvider` on unlabelled thinking signatures.
+ */
+function normalizeAssistantContent(
+  content: readonly AssistantContent[],
+  model: ModelRef | undefined,
+  stop: string,
+  recordedToolResults: ReadonlySet<string>,
+): AssistantContent[] {
+  const inferred = inferSignatureProvider(model);
+  let changed = false;
+  const out: AssistantContent[] = [];
+  for (const block of content) {
+    if (stop === "error" && isBrokenOrphanToolCall(block, recordedToolResults)) {
+      changed = true;
+      continue;
+    }
+    if (
+      block.type === "thinking"
+      && block.signature !== undefined
+      && block.signatureProvider === undefined
+      && inferred !== undefined
+    ) {
+      changed = true;
+      out.push({ ...block, signatureProvider: inferred });
+      continue;
+    }
+    out.push(block);
+  }
+  return changed ? out : (content as AssistantContent[]);
+}
+
 /** The LLM context and session settings on the current branch. */
 export function deriveState(events: readonly SessionEvent[]): SessionState {
   const branch = currentBranch(events);
@@ -95,6 +146,13 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
     else if (event.type === "label") {
       if (event.data.title !== undefined) state.title = event.data.title;
       if (event.data.archived !== undefined) state.archived = event.data.archived;
+    }
+  }
+
+  const recordedToolResults = new Set<string>();
+  for (const event of branch) {
+    if (event.type === "tool-result" && (compaction === undefined || event.seq > compaction.throughSeq)) {
+      recordedToolResults.add(event.data.callId);
     }
   }
 
@@ -133,13 +191,14 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
     } else if (event.type === "assistant") {
       closeDanglingCalls(messages, pending);
       flushReadyNotes(event.seq - 1, 0);
-      const hasToolCall = event.data.content.some((block) => block.type === "tool-call");
-      const hasVisibleText = event.data.content.some((block) => block.type === "text" && block.text.trim() !== "");
+      const content = normalizeAssistantContent(event.data.content, event.data.model, event.data.stop, recordedToolResults);
+      const hasToolCall = content.some((block) => block.type === "tool-call");
+      const hasVisibleText = content.some((block) => block.type === "text" && block.text.trim() !== "");
       // Skip empty, whitespace-only, thinking-only non-tool turns, and errored partial non-tool turns.
-      if (hasToolCall || (event.data.stop !== "error" && hasVisibleText)) {
-        const message: AssistantMessage = { role: "assistant", content: event.data.content };
+      if (content.length > 0 && (hasToolCall || (event.data.stop !== "error" && hasVisibleText))) {
+        const message: AssistantMessage = { role: "assistant", content };
         messages.push(message);
-        for (const block of event.data.content) if (block.type === "tool-call") pending.set(block.id, block.name);
+        for (const block of content) if (block.type === "tool-call") pending.set(block.id, block.name);
       }
     } else if (event.type === "tool-result") {
       if (pending.delete(event.data.callId)) {
@@ -321,27 +380,6 @@ export function compactionPoint(events: readonly SessionEvent[], keepLatestTurn 
   const earlierTurn = branch.slice(0, Math.max(0, lastUser)).some((event) => event.type === "user");
   if (!earlierTurn) return branch.at(-1)?.seq;
   return branch[lastUser - 1]?.seq;
-}
-
-function estimateEventTokens(event: SessionEvent): number {
-  let chars = 0;
-  if (event.type === "user") {
-    for (const block of event.data.content) {
-      chars += block.type === "text" ? block.text.length : 1024;
-    }
-  } else if (event.type === "assistant") {
-    for (const block of event.data.content) {
-      if (block.type === "text" || block.type === "thinking") chars += block.text.length;
-      else if (block.type === "tool-call") chars += block.name.length + JSON.stringify(block.arguments).length;
-    }
-  } else if (event.type === "tool-result") {
-    for (const block of event.data.content) {
-      chars += block.type === "text" ? block.text.length : 1024;
-    }
-  } else if (event.type === "custom" && event.data.ns === CONTINUATION_NAMESPACE) {
-    chars += JSON.stringify(event.data.data).length;
-  }
-  return Math.ceil(chars / 4);
 }
 
 /**

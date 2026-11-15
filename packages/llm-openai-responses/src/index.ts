@@ -10,6 +10,7 @@ import {
   getJson,
   joinUrl,
   postSse,
+  transformMessagesForProvider,
   type Effort,
   type FinishReason,
   type LlmAdapter,
@@ -126,7 +127,7 @@ function toResponsesInput(messages: Message[]): ResponsesInputItem[] {
 export function buildRequestBody(request: LlmRequest, model?: ModelInfo, baseUrl?: string): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
-    input: toResponsesInput(request.messages),
+    input: toResponsesInput(transformMessagesForProvider(request.messages, "openai-responses")),
     stream: true,
   };
   if (request.system && request.system.trim() !== "") {

@@ -149,7 +149,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           }
           const statuses = mcpService?.statuses() ?? [];
           if (statuses.length === 0) {
-            return { output: "当前未配置或未启用任何 MCP 服务器。可在设置 → MCP 页面添加并启用连接器。" };
+            return { output: "当前未配置或未启用任何 MCP 服务器。可在设置 → 扩展插件（mcp）添加并启用连接器。" };
           }
           const connectedCount = statuses.filter((item) => item.connected).length;
           const totalTools = statuses.reduce((acc, item) => acc + item.toolCount, 0);
@@ -179,7 +179,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           const allCommands = await ctx.commands.list(env.cwd);
           const skillCommands = allCommands.filter((item) => item.source === "skill");
           if (skillCommands.length === 0) {
-            return { output: "当前工作区尚未启用任何 Agent 技能。可在设置 → 技能 页面创建或启用技能。" };
+            return { output: "当前工作区尚未启用任何 Agent 技能。可在设置 → 扩展插件（prompt-context）创建或启用技能。" };
           }
           const lines = [`### 已启用 Agent 技能（共 ${skillCommands.length} 个）`];
           for (const item of skillCommands) {

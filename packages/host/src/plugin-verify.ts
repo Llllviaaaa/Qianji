@@ -380,8 +380,10 @@ export interface PluginVerifyReport {
   version?: string;
   hasHost?: boolean;
   hasClient?: boolean;
+  hasSkills?: boolean;
   hostEntry?: string;
   clientEntry?: string;
+  skillsDir?: string;
   clientBundleBytes?: number;
   clientCompiled?: { bytes: number; etag: string };
   errors: string[];
@@ -463,8 +465,10 @@ export async function verifyPluginDirectory(targetDir: string): Promise<PluginVe
     version: manifest.version,
     hasHost: manifest.hostEntry !== undefined,
     hasClient: manifest.clientEntry !== undefined,
+    hasSkills: manifest.skillsDir !== undefined,
     ...(manifest.hostEntry === undefined ? {} : { hostEntry: manifest.hostEntry }),
     ...(manifest.clientEntry === undefined ? {} : { clientEntry: manifest.clientEntry }),
+    ...(manifest.skillsDir === undefined ? {} : { skillsDir: manifest.skillsDir }),
     ...(clientBundleBytes === undefined ? {} : { clientBundleBytes }),
     ...(clientCompiled === undefined ? {} : { clientCompiled }),
     errors,

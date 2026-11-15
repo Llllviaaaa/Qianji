@@ -25,12 +25,14 @@ export interface ResolvedCandidate {
   removable: boolean;
   hasHost: boolean;
   hasClient: boolean;
+  hasSkills?: boolean;
   watch: boolean;
   dir?: string;
   workspace?: string;
   workspaceKey?: string;
   hostEntry?: string;
   clientEntry?: string;
+  skillsDir?: string;
   assetsDir?: string;
   origin?: PluginInstallOrigin;
   builtinPlugin?: Plugin;
@@ -165,12 +167,14 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         removable: false,
         hasHost: wsManifest.hostEntry !== undefined,
         hasClient: wsManifest.clientEntry !== undefined,
+        hasSkills: wsManifest.skillsDir !== undefined,
         watch: wsPatch?.watch ?? true,
         dir: wsManifest.dir,
         workspace: wsManifest.workspace,
         workspaceKey: pathComparisonKey(wsManifest.workspace),
         ...(wsManifest.hostEntry === undefined ? {} : { hostEntry: wsManifest.hostEntry }),
         ...(wsManifest.clientEntry === undefined ? {} : { clientEntry: wsManifest.clientEntry }),
+        ...(wsManifest.skillsDir === undefined ? {} : { skillsDir: wsManifest.skillsDir }),
         ...(wsManifest.assetsDir === undefined ? {} : { assetsDir: wsManifest.assetsDir }),
         effectiveConfig: mergedConfig,
         publicConfig: mergedConfig,
@@ -197,10 +201,12 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         removable: true,
         hasHost: userManifest.hostEntry !== undefined,
         hasClient: userManifest.clientEntry !== undefined,
+        hasSkills: userManifest.skillsDir !== undefined,
         watch: patch?.watch === true,
         dir: userManifest.dir,
         ...(userManifest.hostEntry === undefined ? {} : { hostEntry: userManifest.hostEntry }),
         ...(userManifest.clientEntry === undefined ? {} : { clientEntry: userManifest.clientEntry }),
+        ...(userManifest.skillsDir === undefined ? {} : { skillsDir: userManifest.skillsDir }),
         ...(userManifest.assetsDir === undefined ? {} : { assetsDir: userManifest.assetsDir }),
         ...(patch?.origin === undefined ? {} : { origin: patch.origin }),
         effectiveConfig: mergedConfig,
@@ -286,10 +292,12 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         removable: patch !== undefined,
         hasHost: bundledManifest.hostEntry !== undefined,
         hasClient: bundledManifest.clientEntry !== undefined,
+        hasSkills: bundledManifest.skillsDir !== undefined,
         watch: false,
         dir: bundledManifest.dir,
         ...(bundledManifest.hostEntry === undefined ? {} : { hostEntry: bundledManifest.hostEntry }),
         ...(bundledManifest.clientEntry === undefined ? {} : { clientEntry: bundledManifest.clientEntry }),
+        ...(bundledManifest.skillsDir === undefined ? {} : { skillsDir: bundledManifest.skillsDir }),
         ...(bundledManifest.assetsDir === undefined ? {} : { assetsDir: bundledManifest.assetsDir }),
         effectiveConfig: mergedConfig,
         publicConfig: mergedConfig,
@@ -300,4 +308,33 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
     }
   }
   return candidates;
+}
+
+export interface ActivePluginSkillRoot {
+  pluginId: string;
+  dir: string;
+  tier: PluginTier;
+}
+
+export function collectActivePluginSkillRoots(
+  candidates: readonly ResolvedCandidate[],
+  errors: ReadonlyMap<string, string>,
+  cwd?: string,
+  trustedWorkspace?: string,
+): ActivePluginSkillRoot[] {
+  const cwdKey = cwd !== undefined && cwd.trim() !== "" ? pathComparisonKey(cwd) : undefined;
+  const trustedKey = trustedWorkspace !== undefined && trustedWorkspace.trim() !== ""
+    ? pathComparisonKey(trustedWorkspace)
+    : undefined;
+  const roots: ActivePluginSkillRoot[] = [];
+  for (const candidate of candidates) {
+    if (!candidate.enabled || candidate.skillsDir === undefined) continue;
+    if (errors.has(candidate.id)) continue;
+    if (candidate.tier === "workspace") {
+      if (trustedKey === undefined || candidate.workspaceKey !== trustedKey) continue;
+      if (cwdKey !== undefined && candidate.workspaceKey !== cwdKey) continue;
+    }
+    roots.push({ pluginId: candidate.id, dir: candidate.skillsDir, tier: candidate.tier });
+  }
+  return roots;
 }

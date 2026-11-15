@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
@@ -6,11 +7,28 @@ import { afterAll, describe, expect, it } from "vitest";
 import { Sessions } from "@qianji/session";
 import { Tools, type ToolEnv } from "@qianji/tools";
 import * as toolBash from "../src/index.ts";
-import { bashTool, chooseShell, findPowerShell, findShell, isPowerShell, powershellTool, shellArgs } from "../src/index.ts";
+import {
+  bashTool,
+  chooseShell,
+  createProgressReporter,
+  findPowerShell,
+  findShell,
+  isPowerShell,
+  powershellTool,
+  shellArgs,
+  spillTruncatedOutput,
+} from "../src/index.ts";
 
 const shell = findShell();
 const cwd = mkdtempSync(join(tmpdir(), "pid-tool-bash-"));
-afterAll(() => rmSync(cwd, { recursive: true, force: true }));
+afterAll(async () => {
+  // Recently killed child trees on Windows can briefly hold cwd handles (EPERM/EBUSY).
+  try {
+    await rm(cwd, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+  } catch {
+    // Left for OS temp cleanup if a child handle outlives the retry window.
+  }
+});
 
 const env = (signal = new AbortController().signal): ToolEnv => ({ sessionId: "s", cwd, signal });
 const textOf = (output: Awaited<ReturnType<ReturnType<typeof bashTool>["execute"]>>) =>
@@ -55,9 +73,65 @@ describe.skipIf(shell === undefined)("bash tool", () => {
   it("keeps the tail of long output", async () => {
     const output = await tool.execute({ command: "for i in $(seq 1 3000); do echo line$i; done" }, env());
     const text = textOf(output);
-    expect(text.startsWith("[Output truncated; showing the end.]")).toBe(true);
+    expect(text.startsWith("[Output truncated; showing the end.]\n")).toBe(true);
     expect(text).toContain("line3000");
     expect(text).not.toContain("line1\n");
+  });
+
+  it("spills full truncated foreground output to spillDir and falls back cleanly on write error", async () => {
+    const spillRoot = join(cwd, "spill-ok");
+    const spillingBash = bashTool({ shell, spillDir: spillRoot });
+    const output = await spillingBash.execute(
+      { command: "for i in $(seq 1 3000); do echo line$i; done" },
+      { ...env(), sessionId: "sess:1", callId: "call/9" },
+    );
+    const text = textOf(output);
+    const spillPath = (output.details as { spillPath?: string } | undefined)?.spillPath;
+    expect(spillPath).toBe(join(spillRoot, "sess_1", "call_9.log"));
+    expect(
+      text.startsWith(
+        `[Output truncated; showing the end. Full output saved to ${spillPath} — use read(offset, limit) or grep to inspect earlier lines.]\n`,
+      ),
+    ).toBe(true);
+    expect(text).toContain("line3000");
+    expect(text).not.toContain("line1\n");
+
+    const diskContent = readFileSync(spillPath as string, "utf8");
+    expect(diskContent).toContain("line1\n");
+    expect(diskContent).toContain("line3000\n");
+
+    const blockedSpillDir = join(cwd, "spill-blocked-file");
+    writeFileSync(blockedSpillDir, "not a directory", "utf8");
+    const fallbackBash = bashTool({ shell, spillDir: blockedSpillDir });
+    const fallback = await fallbackBash.execute(
+      { command: "for i in $(seq 1 3000); do echo line$i; done" },
+      { ...env(), callId: "call-fail" },
+    );
+    expect(textOf(fallback).startsWith("[Output truncated; showing the end.]\n")).toBe(true);
+  });
+
+  it("streams throttled bounded tail previews via env.onProgress", async () => {
+    const updates: string[] = [];
+    const output = await tool.execute(
+      { command: "echo first-chunk; sleep 0.3; echo second-chunk" },
+      { ...env(), onProgress: (preview) => updates.push(preview) },
+    );
+    expect(output.isError).toBe(false);
+    expect(updates.length).toBeGreaterThanOrEqual(2);
+    expect(updates.some((u) => u.includes("first-chunk") && !u.includes("second-chunk"))).toBe(true);
+    expect(updates.at(-1)).toContain("second-chunk");
+
+    const boundedUpdates: string[] = [];
+    const hugeOutput = await tool.execute(
+      { command: "for i in $(seq 1 800); do echo progress-payload-line-$i; done" },
+      { ...env(), onProgress: (preview) => boundedUpdates.push(preview) },
+    );
+    expect(hugeOutput.isError).toBe(false);
+    expect(boundedUpdates.length).toBeGreaterThan(0);
+    for (const preview of boundedUpdates) {
+      expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(4096);
+    }
+    expect(boundedUpdates.at(-1)).toContain("progress-payload-line-800");
   });
 
   it("does not hang when a background child process keeps stdio pipes open after the shell exits", async () => {
@@ -145,6 +219,56 @@ describe.skipIf(powershell === undefined)("powershell tool (ADR 0021)", () => {
     const output = await tool.execute({ command: 'cmd /c "echo warn 1>&2 & exit 0" 2>&1' }, env());
     expect(textOf(output)).toContain("warn");
     expect(output.isError).toBe(false);
+  });
+
+  it("supports spillDir and live onProgress in powershell", async () => {
+    const psSpill = join(cwd, "ps-spill");
+    const psTool = powershellTool({ spillDir: psSpill }, undefined, powershell);
+    const updates: string[] = [];
+    const output = await psTool.execute(
+      { command: '1..2500 | ForEach-Object { "psline$_" }' },
+      { ...env(), sessionId: "ps-sess", callId: "ps-call", onProgress: (preview) => updates.push(preview) },
+    );
+    const text = textOf(output);
+    const spillPath = (output.details as { spillPath?: string } | undefined)?.spillPath;
+    expect(spillPath).toBe(join(psSpill, "ps-sess", "ps-call.log"));
+    expect(text.startsWith(`[Output truncated; showing the end. Full output saved to ${spillPath}`)).toBe(true);
+    expect(readFileSync(spillPath as string, "utf8")).toContain("psline1");
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.at(-1)).toContain("psline2500");
+  });
+});
+
+describe("spill and progress helpers", () => {
+  it("writes sanitized spill logs and ignores missing or invalid spillDir", () => {
+    expect(spillTruncatedOutput(undefined, "s", "c", "data")).toBeUndefined();
+    const dir = join(cwd, "helper-spill");
+    const written = spillTruncatedOutput(dir, "../bad", "call:1", "hello\nworld");
+    expect(written).toBe(join(dir, ".._bad", "call_1.log"));
+    expect(readFileSync(written as string, "utf8")).toBe("hello\nworld");
+
+    const blocker = join(cwd, "helper-blocker");
+    writeFileSync(blocker, "x", "utf8");
+    expect(spillTruncatedOutput(blocker, "s", "c", "data")).toBeUndefined();
+  });
+
+  it("throttles progress emissions and trims multibyte previews to 4KB", async () => {
+    const seen: string[] = [];
+    const reporter = createProgressReporter((text) => seen.push(text), { intervalMs: 80, maxBytes: 128 });
+    reporter.push("alpha ");
+    reporter.push("beta ");
+    reporter.push("gamma");
+    expect(seen).toEqual(["alpha "]);
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    expect(seen).toEqual(["alpha ", "alpha beta gamma"]);
+
+    // Exceed maxBytes with multi-byte UTF-8 characters.
+    const big = "千机".repeat(60);
+    reporter.push(big);
+    reporter.flush();
+    const last = seen.at(-1) ?? "";
+    expect(Buffer.byteLength(last, "utf8")).toBeLessThanOrEqual(128);
+    expect(last.endsWith("千机")).toBe(true);
   });
 });
 

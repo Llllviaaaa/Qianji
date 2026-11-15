@@ -5,6 +5,7 @@ import type {
   PluginInfo,
   PluginInstallChannel,
   PluginMutationResult,
+  SkillInfo,
   WorkspaceTrustListResult,
 } from "@qianji/protocol";
 import { getClientPluginErrors, subscribeClientPluginErrors } from "../../lib/clientPluginRuntime";
@@ -12,6 +13,7 @@ import { describeError } from "../../lib/errors";
 import { mcpClient } from "../../lib/mcpClient";
 import { pluginClient } from "../../lib/pluginClient";
 import { queryKeys } from "../../lib/queries";
+import { skillClient } from "../../lib/skillClient";
 import type { AppSettings } from "../../types";
 import {
   canCheckUpdate,
@@ -26,8 +28,9 @@ import {
 
 const NO_PLUGINS: PluginInfo[] = [];
 const NO_MCP_STATUS: McpServerStatus[] = [];
+const NO_SKILLS: SkillInfo[] = [];
 
-export function usePluginsPanelState(cwd: string, form?: AppSettings) {
+export function usePluginsPanelState(cwd: string, form?: AppSettings, initialExpandPluginId?: string) {
   const queryClient = useQueryClient();
   const clientErrors = useSyncExternalStore(subscribeClientPluginErrors, getClientPluginErrors, getClientPluginErrors);
 
@@ -36,7 +39,16 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
   const [systemExpanded, setSystemExpanded] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [installChannel, setInstallChannel] = useState<PluginInstallChannel | null>(null);
-  const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
+  const [editingConfigId, setEditingConfigId] = useState<string | null>(initialExpandPluginId ?? null);
+  const [prevExpandId, setPrevExpandId] = useState(initialExpandPluginId);
+  if (prevExpandId !== initialExpandPluginId) {
+    setPrevExpandId(initialExpandPluginId);
+    if (initialExpandPluginId !== undefined) {
+      setEditingConfigId(initialExpandPluginId);
+      setFilter("all");
+      setSearch("");
+    }
+  }
   const [configDraft, setConfigDraft] = useState("");
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
@@ -49,7 +61,11 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
     queryFn: () => pluginClient.trustList(cwd),
     enabled: cwd.trim() !== "",
   });
-  // skills live in standalone SkillsSettingsPage now
+  const skillsQuery = useQuery({
+    queryKey: queryKeys.skills(cwd),
+    queryFn: () => skillClient.list(cwd),
+  });
+  const skills = skillsQuery.data ?? NO_SKILLS;
 
   const plugins = pluginsQuery.data ?? NO_PLUGINS;
   const mcpPluginEnabled = useMemo(() => {
@@ -80,10 +96,12 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
   useEffect(() => {
     const stopChanged = pluginClient.onChanged(() => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.plugins(cwd) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.skills(cwd) });
     });
     const stopTrust = pluginClient.onTrustChanged(() => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTrust(cwd) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.plugins(cwd) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.skills(cwd) });
     });
     return () => {
       stopChanged();
@@ -221,6 +239,7 @@ export function usePluginsPanelState(cwd: string, form?: AppSettings) {
     setConfirmRemoveId,
     pluginsQuery,
     trustQuery,
+    skills,
     mcpStatuses,
     mcpReconnectMutation,
     applyMutationResult,

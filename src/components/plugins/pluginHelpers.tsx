@@ -1,8 +1,9 @@
-import type { McpServerStatus, PluginInfo } from "@qianji/protocol";
+import type { McpServerStatus, PluginInfo, SkillInfo } from "@qianji/protocol";
 import {
   Activity,
   Blocks,
   BookMarked,
+  BookOpen,
   Boxes,
   CalendarClock,
   ChartPie,
@@ -51,6 +52,7 @@ export const CORE_EXTENSION_ORDER: readonly string[] = [
   "intelligent-ui",
   "checkpoints",
   "mcp",
+  "prompt-context",
   "browser",
   "computer",
   "subagents",
@@ -184,6 +186,7 @@ export function iconAccentTone(id: string): string {
   if (id === "intelligent-ui") return "indigo";
   if (id === "checkpoints") return "amber";
   if (id === "mcp") return "blue";
+  if (id === "prompt-context") return "teal";
   if (id === "browser") return "sky";
   if (id === "computer") return "slate";
   if (id === "subagents") return "violet";
@@ -209,6 +212,7 @@ export function PluginCategoryIcon({ id, tier }: { id: string; tier: PluginInfo[
   if (id === "intelligent-ui") return <Sparkles size={18} strokeWidth={1.8} />;
   if (id === "checkpoints") return <History size={18} strokeWidth={1.8} />;
   if (id === "mcp") return <Blocks size={18} strokeWidth={1.8} />;
+  if (id === "prompt-context") return <BookOpen size={18} strokeWidth={1.8} />;
   if (id === "browser") return <Globe size={18} strokeWidth={1.8} />;
   if (id === "computer") return <Monitor size={18} strokeWidth={1.8} />;
   if (id === "subagents") return <GitFork size={18} strokeWidth={1.8} />;
@@ -261,6 +265,7 @@ export function coreOperationalChips(
   plugin: PluginInfo,
   form: AppSettings | undefined,
   mcpStatuses: readonly McpServerStatus[],
+  skills: readonly SkillInfo[] = [],
 ): OpChip[] {
   if (plugin.tier !== "builtin" || !CORE_EXTENSION_SET.has(plugin.id)) return [];
 
@@ -293,6 +298,21 @@ export function coreOperationalChips(
       ];
       if (totalTools > 0) chips.push({ key: "tools", label: `${totalTools} 个工具`, tone: "accent" });
       if (erroredCount > 0) chips.push({ key: "err", label: `${erroredCount} 异常`, tone: "warn" });
+      return chips;
+    }
+    case "prompt-context": {
+      const enabledCount = skills.filter((s) => s.enabled).length;
+      const pluginCount = skills.filter((s) => Boolean(s.pluginId)).length;
+      const projectCount = skills.filter((s) => s.scope === "project" && !s.pluginId).length;
+      const chips: OpChip[] = [
+        {
+          key: "skills",
+          label: skills.length > 0 ? `${enabledCount}/${skills.length} 技能启用` : "AGENTS.md · Rules · /skill",
+          tone: enabledCount > 0 ? "green" : "neutral",
+        },
+      ];
+      if (pluginCount > 0) chips.push({ key: "plugin-skills", label: `${pluginCount} 插件附带`, tone: "accent" });
+      if (projectCount > 0) chips.push({ key: "project-skills", label: `${projectCount} 项目级` });
       return chips;
     }
     case "browser":

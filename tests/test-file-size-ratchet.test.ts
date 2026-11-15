@@ -29,7 +29,7 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "packages/browser/src/driver.ts": 860,
   "packages/protocol/src/self-guard.ts": 849,
   "src/components/SideChatPanel.tsx": 789,
-  "packages/mcp/src/index.ts": 760,
+  "packages/mcp/src/index.ts": 622,
   "packages/mcp/src/client.ts": 682,
   "packages/host/src/client-bundles.ts": 657,
   "packages/host/src/agent-plugins.ts": 644,

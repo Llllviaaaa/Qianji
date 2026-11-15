@@ -400,4 +400,40 @@ describe("openai-compat adapter", () => {
     expect(safetyRefusal.reason).toBe("refusal");
     expect(server.requests).toHaveLength(5);
   });
+
+  it("normalizes >40-char tool IDs across pairs, drops orphans, sanitizes __invalidJson, and strips foreign signatures", () => {
+    const longId = "call/anthropic:very.long." + "x".repeat(45);
+    const body = adapter.buildRequestBody(
+      {
+        ...request,
+        messages: [
+          { role: "tool-result", callId: "orphan_id", content: [{ type: "text", text: "stale" }], isError: false },
+          { role: "user", content: [{ type: "text", text: "inspect" }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", text: "Claude thought", signature: "ant-sig", signatureProvider: "anthropic" },
+              { type: "tool-call", id: longId, name: "read", arguments: { __invalidJson: "{broken" } },
+            ],
+          },
+          { role: "tool-result", callId: longId, content: [{ type: "text", text: "content" }], isError: false },
+        ],
+      },
+      { id: "compat", baseUrl: "http://localhost/v1" },
+    );
+
+    const messages = body.messages as Array<Record<string, unknown>>;
+    expect(messages).toHaveLength(4);
+    const assistantMsg = messages[2];
+    expect(assistantMsg?.reasoning_content).toBe("Claude thought");
+    expect(assistantMsg).not.toHaveProperty("signature");
+    const toolCalls = assistantMsg?.tool_calls as Array<{ id: string; function: { arguments: string } }>;
+    expect(toolCalls).toHaveLength(1);
+    const normalizedId = toolCalls[0]?.id ?? "";
+    expect(normalizedId.length).toBeLessThanOrEqual(40);
+    expect(normalizedId).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(toolCalls[0]?.function.arguments).toBe("{}");
+
+    expect(messages[3]).toEqual({ role: "tool", tool_call_id: normalizedId, content: "content" });
+  });
 });

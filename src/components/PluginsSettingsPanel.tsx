@@ -1,29 +1,23 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { useQuery } from "@tanstack/react-query";
 import type { PluginInfo } from "@qianji/protocol";
 import { Boxes, ChevronDown, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { describeError } from "../lib/errors";
-import { queryKeys } from "../lib/queries";
-import { skillClient } from "../lib/skillClient";
 import { useAppStore } from "../store";
 import type { AppSettings } from "../types";
-import { ExtensionsModuleTabs, type ExtensionsSection } from "./plugins/ExtensionsModuleTabs";
 import { InstallPluginDialog } from "./plugins/InstallPluginDialog";
 import { PluginCard } from "./plugins/PluginCard";
 import type { PluginFilter } from "./plugins/pluginHelpers";
 import { PluginsEmptyHub } from "./plugins/PluginsEmptyHub";
 import { PluginsHeaderBar } from "./plugins/PluginsHeaderBar";
 import { usePluginsPanelState } from "./plugins/usePluginsPanelState";
-import { McpSettingsPage } from "./settings/McpSettingsPage";
 import { DEFAULTS } from "./settings/settingsPrimitives";
-import { SkillsSettingsPage } from "./settings/SkillsSettingsPage";
 
 export interface PluginsSettingsPanelProps {
   cwd: string;
   form?: AppSettings;
   onSyncAppSetting?: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
-  initialSection?: ExtensionsSection;
+  initialExpandPluginId?: string;
   onDismissHub?: () => void;
 }
 
@@ -31,10 +25,11 @@ export function PluginsSettingsPanel({
   cwd,
   form,
   onSyncAppSetting,
-  initialSection,
+  initialExpandPluginId,
   onDismissHub,
 }: PluginsSettingsPanelProps) {
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const panelRef = useRef<HTMLDivElement>(null);
   const storeSettings = useAppStore((s) => s.settings);
   const effectiveForm = useMemo<AppSettings>(
     () => ({ ...DEFAULTS, ...storeSettings, ...form, language: "zh-CN" }),
@@ -52,18 +47,13 @@ export function PluginsSettingsPanel({
     [onSyncAppSetting],
   );
 
-  const [section, setSection] = useState<ExtensionsSection>(initialSection ?? "plugins");
-  const [prevInitial, setPrevInitial] = useState(initialSection);
-  if (prevInitial !== initialSection) {
-    setPrevInitial(initialSection);
-    setSection(initialSection ?? "plugins");
-  }
+  const state = usePluginsPanelState(cwd, effectiveForm, initialExpandPluginId);
 
-  const state = usePluginsPanelState(cwd, effectiveForm);
-  const skillsQuery = useQuery({
-    queryKey: queryKeys.skills(cwd),
-    queryFn: () => skillClient.list(cwd),
-  });
+  useEffect(() => {
+    if (!initialExpandPluginId || state.pluginsQuery.isPending) return;
+    const card = panelRef.current?.querySelector<HTMLElement>(`[data-plugin-id="${initialExpandPluginId}"]`);
+    card?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [initialExpandPluginId, state.pluginsQuery.isPending]);
 
   const isSearching = state.search.trim() !== "";
   const effectiveSystemOpen = isSearching || state.systemExpanded;
@@ -102,6 +92,7 @@ export function PluginsSettingsPanel({
       mcpReconnecting={state.mcpReconnectMutation.isPending}
       onReconnectMcp={(serverId) => state.mcpReconnectMutation.mutate(serverId)}
       onMcpServersUpdated={state.scheduleMcpRefresh}
+      skills={state.skills}
       onNotify={state.setNotice}
       isEditing={state.editingConfigId === plugin.id}
       onToggleEdit={state.openConfigEditor}
@@ -112,26 +103,12 @@ export function PluginsSettingsPanel({
       confirmRemove={state.confirmRemoveId === plugin.id}
       onSetConfirmRemove={state.setConfirmRemoveId}
       onRunTask={(task) => state.actionMutation.mutate(task)}
-      onOpenMcpSection={() => setSection("mcp")}
+      onCloseSettings={onDismissHub}
     />
   );
 
   return (
-    <div className="plugins-panel">
-      <ExtensionsModuleTabs
-        active={section}
-        onChange={setSection}
-        pluginsCount={state.counts.all}
-        skillsCount={skillsQuery.data?.length ?? 0}
-        mcpCount={effectiveForm.mcpServers.length}
-      />
-
-      {section === "skills" ? (
-        <SkillsSettingsPage cwd={cwd} onCloseSettings={onDismissHub} />
-      ) : section === "mcp" ? (
-        <McpSettingsPage cwd={cwd} form={effectiveForm} update={handleSyncAppSetting} onCloseSettings={onDismissHub} />
-      ) : (
-        <>
+    <div ref={panelRef} className="plugins-panel">
           <PluginsHeaderBar
             cwd={cwd}
             busy={busy}
@@ -271,8 +248,6 @@ export function PluginsSettingsPanel({
               />
             )}
           </AnimatePresence>
-        </>
-      )}
     </div>
   );
 }

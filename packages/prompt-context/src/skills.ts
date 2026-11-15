@@ -14,6 +14,7 @@ import {
   type SkillScope,
 } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
+import { canonicalSkillPath, getCachedScannedSkills } from "./cache.ts";
 
 const MAX_SKILL_BYTES = 256 * 1024;
 
@@ -23,6 +24,12 @@ export interface Skill {
   path: string;
 }
 
+export interface PluginSkillSource {
+  pluginId: string;
+  dir: string;
+  scope?: SkillScope;
+}
+
 export interface ManagedSkillEntry {
   name: string;
   description: string;
@@ -30,15 +37,24 @@ export interface ManagedSkillEntry {
   scope: SkillScope;
   enabled: boolean;
   readOnly?: boolean;
+  pluginId?: string;
 }
 
 export interface SkillsConfig {
   dataDir: string;
   bundledSkillsDirs?: readonly string[] | (() => readonly string[]);
+  pluginSkills?: (cwd?: string) => readonly PluginSkillSource[];
+}
+
+function resolvePluginSkillSources(
+  pluginSkills: SkillsConfig["pluginSkills"],
+  cwd?: string,
+): readonly PluginSkillSource[] {
+  return pluginSkills ? pluginSkills(cwd) : [];
 }
 
 export function normalizeSkillPathKey(filePath: string): string {
-  const abs = resolve(filePath).replace(/\\/g, "/");
+  const abs = canonicalSkillPath(filePath).replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? abs.toLowerCase() : abs;
 }
 
@@ -103,7 +119,7 @@ export function setSkillEnabledState(dataDir: string, skillPath: string, enabled
   const targetKey = normalizeSkillPathKey(skillPath);
   const filtered = rawDisabled.filter((item) => normalizeSkillPathKey(item) !== targetKey);
   if (!enabled) {
-    filtered.push(resolve(skillPath));
+    filtered.push(canonicalSkillPath(skillPath));
   }
   mkdirSync(dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
@@ -122,21 +138,38 @@ export function readFrontMatter(text: string): Record<string, string> {
   return fields;
 }
 
+interface ScannedSkill extends Skill {
+  pathKey: string;
+}
+
 /** Skills under each dir; a later dir's skill replaces an earlier one of the same name. */
 export function findSkills(dirs: readonly string[], options: { disabled?: ReadonlySet<string> } = {}): Skill[] {
-  const skills = new Map<string, Skill>();
-  for (const dir of dirs) {
-    if (!existsSync(dir)) continue;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const path = join(dir, entry.name, "SKILL.md");
-      if (!existsSync(path)) continue;
-      if (options.disabled?.has(normalizeSkillPathKey(path))) continue;
-      const fields = readFrontMatter(readFileSync(path, "utf8"));
-      const skillName = fields.name || entry.name;
-      if (!fields.description) continue;
-      skills.set(skillName, { name: skillName, description: fields.description, path });
+  const dirsKey = dirs.map((dir) => resolve(dir)).join("\0");
+  const scanned = getCachedScannedSkills<ScannedSkill[]>(dirsKey, () => {
+    const entries: ScannedSkill[] = [];
+    const deps: string[] = [];
+    for (const dir of dirs) {
+      deps.push(dir);
+      if (!existsSync(dir)) continue;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const skillDir = join(dir, entry.name);
+        const path = join(skillDir, "SKILL.md");
+        deps.push(skillDir, path);
+        if (!existsSync(path)) continue;
+        const fields = readFrontMatter(readFileSync(path, "utf8"));
+        const skillName = fields.name || entry.name;
+        if (!fields.description) continue;
+        entries.push({ name: skillName, description: fields.description, path, pathKey: normalizeSkillPathKey(path) });
+      }
     }
+    return { value: entries, deps };
+  });
+
+  const skills = new Map<string, Skill>();
+  for (const entry of scanned) {
+    if (options.disabled?.has(entry.pathKey)) continue;
+    skills.set(entry.name, { name: entry.name, description: entry.description, path: entry.path });
   }
   return [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -147,16 +180,24 @@ const SCOPE_RANK: Record<SkillScope, number> = {
   project: 2,
 };
 
-/** Discover all skills (enabled and disabled across builtin, user, and project tiers) for Settings management. */
+/** Discover all skills (enabled and disabled across builtin, plugin, user, and project tiers) for Settings management. */
 export function discoverSkillEntries(
   dataDir: string,
   cwd?: string,
   bundledSkillsDirs?: readonly string[] | (() => readonly string[]),
+  pluginSkills?: SkillsConfig["pluginSkills"],
 ): ManagedSkillEntry[] {
   const disabled = readDisabledSkillKeys(dataDir);
   const bundledRoots = resolveBundledSkillRoots(bundledSkillsDirs);
-  const roots: Array<{ dir: string; scope: SkillScope; readOnly?: boolean }> = [
+  const pluginSources = resolvePluginSkillSources(pluginSkills, cwd);
+  const roots: Array<{ dir: string; scope: SkillScope; readOnly?: boolean; pluginId?: string }> = [
     ...bundledRoots.map((dir) => ({ dir, scope: "builtin" as const, readOnly: true })),
+    ...pluginSources.map((source) => ({
+      dir: source.dir,
+      scope: source.scope ?? ("user" as const),
+      readOnly: true,
+      pluginId: source.pluginId,
+    })),
     { dir: join(dataDir, "skills"), scope: "user" },
   ];
   const trimmedCwd = cwd?.trim();
@@ -168,7 +209,7 @@ export function discoverSkillEntries(
   }
   const seenPaths = new Set<string>();
   const list: ManagedSkillEntry[] = [];
-  for (const { dir, scope, readOnly } of roots) {
+  for (const { dir, scope, readOnly, pluginId } of roots) {
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -186,6 +227,7 @@ export function discoverSkillEntries(
         scope,
         enabled: !disabled.has(key),
         ...(readOnly ? { readOnly: true } : {}),
+        ...(pluginId === undefined ? {} : { pluginId }),
       });
     }
   }
@@ -202,10 +244,13 @@ export function skillDirs(
   dataDir: string,
   cwd: string,
   bundledSkillsDirs?: readonly string[] | (() => readonly string[]),
+  pluginSkills?: SkillsConfig["pluginSkills"],
 ): string[] {
   const bundled = resolveBundledSkillRoots(bundledSkillsDirs);
+  const pluginDirs = resolvePluginSkillSources(pluginSkills, cwd).map((source) => source.dir);
   return [
     ...bundled,
+    ...pluginDirs,
     join(dataDir, "skills"),
     join(cwd, ".claude", "skills"),
     join(cwd, ".agents", "skills"),
@@ -253,14 +298,14 @@ function allowedSkillRoots(
   bundledRoots: readonly string[],
 ): Array<{ root: string; readOnly: boolean }> {
   const roots: Array<{ root: string; readOnly: boolean }> = [
-    ...bundledRoots.map((dir) => ({ root: resolve(dir), readOnly: true })),
-    { root: resolve(join(dataDir, "skills")), readOnly: false },
+    ...bundledRoots.map((dir) => ({ root: canonicalSkillPath(dir), readOnly: true })),
+    { root: canonicalSkillPath(join(dataDir, "skills")), readOnly: false },
   ];
   if (cwd !== undefined) {
-    roots.push({ root: resolve(join(cwd, ".qianji", "skills")), readOnly: false });
-    roots.push({ root: resolve(join(cwd, ".pid", "skills")), readOnly: false });
-    roots.push({ root: resolve(join(cwd, ".agents", "skills")), readOnly: false });
-    roots.push({ root: resolve(join(cwd, ".claude", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".qianji", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".pid", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".agents", "skills")), readOnly: false });
+    roots.push({ root: canonicalSkillPath(join(cwd, ".claude", "skills")), readOnly: false });
   }
   return roots;
 }
@@ -275,7 +320,7 @@ function resolveAllowedSkillFile(
   if (typeof rawPath !== "string" || rawPath.trim() === "") {
     throw new RpcError(ErrorCode.InvalidParams, "path must be a non-empty string");
   }
-  const resolved = resolve(rawPath.trim());
+  const resolved = canonicalSkillPath(rawPath.trim());
   if (basename(resolved) !== "SKILL.md") {
     throw new RpcError(ErrorCode.InvalidParams, "技能文件路径必须指向 SKILL.md");
   }
@@ -311,8 +356,9 @@ function listSkills(
   dataDir: string,
   cwd: string | undefined,
   bundledSkillsDirs?: readonly string[] | (() => readonly string[]),
+  pluginSkills?: SkillsConfig["pluginSkills"],
 ): SkillInfo[] {
-  return discoverSkillEntries(dataDir, cwd, bundledSkillsDirs).map((entry) => ({
+  return discoverSkillEntries(dataDir, cwd, bundledSkillsDirs, pluginSkills).map((entry) => ({
     ...entry,
     trusted: true,
   }));
@@ -347,18 +393,22 @@ function writeFileAtomically(file: string, content: string): void {
 
 export function registerSkillRpc(rpcCtx: Context, pluginName: string, config: SkillsConfig): void {
   const { dataDir } = config;
-  const getBundledRoots = () => resolveBundledSkillRoots(config.bundledSkillsDirs);
+  const getReadOnlyRoots = (cwd?: string) => [
+    ...resolveBundledSkillRoots(config.bundledSkillsDirs),
+    ...resolvePluginSkillSources(config.pluginSkills, cwd).map((source) => source.dir),
+  ];
   const notifyCommands = () => {
     rpcCtx.get("commands")?.notifyChanged("skills");
   };
   const methods: Record<string, (raw: unknown) => unknown> = {
     "skill.list": (raw): SkillListResult => {
       const p = recordOf(raw);
-      return { skills: listSkills(dataDir, optionalCwd(p), config.bundledSkillsDirs) };
+      return { skills: listSkills(dataDir, optionalCwd(p), config.bundledSkillsDirs, config.pluginSkills) };
     },
     "skill.read": (raw): SkillReadResult => {
       const p = recordOf(raw);
-      const file = resolveAllowedSkillFile(dataDir, optionalCwd(p), p.path, getBundledRoots());
+      const cwd = optionalCwd(p);
+      const file = resolveAllowedSkillFile(dataDir, cwd, p.path, getReadOnlyRoots(cwd));
       if (!existsSync(file)) throw new RpcError(ErrorCode.InvalidParams, `找不到技能文件：${file}`);
       const content = readFileSync(file, "utf8");
       const fields = readFrontMatter(content);
@@ -391,7 +441,7 @@ export function registerSkillRpc(rpcCtx: Context, pluginName: string, config: Sk
     "skill.save": (raw): SkillListResult => {
       const p = recordOf(raw);
       const cwd = optionalCwd(p);
-      const file = resolveAllowedSkillFile(dataDir, cwd, p.path, getBundledRoots(), { requireWritable: true });
+      const file = resolveAllowedSkillFile(dataDir, cwd, p.path, getReadOnlyRoots(cwd), { requireWritable: true });
       if (typeof p.content !== "string") throw new RpcError(ErrorCode.InvalidParams, "content must be a string");
       if (Buffer.byteLength(p.content, "utf8") > MAX_SKILL_BYTES) {
         throw new RpcError(ErrorCode.InvalidParams, "SKILL.md 内容不能超过 256 KB");
@@ -402,25 +452,25 @@ export function registerSkillRpc(rpcCtx: Context, pluginName: string, config: Sk
       }
       writeFileAtomically(file, p.content);
       notifyCommands();
-      return { skills: listSkills(dataDir, cwd, config.bundledSkillsDirs) };
+      return { skills: listSkills(dataDir, cwd, config.bundledSkillsDirs, config.pluginSkills) };
     },
     "skill.toggle": (raw): SkillListResult => {
       const p = recordOf(raw);
       const cwd = optionalCwd(p);
-      const file = resolveAllowedSkillFile(dataDir, cwd, p.path, getBundledRoots());
+      const file = resolveAllowedSkillFile(dataDir, cwd, p.path, getReadOnlyRoots(cwd));
       if (typeof p.enabled !== "boolean") throw new RpcError(ErrorCode.InvalidParams, "enabled must be a boolean");
       setSkillEnabledState(dataDir, file, p.enabled);
       notifyCommands();
-      return { skills: listSkills(dataDir, cwd, config.bundledSkillsDirs) };
+      return { skills: listSkills(dataDir, cwd, config.bundledSkillsDirs, config.pluginSkills) };
     },
     "skill.delete": (raw): SkillListResult => {
       const p = recordOf(raw);
       const cwd = optionalCwd(p);
-      const file = resolveAllowedSkillFile(dataDir, cwd, p.path, getBundledRoots(), { requireWritable: true });
+      const file = resolveAllowedSkillFile(dataDir, cwd, p.path, getReadOnlyRoots(cwd), { requireWritable: true });
       rmSync(dirname(file), { recursive: true, force: true });
       setSkillEnabledState(dataDir, file, true);
       notifyCommands();
-      return { skills: listSkills(dataDir, cwd, config.bundledSkillsDirs) };
+      return { skills: listSkills(dataDir, cwd, config.bundledSkillsDirs, config.pluginSkills) };
     },
   };
 

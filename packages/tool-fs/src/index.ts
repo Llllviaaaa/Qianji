@@ -8,11 +8,13 @@ import { dirname, extname } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import { textOutput, type ToolDefinition, type ToolOutput } from "@qianji/tools";
 import { diagnostics } from "./diagnostics.ts";
+import { inspectFileBeforeRead, stripBom } from "./file-guards.ts";
 import { formatHashlines, isHashlineEdit, resolveHashlineSpan, type HashlineEdit, type TextEditSpan } from "./hashline.ts";
 import { find, grep } from "./search.ts";
 import { MAX_BYTES, MAX_LINES, resolvePath, truncateHead } from "./shared.ts";
 
 export * from "./shared.ts";
+export * from "./file-guards.ts";
 export * from "./hashline.ts";
 export * from "./search.ts";
 export * from "./diagnostics.ts";
@@ -47,10 +49,13 @@ export const read: ToolDefinition<{ path: string; offset?: number; limit?: numbe
   execute({ path, offset, limit, hashlines }, env) {
     const file = resolvePath(env.cwd, path);
     const mimeType = IMAGE_TYPES[extname(file).toLowerCase()];
+    const guardError = inspectFileBeforeRead(file, mimeType !== undefined);
+    if (guardError !== undefined) return textOutput(guardError, true);
     if (mimeType !== undefined) {
       return { content: [{ type: "text", text: `Image ${path}:` }, { type: "image", mimeType, data: readFileSync(file).toString("base64") }] };
     }
-    const lines = readFileSync(file, "utf8").split("\n");
+    const { text: fileText } = stripBom(readFileSync(file, "utf8"));
+    const lines = fileText.split("\n");
     const start = Math.max(1, offset ?? 1);
     if (start > lines.length) return textOutput(`${path} has ${lines.length} lines; offset ${start} is past the end.`, true);
     const wanted = lines.slice(start - 1, limit === undefined ? undefined : start - 1 + Math.max(1, limit));
@@ -244,7 +249,9 @@ export const edit: ToolDefinition<{ path: string; edits: FileEdit[] }> = {
         return textOutput("Each edit needs oldText and newText strings, or a hashline anchor.", true);
       }
     }
-    const original = readFileSync(file, "utf8");
+    const guardError = inspectFileBeforeRead(file, false);
+    if (guardError !== undefined) return textOutput(guardError, true);
+    const { hasBom, text: original } = stripBom(readFileSync(file, "utf8"));
     const fuzzy: number[] = [];
     const relocated: number[] = [];
     let updated: string;
@@ -253,7 +260,7 @@ export const edit: ToolDefinition<{ path: string; edits: FileEdit[] }> = {
     } catch (error) {
       return textOutput(`No changes made to ${path}: ${(error as Error).message}.`, true);
     }
-    writeFileSync(file, updated);
+    writeFileSync(file, hasBom ? `\uFEFF${updated}` : updated);
     const notes: string[] = [];
     if (relocated.length > 0) {
       notes.push(`${relocated.map((i) => `edits[${i}]`).join(", ")} relocated by line content hash after line shift.`);

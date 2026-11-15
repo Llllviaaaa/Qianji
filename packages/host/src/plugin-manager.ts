@@ -50,7 +50,7 @@ import {
   updatePluginsStore,
   workspacePluginKey,
 } from "./plugin-store.ts";
-import { resolveCandidates, type ResolvedCandidate } from "./plugin-candidates.ts";
+import { collectActivePluginSkillRoots, resolveCandidates, type ActivePluginSkillRoot, type ResolvedCandidate } from "./plugin-candidates.ts";
 import {
   errorDetailWithStack,
   errorMessage,
@@ -86,7 +86,6 @@ interface MountedFiber {
   provides: string[];
 }
 
-
 interface PreparedCandidate {
   candidate: ResolvedCandidate;
   sourceKey: string;
@@ -104,7 +103,6 @@ interface WatcherEntry {
 }
 
 const WATCH_DEBOUNCE_MS = 120;
-
 
 export class PluginManager {
   readonly bundles = new ClientBundleRegistry();
@@ -186,6 +184,10 @@ export class PluginManager {
   get currentTrustedWorkspace(): string | undefined {
     if (this.activeWorkspace === undefined || !existsSync(this.activeWorkspace)) return undefined;
     return isWorkspaceTrusted(this.options.dataDir, this.activeWorkspace) ? this.activeWorkspace : undefined;
+  }
+
+  activeSkillRoots(cwd?: string): ActivePluginSkillRoot[] {
+    return collectActivePluginSkillRoots(this.latestCandidates, this.errors, cwd, this.currentTrustedWorkspace);
   }
 
   /** Register an additional read-only `bundled-plugins` directory at runtime (e.g. from desktop handshake). */
@@ -765,6 +767,7 @@ export class PluginManager {
         removable: false,
         hasHost: manifest.hostEntry !== undefined,
         hasClient: manifest.clientEntry !== undefined,
+        ...(manifest.skillsDir === undefined ? {} : { hasSkills: true }),
         dir: manifest.dir,
         workspace: workspacePath,
         watch: false,
@@ -820,6 +823,7 @@ export class PluginManager {
         removable: candidate.removable,
         hasHost: candidate.hasHost,
         hasClient: candidate.hasClient,
+        ...(candidate.hasSkills ? { hasSkills: true } : {}),
         ...(clientPath === undefined ? {} : { clientPath }),
         ...(clientEtag === undefined ? {} : { clientEtag }),
         ...(candidate.dir === undefined ? {} : { dir: candidate.dir }),
@@ -904,11 +908,9 @@ export class PluginManager {
           this.errors.set(candidate.id, candidate.manifestError);
           continue;
         }
-        if (!candidate.enabled) {
-          continue;
-        }
+        if (!candidate.enabled) continue;
 
-        const sourceKey = `${candidate.tier}:${candidate.dir ?? "builtin"}:${candidate.hostEntry ?? ""}:${candidate.clientEntry ?? ""}`;
+        const sourceKey = `${candidate.tier}:${candidate.dir ?? "builtin"}:${candidate.hostEntry ?? ""}:${candidate.clientEntry ?? ""}:${candidate.skillsDir ?? ""}`;
         const sig = signatureOf(candidate.effectiveConfig);
         const pinnedGateway = candidate.tier === "builtin" && !candidate.canDisable;
         const force = !pinnedGateway && params.forceIds?.has(candidate.id) === true;
@@ -1168,15 +1170,10 @@ export class PluginManager {
       this.reconcileWatchers(candidates);
 
       if (params.reason !== undefined && (changed.length > 0 || params.reason === "trust" || params.reason === "toggled" || params.reason === "configured")) {
-        const snapshot = this.activeWorkspace !== undefined
-          ? this.withUntrustedWorkspaceOverlay(this.latestSnapshot, this.activeWorkspace)
-          : [...this.latestSnapshot];
-        this.options.onChanged?.({
-          reason: params.reason,
-          changedIds: changed.length > 0 ? changed : [...(params.forceIds ?? [])],
-          plugins: snapshot,
-        });
+        const snapshot = this.activeWorkspace !== undefined ? this.withUntrustedWorkspaceOverlay(this.latestSnapshot, this.activeWorkspace) : [...this.latestSnapshot];
+        this.options.onChanged?.({ reason: params.reason, changedIds: changed.length > 0 ? changed : [...(params.forceIds ?? [])], plugins: snapshot });
       }
+      if (params.reason !== undefined && (changed.length > 0 || params.reason === "trust" || params.reason === "toggled" || params.reason === "reloaded")) (this.ctx.get("commands") as { notifyChanged?: (r: string) => void } | undefined)?.notifyChanged?.("plugins-skills");
 
       return changed;
     } finally {

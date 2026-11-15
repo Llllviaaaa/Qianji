@@ -42,6 +42,7 @@ export type AgentDelta =
   | { type: "llm-start"; provider: string; model: string }
   | { type: "llm-chunk"; chunk: StreamChunk }
   | { type: "tool-start"; callId: string; name: string }
+  | { type: "tool-progress"; callId: string; name: string; text: string }
   | { type: "tool-end"; callId: string; isError: boolean }
   | { type: "queue"; steer: number; followUp: number }
   | { type: "compaction-start" }

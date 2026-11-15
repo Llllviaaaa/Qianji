@@ -8,6 +8,7 @@ import {
   getJson,
   joinUrl,
   postSse,
+  transformMessagesForProvider,
   type Effort,
   type FinishReason,
   type LlmAdapter,
@@ -183,7 +184,7 @@ function toWireContents(messages: Message[]): GeminiContent[] {
 
 export function buildRequestBody(request: LlmRequest, model?: ModelInfo): Record<string, unknown> {
   const body: Record<string, unknown> = {
-    contents: toWireContents(request.messages),
+    contents: toWireContents(transformMessagesForProvider(request.messages, "gemini")),
   };
   if (request.system && request.system.trim() !== "") {
     body.systemInstruction = { parts: [{ text: request.system }] };
@@ -319,14 +320,14 @@ export async function* translateStream(
           }
           if (typeof part.thoughtSignature === "string" && part.thoughtSignature !== "") {
             emittedContent = true;
-            yield { type: "thinking-signature", index: thinkingIndex, signature: part.thoughtSignature };
+            yield { type: "thinking-signature", index: thinkingIndex, signature: part.thoughtSignature, provider: "gemini" };
           }
           continue;
         }
         if (typeof part.thoughtSignature === "string" && part.thoughtSignature !== "") {
           thinkingIndex ??= next++;
           emittedContent = true;
-          yield { type: "thinking-signature", index: thinkingIndex, signature: part.thoughtSignature };
+          yield { type: "thinking-signature", index: thinkingIndex, signature: part.thoughtSignature, provider: "gemini" };
         }
         if (part.functionCall !== undefined) {
           hasToolCalls = true;

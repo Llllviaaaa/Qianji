@@ -8,6 +8,7 @@ import {
   getJson,
   joinUrl,
   postSse,
+  transformMessagesForProvider,
   type Effort,
   type FinishReason,
   type LlmAdapter,
@@ -197,17 +198,18 @@ function toWireMessages(messages: Message[]): WireMessage[] {
  * The Messages API request for `request`.
  *
  * Prompt caching is opt-in on this API. Requests that belong to a session are sent
- * again with a longer history, so they get two breakpoints: one at the end of the
- * static prefix (tools and system prompt) and one on the last block of the
- * conversation. One-off calls such as titles and compaction summaries are not sent
- * again, so they get none; a breakpoint there would only add the cache-write premium.
+ * again with a longer history, so they get up to three breakpoints (within
+ * Anthropic's four-breakpoint limit): the end of `tools`, the `system` prompt, and
+ * the last block of the conversation. One-off calls such as titles and compaction
+ * summaries are not sent again, so they get none; a breakpoint there would only add
+ * the cache-write premium.
  */
 export function buildRequestBody(request: LlmRequest, model?: ModelInfo): Record<string, unknown> {
   const style = thinkingStyle(request.model);
   let maxTokens = request.maxTokens ?? model?.maxOutputTokens
     ?? (style.mode === "budget" ? DEFAULT_MAX_TOKENS : ADAPTIVE_DEFAULT_MAX_TOKENS);
   const cache = request.sessionId !== undefined;
-  const messages = toWireMessages(request.messages);
+  const messages = toWireMessages(transformMessagesForProvider(request.messages, "anthropic"));
   if (cache) markConversationTail(messages);
   const body: Record<string, unknown> = { model: request.model, messages, stream: true };
   if (request.system) {
@@ -216,7 +218,7 @@ export function buildRequestBody(request: LlmRequest, model?: ModelInfo): Record
   if (request.tools !== undefined && request.tools.length > 0) {
     const tools: WireBlock[] = request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters }));
     const lastTool = tools.at(-1);
-    if (cache && !request.system && lastTool !== undefined) tools[tools.length - 1] = { ...lastTool, cache_control: EPHEMERAL };
+    if (cache && lastTool !== undefined) tools[tools.length - 1] = { ...lastTool, cache_control: EPHEMERAL };
     body.tools = tools;
   }
 
@@ -318,7 +320,7 @@ export async function* translateStream(events: AsyncIterable<{ event?: string; d
         const delta = event.delta ?? {};
         if (delta.type === "text_delta" && delta.text) yield { type: "text-delta", index, text: delta.text };
         else if (delta.type === "thinking_delta" && delta.thinking) yield { type: "thinking-delta", index, text: delta.thinking };
-        else if (delta.type === "signature_delta" && delta.signature) yield { type: "thinking-signature", index, signature: delta.signature };
+        else if (delta.type === "signature_delta" && delta.signature) yield { type: "thinking-signature", index, signature: delta.signature, provider: "anthropic" };
         else if (delta.type === "input_json_delta" && delta.partial_json) yield { type: "tool-call-delta", index, argumentsDelta: delta.partial_json };
         break;
       }

@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -14,8 +15,17 @@ import {
   shellArgs,
 } from "../src/index.ts";
 
+async function cleanupTempDir(dir: string): Promise<void> {
+  // Recently killed sandboxed child trees on Windows can briefly hold cwd/temp handles (EPERM/EBUSY).
+  try {
+    await rm(dir, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+  } catch {
+    // Left for OS temp cleanup if a child handle outlives the retry window.
+  }
+}
+
 describe("lightweight sandbox helpers", () => {
-  it("scrubs secret environment variables and redirects temp directories into workspace", () => {
+  it("scrubs secret environment variables and redirects temp directories into workspace", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pid-sandbox-test-"));
     try {
       const env = buildSandboxedEnv(
@@ -38,7 +48,7 @@ describe("lightweight sandbox helpers", () => {
       expect(env.TMP).toBe(join(dir, ".qianji", "sandbox-tmp"));
       expect(env.TEMP).toBe(join(dir, ".qianji", "sandbox-tmp"));
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await cleanupTempDir(dir);
     }
   });
 
@@ -78,7 +88,7 @@ describe("lightweight sandbox helpers", () => {
       expect(result.exitCode).toBe(0);
       expect(result.output).toBe("missing|1");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await cleanupTempDir(dir);
     }
   });
 
@@ -200,8 +210,8 @@ describe("lightweight sandbox helpers", () => {
       const stopped = await manager.stop("s-race", started.id);
       expect(stopped?.status).toBe("exited");
     } finally {
-      manager.stopAll();
-      rmSync(dir, { recursive: true, force: true });
+      await manager.stopAll();
+      await cleanupTempDir(dir);
     }
   });
 });

@@ -1,5 +1,5 @@
 import { AnimatePresence } from "motion/react";
-import type { McpServerStatus, PluginInfo, PluginMutationResult } from "@qianji/protocol";
+import type { McpServerStatus, PluginInfo, PluginMutationResult, SkillInfo } from "@qianji/protocol";
 import {
   CircleAlert,
   CloudDownload,
@@ -40,6 +40,7 @@ export interface PluginCardProps {
   mcpReconnecting: boolean;
   onReconnectMcp: (serverId?: string) => void;
   onMcpServersUpdated: () => void;
+  skills?: readonly SkillInfo[];
   onNotify: (notice: Notice) => void;
   isEditing: boolean;
   onToggleEdit: (plugin: PluginInfo) => void;
@@ -50,7 +51,7 @@ export interface PluginCardProps {
   confirmRemove: boolean;
   onSetConfirmRemove: (id: string | null) => void;
   onRunTask: (task: { run: () => Promise<PluginMutationResult>; label: string }) => void;
-  onOpenMcpSection?: () => void;
+  onCloseSettings?: () => void;
 }
 
 export function PluginCard({
@@ -66,6 +67,7 @@ export function PluginCard({
   mcpReconnecting,
   onReconnectMcp,
   onMcpServersUpdated,
+  skills,
   onNotify,
   isEditing,
   onToggleEdit,
@@ -76,7 +78,7 @@ export function PluginCard({
   confirmRemove,
   onSetConfirmRemove,
   onRunTask,
-  onOpenMcpSection,
+  onCloseSettings,
 }: PluginCardProps) {
   const clientError = runtimeClientError ?? plugin.clientError?.message;
   const status = statusState(plugin, clientError);
@@ -88,7 +90,7 @@ export function PluginCard({
   const isBundled = isBundledFeaturePlugin(plugin);
   const isDiskPlugin = isExternal || isBundled;
   const title = cleanDisplayName(plugin);
-  const opChips = compactSystem ? [] : coreOperationalChips(plugin, form, mcpStatuses);
+  const opChips = compactSystem ? [] : coreOperationalChips(plugin, form, mcpStatuses, skills);
   const scopeWorkspace = plugin.tier === "workspace" ? (plugin.workspace ?? cwd) : undefined;
 
   const extCapabilities: string[] = [];
@@ -96,6 +98,7 @@ export function PluginCard({
   else if (isExternal && channel !== null) extCapabilities.push(channel);
   if (isDiskPlugin && plugin.hasHost) extCapabilities.push("后端 Host");
   if (isDiskPlugin && plugin.hasClient) extCapabilities.push("前端 UI");
+  if (isDiskPlugin && plugin.hasSkills) extCapabilities.push("Agent 技能");
 
   return (
     <article
@@ -355,13 +358,14 @@ export function PluginCard({
             mcpReconnecting={mcpReconnecting}
             onReconnectMcp={onReconnectMcp}
             onMcpServersUpdated={onMcpServersUpdated}
+            skills={skills}
             onNotify={onNotify}
             configDraft={configDraft}
             onChangeConfigDraft={onChangeConfigDraft}
             onCloseDrawer={onCloseDrawer}
             onSaveConfig={onSaveConfig}
             onRunTask={onRunTask}
-            onOpenMcpSection={onOpenMcpSection}
+            onCloseSettings={onCloseSettings}
           />
         )}
       </AnimatePresence>

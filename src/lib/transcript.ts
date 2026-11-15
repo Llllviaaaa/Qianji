@@ -23,6 +23,7 @@ export type TranscriptEvent =
   | { type: "assistant-tool-calls"; calls: UiToolCall[] }
   | { type: "assistant"; message: UiMessage }
   | { type: "tool-start"; callId: string; name: string; args: Record<string, unknown> }
+  | { type: "tool-progress"; callId: string; name: string; text: string }
   | { type: "tool-end"; callId: string; name: string; result: ToolResult }
   | { type: "queue"; steering: number; followUp: number }
   | { type: "compaction-start" }
@@ -313,6 +314,11 @@ export function startToolCall(messages: UiMessage[], callId: string, name: strin
   return updateToolCall(messages, callId, (call) => ({ ...call, name, args, running: true, startedAt: call.startedAt ?? now }), name, args);
 }
 
+/** Update a running tool call's live preview text without completing it. */
+export function progressToolCall(messages: UiMessage[], callId: string, name: string, text: string): UiMessage[] {
+  return updateToolCall(messages, callId, (call) => (call.running ? { ...call, result: text } : call), name);
+}
+
 export function endToolCall(messages: UiMessage[], callId: string, name: string, result: ToolResult): UiMessage[] {
   return updateToolCall(messages, callId, (call) => ({
     ...call,
@@ -375,6 +381,16 @@ export class TranscriptTranslator {
         return [{ type: "assistant-start" }];
       case "llm-chunk":
         return this.chunk((delta.chunk ?? {}) as Block);
+      case "tool-progress": {
+        const callId = typeof delta.callId === "string" ? delta.callId : "";
+        if (callId === "") return [];
+        return [{
+          type: "tool-progress",
+          callId,
+          name: typeof delta.name === "string" ? delta.name : "tool",
+          text: typeof delta.text === "string" ? delta.text : "",
+        }];
+      }
       case "queue":
         return [{ type: "queue", steering: count(delta.steer), followUp: count(delta.followUp) }];
       case "compaction-start":

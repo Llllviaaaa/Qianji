@@ -10,6 +10,7 @@ import {
   getJson,
   joinUrl,
   postSse,
+  transformMessagesForProvider,
   type FinishReason,
   type LlmAdapter,
   type LlmProtocolSpec,
@@ -115,7 +116,7 @@ export function buildRequestBody(
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
-    messages: toWireMessages(request.system, request.messages, {
+    messages: toWireMessages(request.system, transformMessagesForProvider(request.messages, "openai-compat"), {
       includeReasoningContent: !unsupportedReasoningContentModels?.has(request.model),
     }),
     stream: true,

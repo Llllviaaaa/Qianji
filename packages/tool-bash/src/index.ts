@@ -38,6 +38,7 @@ import {
   generateWindowsSandboxConfig,
   inspectSelfKillCommand,
 } from "./sandbox.ts";
+import { createProgressReporter, spillTruncatedOutput } from "./spill.ts";
 
 export {
   BackgroundProcessManager,
@@ -50,6 +51,7 @@ export {
   type BgWaitResult,
 } from "./background.ts";
 export * from "./sandbox.ts";
+export * from "./spill.ts";
 
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -76,6 +78,8 @@ export interface Config {
   maxTimeoutSeconds?: number;
   /** Force lightweight sandbox containment on every bash invocation. */
   sandbox?: boolean;
+  /** Directory where full truncated foreground outputs are saved. */
+  spillDir?: string;
 }
 
 function gitBashCandidates(env: NodeJS.ProcessEnv): string[] {
@@ -171,6 +175,7 @@ export interface RunResult {
 export interface RunCommandOptions {
   sandbox?: boolean;
   env?: NodeJS.ProcessEnv;
+  onProgress?: (text: string) => void;
 }
 
 export function runCommand(
@@ -211,6 +216,7 @@ export function runCommand(
       jobBinding?.dispose({ stopped });
     };
 
+    const reporter = createProgressReporter(options.onProgress);
     const chunks: Buffer[] = [];
     let buffered = 0;
     const collect = (chunk: Buffer) => {
@@ -220,6 +226,7 @@ export function runCommand(
         const dropped = chunks.shift();
         if (dropped !== undefined) buffered -= dropped.length;
       }
+      reporter.push(chunk);
     };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
@@ -229,12 +236,14 @@ export function runCommand(
       if (exitDrainTimer !== undefined) clearTimeout(exitDrainTimer);
       if (killGraceTimer !== undefined) clearTimeout(killGraceTimer);
       signal.removeEventListener("abort", onAbort);
+      reporter.dispose();
       disposeJob();
     };
 
     const finish = (exitCode: number | null) => {
       if (settled) return;
       settled = true;
+      reporter.flush();
       cleanup();
       child.stdout.destroy();
       child.stderr.destroy();
@@ -380,10 +389,21 @@ export function shellTool(
       }
 
       const seconds = Math.min(Math.max(1, timeout ?? DEFAULT_TIMEOUT_SECONDS), maxTimeout);
-      const result = await runCommand(shell, command, env.cwd, seconds * 1000, env.signal, { sandbox });
+      const result = await runCommand(shell, command, env.cwd, seconds * 1000, env.signal, {
+        sandbox,
+        onProgress: env.onProgress,
+      });
       const { text, truncated } = tail(result.output);
       const notes: string[] = [];
-      if (truncated) notes.push("[Output truncated; showing the end.]");
+      let spillPath: string | undefined;
+      if (truncated) {
+        spillPath = spillTruncatedOutput(config.spillDir, env.sessionId, env.callId, result.output);
+        notes.push(
+          spillPath === undefined
+            ? "[Output truncated; showing the end.]"
+            : `[Output truncated; showing the end. Full output saved to ${spillPath} — use read(offset, limit) or grep to inspect earlier lines.]`,
+        );
+      }
       if (result.timedOut) notes.push(`[Timed out after ${seconds}s; the command was killed.]`);
       if (result.aborted) notes.push("[Aborted; the command was killed.]");
       if (!result.timedOut && !result.aborted && result.exitCode !== 0) notes.push(`[Exit code ${result.exitCode}]`);
@@ -391,7 +411,7 @@ export function shellTool(
       return {
         content: [{ type: "text", text: body }],
         isError: result.timedOut || result.aborted || result.exitCode !== 0,
-        details: { exitCode: result.exitCode },
+        details: spillPath === undefined ? { exitCode: result.exitCode } : { exitCode: result.exitCode, spillPath },
       };
     },
   };

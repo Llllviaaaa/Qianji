@@ -21,6 +21,8 @@ export interface ThinkingBlock {
   text: string;
   /** Opaque provider token that must be sent back unchanged (Anthropic). */
   signature?: string;
+  /** Wire-protocol provider that issued `signature` (e.g. `"anthropic"`, `"gemini"`). */
+  signatureProvider?: string;
   /** The provider returned the reasoning encrypted; `text` is empty. */
   redacted?: string;
 }
@@ -111,7 +113,7 @@ export type FinishReason = "stop" | "length" | "tool-use" | "refusal" | "error" 
 export type StreamChunk =
   | { type: "text-delta"; index: number; text: string }
   | { type: "thinking-delta"; index: number; text: string }
-  | { type: "thinking-signature"; index: number; signature: string }
+  | { type: "thinking-signature"; index: number; signature: string; provider?: string }
   | { type: "thinking-redacted"; index: number; data: string }
   | { type: "tool-call-start"; index: number; id: string; name: string }
   | { type: "tool-call-delta"; index: number; argumentsDelta: string }

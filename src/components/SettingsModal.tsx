@@ -151,7 +151,7 @@ export function SettingsModal({
   const { settingsPages, settingsSections } = useClientContributions();
   const pluginNav = useMemo(() => pluginSettingsNavItems(settingsPages), [settingsPages]);
   const navPageId: SettingsPage = active === "mcp" || active === "skills" ? "plugins" : active;
-  const initialPluginsSection = active === "mcp" ? "mcp" : active === "skills" ? "skills" : "plugins";
+  const initialExpandPluginId = active === "mcp" ? "mcp" : active === "skills" ? "prompt-context" : undefined;
   // A plugin page that was unloaded while open falls back to "general".
   const activeMeta = [...BUILTIN_SETTINGS_NAV, ...pluginNav].find((item) => item.id === navPageId) ?? BUILTIN_SETTINGS_NAV[0];
   const shownPage = activeMeta.id;
@@ -291,7 +291,7 @@ export function SettingsModal({
                     cwd={cwd}
                     form={form}
                     onSyncAppSetting={update}
-                    initialSection={initialPluginsSection}
+                    initialExpandPluginId={initialExpandPluginId}
                     onDismissHub={closeSettings}
                   />
                 )}

@@ -9,7 +9,7 @@ export interface AssembledResponse {
 
 type OpenBlock =
   | { type: "text"; text: string }
-  | { type: "thinking"; text: string; signature?: string; redacted?: string }
+  | { type: "thinking"; text: string; signature?: string; signatureProvider?: string; redacted?: string }
   | { type: "tool-call"; id: string; name: string; json: string };
 
 function parseArguments(json: string): Record<string, unknown> {
@@ -43,7 +43,10 @@ export class BlockAssembler {
       }
       case "thinking-signature": {
         const block = this.block(chunk.index, () => ({ type: "thinking", text: "" }));
-        if (block.type === "thinking") block.signature = (block.signature ?? "") + chunk.signature;
+        if (block.type === "thinking") {
+          block.signature = (block.signature ?? "") + chunk.signature;
+          if (chunk.provider !== undefined) block.signatureProvider = chunk.provider;
+        }
         break;
       }
       case "thinking-redacted": {
@@ -89,6 +92,7 @@ export class BlockAssembler {
         if (block.type === "thinking") {
           const thinking: AssistantContent = { type: "thinking", text: block.text };
           if (block.signature !== undefined) thinking.signature = block.signature;
+          if (block.signatureProvider !== undefined) thinking.signatureProvider = block.signatureProvider;
           if (block.redacted !== undefined) thinking.redacted = block.redacted;
           return thinking;
         }

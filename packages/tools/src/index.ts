@@ -41,6 +41,8 @@ export interface ToolEnv {
   signal: AbortSignal;
   /** The call being executed; set by `Tools.execute`. */
   callId?: string;
+  /** Optional incremental progress callback emitted while a tool executes. */
+  onProgress?: (text: string) => void;
 }
 
 export type ToolDecision =
@@ -226,9 +228,9 @@ export class Tools extends Service {
     return allowed === undefined || allowed.has(name);
   }
 
-  private buildActivateToolsSchema(unactivated: ToolDefinition[]): ToolSchema {
+  private buildActivateToolsSchema(definitions: ToolDefinition[]): ToolSchema {
     const groups = new Map<string, ToolDefinition[]>();
-    for (const def of unactivated) {
+    for (const def of definitions) {
       const key = def.group ?? def.name;
       const list = groups.get(key) ?? [];
       list.push(def);
@@ -237,11 +239,15 @@ export class Tools extends Service {
     const summaries = [...groups.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, items]) => {
-        if (items.length === 1 && items[0]?.group === undefined) {
-          return `${key} (${items[0].description})`;
+        const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
+        const single = sortedItems[0];
+        if (sortedItems.length === 1 && single !== undefined && single.group === undefined) {
+          return `${key} (${single.description})`;
         }
-        const desc = items.find((item) => item.groupDescription)?.groupDescription ?? items.map((item) => item.name).join(", ");
-        return `${key} (${items.length} tools: ${desc})`;
+        const desc =
+          sortedItems.find((item) => item.groupDescription)?.groupDescription ??
+          sortedItems.map((item) => item.name).join(", ");
+        return `${key} (${sortedItems.length} tools: ${desc})`;
       });
     return {
       name: ACTIVATE_TOOLS_NAME,
@@ -272,17 +278,24 @@ export class Tools extends Service {
         .sort((a, b) => a.name.localeCompare(b.name));
     }
     const visible: ToolSchema[] = [];
-    const unactivated: ToolDefinition[] = [];
+    const allowedDeferred: ToolDefinition[] = [];
+    let hasUnactivated = false;
     for (const def of this.definitions.values()) {
       if (!this.allows(sessionId, def.name)) continue;
-      if (def.deferred && !this.isActivated(sessionId, def.name)) {
-        unactivated.push(def);
+      if (def.deferred) {
+        allowedDeferred.push(def);
+        if (this.isActivated(sessionId, def.name)) {
+          visible.push({ name: def.name, description: def.description, parameters: def.parameters });
+        } else {
+          hasUnactivated = true;
+        }
       } else {
         visible.push({ name: def.name, description: def.description, parameters: def.parameters });
       }
     }
-    if (unactivated.length > 0) {
-      visible.push(this.buildActivateToolsSchema(unactivated));
+    if (hasUnactivated) {
+      // Keep activate_tools description invariant across partial activations for prompt cache stability.
+      visible.push(this.buildActivateToolsSchema(allowedDeferred));
     }
     return visible.sort((a, b) => a.name.localeCompare(b.name));
   }

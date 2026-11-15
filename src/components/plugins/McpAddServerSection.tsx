@@ -7,7 +7,7 @@ import {
   parseShellArgLine,
   type McpPresetTemplate,
   type Notice,
-} from "../plugins/pluginHelpers";
+} from "./pluginHelpers";
 
 export interface McpAddServerSectionProps {
   cwd: string;
