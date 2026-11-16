@@ -1,6 +1,7 @@
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowLeft, ArrowRight, Minus, PanelLeft, Square, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Minus, Square, X } from "lucide-react";
+import { DockLeftIcon } from "../common/ChromeIcons";
 import { useClientContributions } from "../../lib/clientContributions";
 import { requestAppQuit } from "../../lib/quitGuard";
 import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
@@ -103,7 +104,7 @@ export function WindowMenubar({
           title={`${sidebarToggleLabel} (${toggleSidebarShortcut})`}
           aria-label={sidebarToggleLabel}
         >
-          <PanelLeft size={17} strokeWidth={1.65} />
+          <DockLeftIcon open={sidebarVisible || sidebarRendered} size={15} />
         </button>
         <button
           type="button"
@@ -115,7 +116,7 @@ export function WindowMenubar({
           }}
           title="后退"
         >
-          <ArrowLeft size={18} strokeWidth={1.55} />
+          <ArrowLeft size={15} strokeWidth={1.6} />
         </button>
         <button
           type="button"
@@ -124,7 +125,7 @@ export function WindowMenubar({
           onClick={navigateForward}
           title="前进"
         >
-          <ArrowRight size={18} strokeWidth={1.55} />
+          <ArrowRight size={15} strokeWidth={1.6} />
         </button>
         <div className="app-menu-bar">
           {menus.map((menu) => (

@@ -1,5 +1,4 @@
 import {
-  Bell,
   Boxes,
   Check,
   CheckCircle2,
@@ -8,15 +7,13 @@ import {
   FolderPlus,
   ListFilter,
   MessageCircleQuestion,
-  PanelLeftClose,
-  Pin,
   Plus,
-  Search,
   ShieldCheck,
   X,
 } from "lucide-react";
 import { QIANJI_BRAND_MARK_SVG } from "../../lib/claudeCrabSheets";
 import type { AppNotification } from "../../types";
+import { ChromeInboxIcon, ChromePinIcon, ChromeSearchIcon, DockLeftIcon } from "../common/ChromeIcons";
 import type { SidebarGroupMode, SidebarHub } from "./sidebarHelpers";
 
 export interface SidebarHeaderAndPopoversProps {
@@ -110,7 +107,7 @@ export function SidebarHeaderAndPopovers({
               aria-label="固定侧栏"
               onClick={onPinSidebar}
             >
-              <Pin size={14} strokeWidth={1.75} />
+              <ChromePinIcon size={15} />
             </button>
           )}
           {!onPinSidebar && onCloseSidebar && (
@@ -121,7 +118,7 @@ export function SidebarHeaderAndPopovers({
               aria-label="收起侧栏"
               onClick={onCloseSidebar}
             >
-              <PanelLeftClose size={15} strokeWidth={1.75} />
+              <DockLeftIcon open size={15} />
             </button>
           )}
           <button
@@ -136,7 +133,7 @@ export function SidebarHeaderAndPopovers({
               clearProjectMenu();
             }}
           >
-            <Search size={15} strokeWidth={1.7} />
+            <ChromeSearchIcon size={15} />
           </button>
           <button
             type="button"
@@ -150,7 +147,7 @@ export function SidebarHeaderAndPopovers({
               clearProjectMenu();
             }}
           >
-            <Bell size={15} strokeWidth={1.7} />
+            <ChromeInboxIcon active={notificationsOpen} size={15} />
             {unreadNotificationCount > 0 && <span className="notification-dot" />}
           </button>
         </div>
@@ -158,7 +155,7 @@ export function SidebarHeaderAndPopovers({
 
       {searchOpen && (
         <label className="session-search sidebar-search-popover" data-sidebar-popover>
-          <Search size={13} />
+          <ChromeSearchIcon size={13} />
           <input
             ref={searchInputRef}
             autoFocus
