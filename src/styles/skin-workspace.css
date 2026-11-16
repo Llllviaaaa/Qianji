@@ -118,10 +118,14 @@
 .codex-shot .topbar-branch-control.workspace-launch-control {
   width: auto;
   min-width: 0;
-  height: 28px;
+  height: 26px;
+  padding: 0;
+  gap: 0;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   box-shadow: none;
+  color: var(--qj-text-secondary);
 }
 
 .codex-shot .topbar-branch-control.workspace-launch-control:hover {
@@ -129,33 +133,60 @@
 }
 
 .codex-shot .workspace-launch-control .workspace-open-trigger {
-  width: auto;
-  height: 28px;
-  flex: 0 0 auto;
-  padding: 0 2px 0 6px;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 0;
   border-radius: 6px 0 0 6px;
+  color: inherit;
+}
+
+.codex-shot .workspace-launch-control .workspace-tools-mark {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-radius: 0;
+  background: transparent;
+  color: currentColor;
+}
+
+.codex-shot .workspace-launch-control .workspace-tools-mark svg {
+  width: 15px;
+  height: 15px;
 }
 
 .codex-shot .workspace-launch-control .workspace-tools-trigger {
-  width: 18px;
-  height: 28px;
-  flex: 0 0 18px;
-  padding: 0 4px 0 0;
+  width: 16px;
+  height: 26px;
+  flex: 0 0 16px;
+  padding: 0;
   border-radius: 0 6px 6px 0;
-  color: var(--text-2);
+  color: var(--qj-text-muted);
+}
+
+.codex-shot .workspace-launch-control .workspace-tools-trigger svg {
+  width: 11px;
+  height: 11px;
 }
 
 .codex-shot .workspace-launch-control button:hover:not(:disabled),
 .codex-shot .workspace-launch-control.active .workspace-tools-trigger {
-  background: var(--dsh-claude-hover-bg, var(--hover));
-  color: var(--text);
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .workspace-launch-control:hover .workspace-tools-trigger {
+  box-shadow: inset 1px 0 0 var(--qj-border-subtle);
 }
 
 /* ── Topbar right: changes, Git, open in │ panel icons ──────────────── */
 
-.codex-shot .panel-toggles.codex-layout-chrome,
+.codex-shot .panel-toggles.codex-layout-chrome {
+  gap: 2px;
+}
+
 .codex-shot .main-pane-controls {
-  gap: 4px;
+  gap: 3px;
 }
 
 .codex-shot .main-pane-controls:empty {
@@ -173,9 +204,10 @@
   content: "";
   flex: 0 0 auto;
   width: 1px;
-  height: 16px;
-  margin: 0 4px 0 2px;
-  background: var(--dsh-claude-border-l1, var(--border));
+  height: 14px;
+  margin: 0 3px;
+  align-self: center;
+  background: var(--qj-border-default);
 }
 
 .codex-shot .panel-toggle {

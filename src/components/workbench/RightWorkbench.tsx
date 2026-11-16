@@ -4,8 +4,9 @@ import {
 } from "react";
 import { LayoutGroup, motion } from "motion/react";
 import {
-  Activity, FileCode2, FolderTree, GitCompare, Globe, Maximize2, MessageSquare, Minimize2, PanelBottom, PanelRight, X,
+  Activity, FileCode2, FolderTree, GitCompare, Globe, Maximize2, MessageSquare, Minimize2, X,
 } from "lucide-react";
+import { DockBottomIcon, DockRightIcon } from "../common/ChromeIcons";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import { useClientContributions } from "../../lib/clientContributions";
 import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
@@ -53,7 +54,7 @@ export function WorkbenchTopbarControls({ cwd, sessionFile }: WorkbenchTopbarCon
         aria-pressed={bottomOpen}
         onClick={toggleBottom}
       >
-        <PanelBottom size={16} strokeWidth={1.7} />
+        <DockBottomIcon open={bottomOpen} size={15} />
       </button>
       <button
         type="button"
@@ -62,7 +63,7 @@ export function WorkbenchTopbarControls({ cwd, sessionFile }: WorkbenchTopbarCon
         aria-pressed={rightOpen}
         onClick={toggleRight}
       >
-        <PanelRight size={16} strokeWidth={1.7} />
+        <DockRightIcon open={rightOpen} size={15} />
       </button>
     </div>
   );

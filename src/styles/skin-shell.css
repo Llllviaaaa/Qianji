@@ -312,71 +312,95 @@ body.sidebar-is-resizing .codex-shot .sidebar-resizer::after {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 36px;
-  padding: 0 6px 0 4px;
-  border-radius: 9999px;
-  background: var(--muse-blur-pill-bg);
-  backdrop-filter: saturate(180%) blur(20px);
-  box-shadow: var(--muse-elevation-pill);
+  height: 32px;
+  padding: 0 3px;
+  border: 1px solid var(--qj-border-default);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--qj-bg-surface) 88%, var(--qj-bg-subtle));
+  backdrop-filter: saturate(180%) blur(16px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .codex-shot .panel-toggles.codex-layout-chrome {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
+  height: 32px;
+  padding: 0 3px;
+  border: 1px solid var(--qj-border-default);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--qj-bg-surface) 88%, var(--qj-bg-subtle));
+  backdrop-filter: saturate(180%) blur(16px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.codex-shot .panel-toggles.codex-layout-chrome:not(:has(button)) {
+  display: none;
 }
 
 .codex-shot .panel-toggles .main-pane-controls:not(:empty),
 .codex-shot .panel-toggles .workspace-pane-controls:not(:empty) {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  height: 36px;
-  padding: 0 6px;
-  border-radius: 9999px;
-  background: var(--muse-blur-pill-bg);
-  backdrop-filter: saturate(180%) blur(20px);
-  box-shadow: var(--muse-elevation-pill);
+  gap: 2px;
+  height: auto;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
 }
 
 .codex-shot .chat-title {
-  height: 28px;
-  padding: 0 10px;
+  height: 26px;
+  padding: 0 8px;
   gap: 6px;
-  border-radius: 9999px;
-  color: var(--text);
+  border-radius: 6px;
+  color: var(--qj-text-primary);
   font-family: var(--font-ui);
   font-weight: 550;
   letter-spacing: -0.01em;
 }
 
 .codex-shot .chat-title .title-doc-icon {
-  color: var(--text-2);
+  color: var(--qj-text-secondary);
   flex-shrink: 0;
 }
 
 .codex-shot .chat-title span {
-  font-size: 13.5px;
+  font-size: 13px;
+}
+
+.codex-shot .topbar .icon-button,
+.codex-shot .panel-toggle,
+.codex-shot .topbar-branch-control {
+  color: var(--qj-text-secondary);
+  border-radius: 6px;
+}
+
+.codex-shot .topbar .icon-button {
+  width: 26px;
+  height: 26px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .topbar .icon-button svg {
+  width: 15px;
+  height: 15px;
 }
 
 .codex-shot .chat-title:hover,
 .codex-shot .topbar .icon-button:hover,
 .codex-shot .panel-toggle:hover,
 .codex-shot .topbar-branch-control:hover {
-  background: var(--muse-soft-fill);
-  color: var(--text);
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
 }
 
-.codex-shot .topbar .icon-button,
-.codex-shot .panel-toggle,
-.codex-shot .topbar-branch-control {
-  color: var(--text-2);
-  border-radius: 9999px;
-}
-
+.codex-shot .topbar .icon-button.active,
 .codex-shot .panel-toggle.active {
-  background: var(--active);
-  color: var(--text);
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
 }
 
 .codex-shot .topbar-live {
@@ -448,17 +472,38 @@ body.sidebar-is-resizing .codex-shot .sidebar-resizer::after {
   color: var(--text);
 }
 
+.codex-shot .sidebar-brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .codex-shot .sidebar .icon-button {
-  width: 27px;
-  height: 27px;
-  color: var(--text-2);
+  width: 28px;
+  height: 28px;
+  color: var(--qj-text-muted);
   border-radius: 7px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .sidebar .icon-button svg {
+  width: 15px;
+  height: 15px;
 }
 
 .codex-shot .sidebar .icon-button:hover,
 .codex-shot .sidebar .icon-button.active {
-  background: var(--dsh-claude-hover-bg, var(--hover));
-  color: var(--text);
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .notification-dot {
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid var(--qj-bg-sidebar);
+  background: var(--qj-brand-primary);
 }
 
 /* Sidebar primary navigation (Muse 12px rounded rows) */

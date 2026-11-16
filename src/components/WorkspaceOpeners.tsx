@@ -15,7 +15,14 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Copy, Eye, FolderOpen, PanelBottom, Paperclip, SquareTerminal } from "lucide-react";
+import { Check, Copy, Eye, FolderOpen, PanelBottom, Paperclip, SquareTerminal } from "lucide-react";
+import {
+  AntigravityMonochromeGlyph,
+  ChromeChevronDownIcon,
+  ChromeFolderIcon,
+  CursorGlyph,
+  VsCodeGlyph,
+} from "./common/ChromeIcons";
 import { describeError } from "../lib/errors";
 import { agent } from "../lib/agent";
 import { relativeWorkspacePath, resolveWorkspacePath } from "../lib/workspaceEditors";
@@ -40,25 +47,20 @@ const EDITOR_BADGES: Record<string, { text: string; background: string; color: s
   visualstudio: { text: "VS", background: "#5c2d91", color: "#ffffff" },
 };
 
-export function WorkspaceEditorIcon({ editorId, size = 16 }: { editorId?: WorkspaceEditorInfo["id"]; size?: number }) {
+export function WorkspaceEditorIcon({
+  editorId,
+  size = 16,
+  monochrome = false,
+}: {
+  editorId?: WorkspaceEditorInfo["id"];
+  size?: number;
+  monochrome?: boolean;
+}) {
   if (editorId === "cursor") {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-        <rect width="24" height="24" rx="5.5" fill="#202124" />
-        <path d="M12 5.4 18 8.85 12 12.3 6 8.85 12 5.4Z" fill="#f7f7f7" />
-        <path d="M6 8.85 12 12.3v6.3l-6-3.45v-6.3Z" fill="#a7a7a7" />
-        <path d="M18 8.85 12 12.3v6.3l6-3.45v-6.3Z" fill="#d7d7d7" />
-      </svg>
-    );
+    return <CursorGlyph size={size} monochrome={monochrome} />;
   }
   if (editorId === "vscode") {
-    return (
-      <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-hidden>
-        <path d="M96.461 10.796 75.857.876c-2.385-1.149-5.235-.664-7.107 1.207L1.299 63.583c-1.815 1.654-1.813 4.511.004 6.162l5.51 5.009c1.485 1.35 3.722 1.45 5.321.237l81.227-61.621c2.725-2.067 6.639-.124 6.639 3.297v-.239c0-2.402-1.375-4.59-3.539-5.632Z" fill="#0065A9" />
-        <path d="M96.461 89.204 75.857 99.124c-2.385 1.149-5.235.665-7.107-1.207L1.299 36.417c-1.815-1.654-1.813-4.511.004-6.162l5.51-5.009c1.485-1.35 3.722-1.45 5.321-.236l81.227 61.62c2.725 2.067 6.639.124 6.639-3.297v.24c0 2.401-1.375 4.59-3.539 5.631Z" fill="#007ACC" />
-        <path d="M75.858 99.126c-2.386 1.148-5.236.663-7.108-1.209 2.306 2.306 6.25.673 6.25-2.589V4.672c0-3.262-3.944-4.895-6.25-2.589C70.622.211 73.472-.274 75.858.874l20.601 9.907C98.623 11.822 100 14.011 100 16.413v67.174c0 2.402-1.377 4.592-3.541 5.633L75.858 99.126Z" fill="#1F9CF0" />
-      </svg>
-    );
+    return <VsCodeGlyph size={size} monochrome={monochrome} />;
   }
   if (editorId === "windsurf") {
     return (
@@ -68,10 +70,41 @@ export function WorkspaceEditorIcon({ editorId, size = 16 }: { editorId?: Worksp
     );
   }
   if (editorId === "antigravity") {
-    return <img src={ANTIGRAVITY_ICON} width={size} height={size} alt="" aria-hidden />;
+    return monochrome
+      ? <AntigravityMonochromeGlyph size={size} />
+      : <img src={ANTIGRAVITY_ICON} width={size} height={size} alt="" aria-hidden />;
   }
   const badge = editorId ? EDITOR_BADGES[editorId] : undefined;
   if (badge) {
+    if (monochrome) {
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+          <rect
+            x="2"
+            y="2"
+            width="20"
+            height="20"
+            rx="5.5"
+            fill="currentColor"
+            fillOpacity="0.1"
+            stroke="currentColor"
+            strokeWidth="1.6"
+          />
+          <text
+            x="12"
+            y="12.75"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontFamily="var(--qj-font-sans, system-ui, sans-serif)"
+            fontWeight="700"
+            fontSize={badge.text.length > 1 ? 9.5 : 12.5}
+            fill="currentColor"
+          >
+            {badge.text}
+          </text>
+        </svg>
+      );
+    }
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
         <rect width="24" height="24" rx="5.5" fill={badge.background} />
@@ -80,7 +113,7 @@ export function WorkspaceEditorIcon({ editorId, size = 16 }: { editorId?: Worksp
           y="12.5"
           textAnchor="middle"
           dominantBaseline="middle"
-          fontFamily="Segoe UI, sans-serif"
+          fontFamily="var(--qj-font-sans, system-ui, sans-serif)"
           fontWeight="700"
           fontSize={badge.text.length > 1 ? 10 : 13}
           fill={badge.color}
@@ -90,7 +123,7 @@ export function WorkspaceEditorIcon({ editorId, size = 16 }: { editorId?: Worksp
       </svg>
     );
   }
-  return <FolderOpen size={size} strokeWidth={1.8} aria-hidden />;
+  return <ChromeFolderIcon size={size} />;
 }
 
 interface OpenInMenuProps {
@@ -157,7 +190,7 @@ export function OpenInMenu({
           onClick={() => run(onOpenPreferred)}
         >
           <span className={`workspace-tools-mark workspace-editor-${preferredEditor?.id ?? "explorer"}`} aria-hidden>
-            <WorkspaceEditorIcon editorId={preferredEditor?.id} size={18} />
+            <WorkspaceEditorIcon editorId={preferredEditor?.id} size={15} monochrome />
           </span>
         </button>
         <button
@@ -169,7 +202,7 @@ export function OpenInMenu({
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
-          <ChevronDown size={13} strokeWidth={1.75} />
+          <ChromeChevronDownIcon size={11} />
         </button>
       </div>
       {open && (
