@@ -913,4 +913,106 @@ describe("agent loop", () => {
     expect(firstProgIndex).toBeGreaterThan(startIndex);
     expect(endIndex).toBeGreaterThan(firstProgIndex);
   });
+
+  it("stops immediately when aborted mid-proactive-compaction on a multi-turn run", async () => {
+    let onCompactionStarted = () => {};
+    const compactionStarted = new Promise<void>((resolve) => {
+      onCompactionStarted = resolve;
+    });
+    const harness = await setup(
+      [
+        textReply("Step 1.", { inputTokens: 2_000, outputTokens: 5 }),
+        async function* (_request, signal) {
+          let release = () => {};
+          const gate = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          signal.addEventListener("abort", release, { once: true });
+          yield { type: "text-delta", index: 0, text: "Partial summary" };
+          onCompactionStarted();
+          await gate;
+          yield { type: "finish", reason: "stop" };
+        },
+        textReply("Should never run after abort."),
+      ],
+      { loop: { compactAboveTokens: 1_000 } },
+    );
+
+    await run(harness, "First turn");
+    harness.ctx.agents.prompt(harness.session, text("Multi-turn follow-up"));
+    await compactionStarted;
+    await harness.ctx.agents.abort(harness.session.id);
+
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "aborted" });
+    expect(harness.deltas).toContainEqual({ type: "compaction-end", ok: false, aborted: true });
+    expect(harness.provider.requests).toHaveLength(2);
+    expect(harness.session.events.some((event) => event.type === "compaction")).toBe(false);
+  });
+
+  it("stops with aborted instead of recording a context-length error when aborted mid-emergency compaction", async () => {
+    let onCompactionStarted = () => {};
+    const compactionStarted = new Promise<void>((resolve) => {
+      onCompactionStarted = resolve;
+    });
+    const harness = await setup([
+      errorReply({ kind: "context-length", message: "too long", status: 400, retryable: false }),
+      async function* (_request, signal) {
+        let release = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        signal.addEventListener("abort", release, { once: true });
+        yield { type: "text-delta", index: 0, text: "Emergency summary" };
+        onCompactionStarted();
+        await gate;
+        yield { type: "finish", reason: "stop" };
+      },
+    ]);
+
+    harness.ctx.agents.prompt(harness.session, text("Overflow turn"));
+    await compactionStarted;
+    await harness.ctx.agents.abort(harness.session.id);
+
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "aborted" });
+    expect(harness.deltas).toContainEqual({ type: "compaction-end", ok: false, aborted: true });
+    expect(harness.session.events.some((event) => event.type === "assistant" && event.data.stop === "error")).toBe(false);
+  });
+
+  it("clears queued counts and skips remaining serial tool batches when aborted", async () => {
+    let afterCalls = 0;
+    const harness = await setup([
+      toolReply([
+        { id: "c1", name: "slow", args: {} },
+        { id: "c2", name: "after", args: {} },
+      ]),
+      textReply("Should never run."),
+    ]);
+    harness.ctx.tools.register({
+      name: "after",
+      description: "Serial tool after slow",
+      parameters: { type: "object", properties: {} },
+      execute: () => {
+        afterCalls += 1;
+        return textOutput("after ran");
+      },
+    });
+
+    harness.ctx.agents.prompt(harness.session, text("Run serial tools"));
+    await harness.slowStarted;
+    harness.ctx.agents.steer(harness.session, text("queued steer"));
+    harness.ctx.agents.followUp(harness.session, text("queued followUp"));
+    await harness.ctx.agents.abort(harness.session.id);
+
+    expect(afterCalls).toBe(0);
+    expect(harness.deltas).toContainEqual({ type: "queue", steer: 0, followUp: 0 });
+    expect(harness.deltas.some((d) => d.type === "tool-start" && d.callId === "c2")).toBe(false);
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "aborted" });
+    const toolResults = harness.session.events.filter((event) => event.type === "tool-result");
+    expect(toolResults.map((event) => event.data.callId)).toEqual(["c1", "c2"]);
+    expect(toolResults[1]?.data).toMatchObject({
+      callId: "c2",
+      isError: true,
+      content: [{ type: "text", text: "Aborted." }],
+    });
+  });
 });

@@ -310,6 +310,7 @@ export class HarnessRuntimes {
 
   async abort(runtimeId: string): Promise<void> {
     const runtime = this.runtime(runtimeId);
+    this.cancelLocalQuestions(runtimeId);
     if (runtime.sessionId !== undefined) await (await this.rpc()).call("session.abort", { sessionId: runtime.sessionId });
   }
 
@@ -823,6 +824,9 @@ export class HarnessRuntimes {
       const targets = this.runtimesOf(request.sessionId);
       const fallback = this.lastActive !== undefined && this.runtimes.has(this.lastActive) ? [this.lastActive] : [];
       for (const runtimeId of targets.length > 0 ? targets.map((runtime) => runtime.id) : fallback) this.emit(runtimeId, [{ type: "ui-request", request: event }]);
+    } else if (method === "ui/cancel") {
+      const requestId = typeof (params as { requestId?: unknown } | undefined)?.requestId === "string" ? (params as { requestId: string }).requestId : "";
+      if (requestId) for (const runtime of this.runtimes.values()) this.emit(runtime.id, [{ type: "ui-cancel", requestId }]);
     }
   }
 }

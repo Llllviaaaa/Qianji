@@ -30,7 +30,8 @@ export type TranscriptEvent =
   | { type: "compaction-end"; failed: boolean }
   | { type: "retry-status"; text: string }
   | { type: "plan"; lines: string[] }
-  | { type: "ui-request"; request: ExtensionUIRequest };
+  | { type: "ui-request"; request: ExtensionUIRequest }
+  | { type: "ui-cancel"; requestId: string };
 
 /** A finished tool call: its text, any images, and whether it failed. */
 export interface ToolResult {
@@ -293,6 +294,29 @@ export function interruptTurn(messages: UiMessage[], now = Date.now()): UiMessag
   return [...next, { id: `interrupted-${now}`, role: "assistant", content: INTERRUPTED_TURN, isError: true, timestamp: now }];
 }
 
+/** Settle a turn stopped by the user: drop empty streaming placeholders and clear streaming/running flags. */
+export function settleStoppedTurn(messages: UiMessage[], now = Date.now()): UiMessage[] {
+  const last = messages[messages.length - 1];
+  if (last?.role === "assistant" && last.isStreaming && !last.content.trim() && !last.thinking?.trim() && !last.toolCalls?.length) {
+    return settleStoppedTurn(messages.slice(0, -1), now);
+  }
+  const turnStart = Math.max(0, messages.findLastIndex((message) => message.role === "user"));
+  let changed = false;
+  const next = messages.map((message, index) => {
+    if (index < turnStart) return message;
+    const hasRunning = message.toolCalls?.some((call) => call.running) === true;
+    if (!message.isStreaming && !hasRunning) return message;
+    changed = true;
+    return {
+      ...message,
+      isStreaming: false,
+      ...(message.isStreaming && message.isAborted === undefined ? { isAborted: true } : {}),
+      ...(hasRunning ? { toolCalls: message.toolCalls?.map((call) => (call.running ? { ...call, running: false, isError: call.isError ?? true, finishedAt: call.finishedAt ?? now } : call)) } : {}),
+    };
+  });
+  return changed ? next : messages;
+}
+
 /** Change the tool call `callId`, adding it to the last reply when no message has it yet. */
 export function updateToolCall(messages: UiMessage[], callId: string, update: (call: UiToolCall) => UiToolCall, name = "tool", args: Record<string, unknown> = {}): UiMessage[] {
   let found = false;
@@ -320,14 +344,7 @@ export function progressToolCall(messages: UiMessage[], callId: string, name: st
 }
 
 export function endToolCall(messages: UiMessage[], callId: string, name: string, result: ToolResult): UiMessage[] {
-  return updateToolCall(messages, callId, (call) => ({
-    ...call,
-    running: false,
-    result: result.text,
-    images: result.images,
-    isError: result.isError,
-    finishedAt: result.finishedAt,
-  }), name);
+  return updateToolCall(messages, callId, (call) => ({ ...call, running: false, result: result.text, images: result.images, isError: result.isError, finishedAt: result.finishedAt }), name);
 }
 
 export interface PlanInfo {
@@ -383,20 +400,14 @@ export class TranscriptTranslator {
         return this.chunk((delta.chunk ?? {}) as Block);
       case "tool-progress": {
         const callId = typeof delta.callId === "string" ? delta.callId : "";
-        if (callId === "") return [];
-        return [{
-          type: "tool-progress",
-          callId,
-          name: typeof delta.name === "string" ? delta.name : "tool",
-          text: typeof delta.text === "string" ? delta.text : "",
-        }];
+        return callId === "" ? [] : [{ type: "tool-progress", callId, name: typeof delta.name === "string" ? delta.name : "tool", text: typeof delta.text === "string" ? delta.text : "" }];
       }
       case "queue":
         return [{ type: "queue", steering: count(delta.steer), followUp: count(delta.followUp) }];
       case "compaction-start":
         return [{ type: "compaction-start" }];
       case "compaction-end":
-        return [{ type: "compaction-end", failed: delta.ok === false }];
+        return [{ type: "compaction-end", failed: delta.ok === false && delta.aborted !== true }];
       case "plan":
         return [{ type: "plan", lines: planWidgetLines((delta.plan ?? { items: [] }) as PlanInfo) }];
       default:

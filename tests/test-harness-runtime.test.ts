@@ -702,4 +702,101 @@ describe("mid-stream snapshot replay, liveSeq dedup, and syncSession ordering", 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(state.messages?.[0]?.content).toBe("Snapshot + live");
   });
+
+  it("prevents buffered delta timers from resurrecting streaming after abort, clears ui/cancel, and avoids suppressManagedDrainFor leaks", async () => {
+    vi.stubGlobal("window", globalThis);
+    const { useAppStore } = await import("../src/store/index.ts");
+    const prev = useAppStore.getState();
+
+    const runtimeId = "harness:abort-test";
+    const promptCalls: string[] = [];
+    vi.spyOn(harnessRuntimes, "abort").mockResolvedValue(undefined);
+    vi.spyOn(harnessRuntimes, "prompt").mockImplementation(async (_id, input) => {
+      promptCalls.push(input.message);
+    });
+
+    try {
+      useAppStore.setState({
+        runtimeId,
+        cwd: "D:/repo",
+        sessionFile: "harness:s-abort",
+        sessionId: "s-abort",
+        isStreaming: true,
+        isCompacting: true,
+        retryStatus: null,
+        steeringQueue: [""],
+        followUpQueue: [""],
+        managedFollowUpQueue: [],
+        extensionRequest: { type: "extension_ui_request", id: "ui-1", method: "confirm", title: "Allow?", message: "Run bash?" },
+        messages: [
+          { id: "u1", role: "user", content: "turn 1", timestamp: 1 },
+          { id: "a1", role: "assistant", content: "ok", isStreaming: false, timestamp: 2 },
+          { id: "u2", role: "user", content: "turn 2", timestamp: 3 },
+          {
+            id: "a2",
+            role: "assistant",
+            content: "Working",
+            isStreaming: true,
+            toolCalls: [{ id: "tc-1", name: "bash", args: {}, running: true }],
+            timestamp: 4,
+          },
+        ],
+        runtimes: {
+          [runtimeId]: {
+            runtimeId,
+            cwd: "D:/repo",
+            sessionFile: "harness:s-abort",
+            isStreaming: true,
+            status: "running",
+            extensionRequest: { type: "extension_ui_request", id: "ui-1", method: "confirm", title: "Allow?", message: "Run bash?" },
+            updatedAt: 1,
+          },
+        },
+      });
+
+      // Queue a delta whose 32ms timer is pending, then immediately abort.
+      useAppStore.getState().handleEvent(runtimeId, { type: "assistant-delta", text: " late chunk", thinking: "" });
+      useAppStore.getState().handleEvent(runtimeId, { type: "ui-cancel", requestId: "ui-1" });
+      expect(useAppStore.getState().extensionRequest).toBeNull();
+
+      await useAppStore.getState().abort();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const afterAbort = useAppStore.getState();
+      expect(afterAbort.isStreaming).toBe(false);
+      expect(afterAbort.isCompacting).toBe(false);
+      expect(afterAbort.retryStatus).toBeNull();
+      expect(afterAbort.steeringQueue).toEqual([]);
+      expect(afterAbort.followUpQueue).toEqual([]);
+      expect(afterAbort.messages.at(-1)).toMatchObject({
+        id: "a2",
+        content: "Working",
+        isStreaming: false,
+        isAborted: true,
+        toolCalls: [{ id: "tc-1", running: false, isError: true }],
+      });
+
+      // Because managedFollowUpQueue was empty during abort(), suppressManagedDrainFor must not suppress the next turn's follow-up.
+      useAppStore.getState().handleEvent(runtimeId, { type: "turn-start" });
+      await useAppStore.getState().sendMessage("queued after", [], "followUp");
+      useAppStore.getState().handleEvent(runtimeId, { type: "turn-end" });
+      await eventually(() => promptCalls.includes("queued after"));
+    } finally {
+      useAppStore.setState({
+        runtimeId: prev.runtimeId,
+        cwd: prev.cwd,
+        sessionFile: prev.sessionFile,
+        sessionId: prev.sessionId,
+        isStreaming: prev.isStreaming,
+        isCompacting: prev.isCompacting,
+        retryStatus: prev.retryStatus,
+        steeringQueue: prev.steeringQueue,
+        followUpQueue: prev.followUpQueue,
+        managedFollowUpQueue: prev.managedFollowUpQueue,
+        extensionRequest: prev.extensionRequest,
+        messages: prev.messages,
+        runtimes: prev.runtimes,
+      });
+    }
+  });
 });

@@ -48,11 +48,12 @@ export function checkpointFor(session: Session, userSeq: number): CheckpointReco
 }
 
 /** Take a checkpoint for the session's latest user message; undefined outside a git repository. */
-export async function takeCheckpoint(session: Session): Promise<CheckpointRecord | undefined> {
+export async function takeCheckpoint(session: Session, signal?: AbortSignal): Promise<CheckpointRecord | undefined> {
+  if (signal?.aborted) return undefined;
   const user = session.events.findLast((event) => event.type === "user");
   if (user === undefined || checkpointFor(session, user.seq) !== undefined) return undefined;
-  const checkpoint = await createWorkspaceCheckpoint(session.header.cwd);
-  if (checkpoint === null) return undefined;
+  const checkpoint = await createWorkspaceCheckpoint(session.header.cwd, signal);
+  if (checkpoint === null || signal?.aborted) return undefined;
   const record: CheckpointRecord = { userSeq: user.seq, checkpoint };
   session.append("custom", { ns: NAMESPACE, data: record });
   return record;
@@ -67,11 +68,12 @@ export async function restoreCheckpoint(record: CheckpointRecord): Promise<Works
 }
 
 export function apply(ctx: Context): void {
-  ctx.on("agent/before-start", async (session) => {
+  ctx.on("agent/before-start", async (session, signal) => {
+    if (signal?.aborted) return;
     const permissions = ctx.get("permissions") as { modes(session: Session): { effective: string } } | undefined;
     if (permissions?.modes(session).effective === "read-only") return;
     try {
-      await takeCheckpoint(session);
+      await takeCheckpoint(session, signal);
     } catch (error) {
       ctx.logger("checkpoints").warn("checkpoint of %s failed: %s", session.id, error);
     }

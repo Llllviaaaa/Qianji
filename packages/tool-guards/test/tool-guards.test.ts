@@ -110,6 +110,25 @@ describe("tool deadlines (ADR 0020)", () => {
     controller.abort();
     expect(text(await pending)).toBe("saw abort");
   });
+
+  it("detaches a signal-ignoring tool after abortGraceMs when aborted", async () => {
+    const ctx = await setup({ defaultTimeoutMs: 60_000, abortGraceMs: 40, repeatThresholds: [] });
+    ctx.tools.register({
+      name: "ignore_abort",
+      description: "Never listens to env.signal",
+      parameters: { type: "object", properties: {} },
+      execute: () => new Promise<ToolOutput>(() => {}),
+    });
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = ctx.tools.execute({ id: "c1", name: "ignore_abort", args: {} }, env(controller.signal));
+    await sleep(10);
+    controller.abort();
+    const output = await pending;
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(output.isError).toBe(true);
+    expect(text(output)).toBe("Aborted.");
+  });
 });
 
 describe("repeated calls (ADR 0020)", () => {

@@ -144,6 +144,9 @@ export class StoreContext {
   };
 
   queueAssistantDelta = (runtimeId: string, delta: { text?: string; thinking?: string; toolCalls?: UiToolCall[] }) => {
+    const state = this.get();
+    const activeStreaming = runtimeId === state.runtimeId ? state.isStreaming : Boolean(state.runtimes[runtimeId]?.isStreaming);
+    if (!activeStreaming) return;
     if (!this.pendingAssistantUpdate || this.pendingAssistantUpdate.runtimeId !== runtimeId) {
       this.pendingAssistantUpdate = { runtimeId, text: "", thinking: "", toolCalls: [] };
     }
@@ -160,8 +163,9 @@ export class StoreContext {
     if (this.assistantUpdateTimer !== null) window.clearTimeout(this.assistantUpdateTimer);
     this.assistantUpdateTimer = null;
     this.pendingAssistantUpdate = null;
-    if (!pending || pending.runtimeId !== this.get().runtimeId) return;
-    this.set((state) => ({ messages: streamAssistant(state.messages, pending), isStreaming: true }));
+    const state = this.get();
+    if (!pending || pending.runtimeId !== state.runtimeId || !state.isStreaming) return;
+    this.set((prev) => ({ messages: streamAssistant(prev.messages, pending) }));
   };
 
   /** The task on screen, which the actions act on. */

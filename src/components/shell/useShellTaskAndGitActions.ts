@@ -116,9 +116,11 @@ export function useShellTaskAndGitActions({
       if (enteringConversation) useAppStore.setState({ composerPrefill: text });
     };
     let current = useAppStore.getState();
-    let workspace = quickChat
-      ? (defaultWorkspaceDir || await agent.quickChatDir())
-      : (draftWorkspace || current.cwd || defaultWorkspaceDir || await agent.quickChatDir());
+    let workspace = !enteringConversation && current.connection === "running" && current.cwd
+      ? current.cwd
+      : quickChat
+        ? (defaultWorkspaceDir || await agent.quickChatDir())
+        : (draftWorkspace || current.cwd || defaultWorkspaceDir || await agent.quickChatDir());
     if (!workspace) {
       const selected = await open({ directory: true, multiple: false, title: "选择任务项目" });
       if (typeof selected !== "string") return false;
@@ -184,7 +186,7 @@ export function useShellTaskAndGitActions({
   }, [sendFromComposer]);
 
   const stopFromComposer = useCallback(() => {
-    void useAppStore.getState().abort();
+    void useAppStore.getState().abort().catch(() => undefined);
   }, []);
   const removeComposerAttachment = useCallback((path: string) => {
     setAttachments((items) => items.filter((item) => item.path !== path));

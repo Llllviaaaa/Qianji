@@ -255,6 +255,9 @@ export class LlmService extends Service {
     if (entry === undefined) {
       finish = { type: "finish", reason: "error", error: { kind: "invalid-request", message: `Unknown LLM provider ${request.provider}`, retryable: false } };
     }
+    if (finish === undefined && signal.aborted) {
+      finish = { type: "finish", reason: "aborted" };
+    }
 
     let forceFreshConnection = false;
 

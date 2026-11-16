@@ -18,6 +18,7 @@ export const name = "qianji-tool-guards";
 export const inject = ["tools"];
 
 export const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+export const DEFAULT_ABORT_GRACE_MS = 1_000;
 export const DEFAULT_REPEAT_THRESHOLDS: readonly number[] = [3, 5, 8];
 /** Sessions whose last call is remembered; the least recently active ones are forgotten first. */
 const TRACKED_SESSIONS = 500;
@@ -25,6 +26,8 @@ const TRACKED_SESSIONS = 500;
 export interface Config {
   /** Deadline for tools that declare no `timeoutMs`, in milliseconds; 0 turns it off. */
   defaultTimeoutMs?: number;
+  /** Grace window after `env.signal` aborts before detaching a signal-ignoring tool, in milliseconds. */
+  abortGraceMs?: number;
   /** Consecutive-repeat counts that get a note; empty turns repeat notes off. */
   repeatThresholds?: number[];
 }
@@ -36,16 +39,39 @@ function formatDuration(ms: number): string {
 
 /**
  * Runs `next` with a deadline: `env.signal` is replaced for the duration by
- * one that also aborts at `timeoutMs`.
+ * one that also aborts at `timeoutMs`. Also bounds how long a tool that
+ * ignores `env.signal` can block cancellation after `env.signal` aborts.
  */
-export async function withDeadline(toolName: string, env: ToolEnv, timeoutMs: number, next: () => Promise<ToolOutput>): Promise<ToolOutput> {
+export async function withDeadline(
+  toolName: string,
+  env: ToolEnv,
+  timeoutMs: number,
+  next: () => Promise<ToolOutput>,
+  abortGraceMs = DEFAULT_ABORT_GRACE_MS,
+): Promise<ToolOutput> {
   const upstream = env.signal;
   const controller = new AbortController();
-  const forward = () => controller.abort(upstream.reason);
-  if (upstream.aborted) controller.abort(upstream.reason);
-  else upstream.addEventListener("abort", forward, { once: true });
-  env.signal = controller.signal;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortTimer: ReturnType<typeof setTimeout> | undefined;
+  let resolveAborted: ((output: ToolOutput) => void) | undefined;
+
+  const aborted = new Promise<ToolOutput>((resolve) => {
+    resolveAborted = resolve;
+  });
+  const armAbortTimer = () => {
+    if (abortTimer !== undefined) return;
+    abortTimer = setTimeout(() => {
+      resolveAborted?.(textOutput("Aborted.", true));
+    }, Math.max(0, abortGraceMs));
+  };
+  const forward = () => {
+    controller.abort(upstream.reason);
+    armAbortTimer();
+  };
+  if (upstream.aborted) forward();
+  else upstream.addEventListener("abort", forward, { once: true });
+
+  env.signal = controller.signal;
   const deadline = new Promise<ToolOutput>((resolve) => {
     timer = setTimeout(() => {
       controller.abort(new Error(`${toolName} timed out`));
@@ -53,9 +79,10 @@ export async function withDeadline(toolName: string, env: ToolEnv, timeoutMs: nu
     }, timeoutMs);
   });
   try {
-    return await Promise.race([next(), deadline]);
+    return await Promise.race([next(), deadline, aborted]);
   } finally {
     clearTimeout(timer);
+    if (abortTimer !== undefined) clearTimeout(abortTimer);
     upstream.removeEventListener("abort", forward);
     env.signal = upstream;
   }
@@ -101,6 +128,7 @@ export function repeatNote(toolName: string, count: number, last: boolean): stri
 
 export function apply(ctx: Context, config: Config = {}): void {
   const defaultTimeoutMs = Math.max(0, config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const abortGraceMs = Math.max(0, config.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS);
   const thresholds = new Set((config.repeatThresholds ?? DEFAULT_REPEAT_THRESHOLDS).filter((count) => Number.isInteger(count) && count >= 2));
   const lastThreshold = Math.max(0, ...thresholds);
   const repeats = new RepeatTracker();
@@ -108,7 +136,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.on("tools/execute", async (call, env, next) => {
     const count = thresholds.size === 0 ? 0 : repeats.record(env.sessionId, call);
     const timeoutMs = ctx.tools.get(call.name)?.timeoutMs ?? defaultTimeoutMs;
-    const output = timeoutMs > 0 ? await withDeadline(call.name, env, timeoutMs, next) : await next();
+    const output = timeoutMs > 0 ? await withDeadline(call.name, env, timeoutMs, next, abortGraceMs) : await next();
     if (!thresholds.has(count)) return output;
     return { ...output, content: [...output.content, { type: "text", text: repeatNote(call.name, count, count === lastThreshold) }] };
   });
