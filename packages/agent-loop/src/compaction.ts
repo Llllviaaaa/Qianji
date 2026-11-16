@@ -83,11 +83,31 @@ function totalTokens(usage: { inputTokens: number; outputTokens: number; cacheRe
   return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
 }
 
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(undefined);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** `model`'s context window from its provider's model list, cached; undefined when unknown. */
-function contextWindow(host: CompactionHost, model: ModelRef): Promise<number | undefined> {
+function contextWindow(host: CompactionHost, model: ModelRef, signal: AbortSignal): Promise<number | undefined> {
   const key = `${model.provider}\u0000${model.model}`;
   const cached = host.windows.get(key);
-  if (cached !== undefined && Date.now() - cached.at < WINDOW_TTL_MS) return cached.window;
+  if (cached !== undefined && Date.now() - cached.at < WINDOW_TTL_MS) {
+    return raceAbort(cached.window, signal);
+  }
   const window = host.ctx.llm.listModels(model.provider, AbortSignal.timeout(WINDOW_LOOKUP_TIMEOUT_MS))
     .then((models) => {
       const found = models.find((candidate) => candidate.id === model.model)?.contextWindow;
@@ -95,14 +115,14 @@ function contextWindow(host: CompactionHost, model: ModelRef): Promise<number | 
     })
     .catch(() => undefined);
   host.windows.set(key, { at: Date.now(), window });
-  return window;
+  return raceAbort(window, signal);
 }
 
 /** The token count past which `model`'s context counts as full, when its window is known. */
-async function contextLimit(host: CompactionHost, model: ModelRef): Promise<number | undefined> {
+async function contextLimit(host: CompactionHost, model: ModelRef, signal: AbortSignal): Promise<number | undefined> {
   const ratio = host.config.compactAtContextRatio ?? DEFAULT_COMPACT_RATIO;
   if (!(ratio > 0)) return undefined;
-  const window = await contextWindow(host, model);
+  const window = await contextWindow(host, model, signal);
   return window === undefined ? undefined : Math.floor(window * ratio);
 }
 
@@ -116,6 +136,7 @@ export async function compactIfLarge(
   signal: AbortSignal,
   keepLatestTurn: boolean,
 ): Promise<void> {
+  if (signal.aborted) return;
   const state = session.state();
   const branch = currentBranch(session.events);
   const last = branch.findLast((event) => event.type === "assistant");
@@ -131,8 +152,8 @@ export async function compactIfLarge(
 
   const explicit = host.config.compactAboveTokens;
   if (explicit === undefined && used <= MIN_COMPACT_TOKENS) return;
-  const limit = explicit ?? await contextLimit(host, state.model);
-  if (limit === undefined || used <= limit) return;
+  const limit = explicit ?? await contextLimit(host, state.model, signal);
+  if (signal.aborted || limit === undefined || used <= limit) return;
   await summarizeSession(host, session, signal, keepLatestTurn ? "keepLatestTurn" : "sliding");
 }
 
@@ -148,6 +169,7 @@ export async function summarizeSession(
   signal: AbortSignal,
   mode: "full" | "keepLatestTurn" | "sliding" = "full",
 ): Promise<EventOf<"compaction"> | undefined> {
+  if (signal.aborted) return undefined;
   const model = session.state().model;
   const throughSeq = mode === "sliding"
     ? slidingCompactionPoint(session.events, host.config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS)
@@ -177,11 +199,14 @@ export async function summarizeSession(
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
     .join("")
     .trim();
-  const ok = response.reason !== "error" && response.reason !== "aborted" && rawSummary !== "";
-  if (!ok) host.ctx.logger("agent").warn("compacting %s failed: %s", session.id, response.error?.message ?? response.reason);
+  const aborted = signal.aborted || response.reason === "aborted";
+  const ok = !aborted && response.reason !== "error" && rawSummary !== "";
+  if (!ok && !aborted) {
+    host.ctx.logger("agent").warn("compacting %s failed: %s", session.id, response.error?.message ?? response.reason);
+  }
   const addendum = ok ? buildCompactionWorkingSetAddendum(session.events, throughSeq) : "";
   const summary = addendum !== "" ? `${rawSummary}\n\n${addendum}` : rawSummary;
   const event = ok ? session.append("compaction", { throughSeq, summary }) : undefined;
-  host.delta(session, { type: "compaction-end", ok });
+  host.delta(session, aborted ? { type: "compaction-end", ok: false, aborted: true } : { type: "compaction-end", ok });
   return event;
 }

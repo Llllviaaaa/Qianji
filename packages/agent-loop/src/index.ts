@@ -135,8 +135,13 @@ export class AgentLoop extends Service implements Agents {
   async abort(sessionId: string): Promise<void> {
     const run = this.runs.get(sessionId);
     if (run === undefined) return;
+    const hadQueued = run.steer.length > 0 || run.followUp.length > 0;
     run.steer.length = 0;
     run.followUp.length = 0;
+    if (hadQueued) {
+      const session = this.ctx.sessions.peek(sessionId);
+      if (session !== undefined) this.queueDelta(session, run);
+    }
     run.controller.abort();
     await run.done;
   }
@@ -213,7 +218,7 @@ export class AgentLoop extends Service implements Agents {
 
   private async loop(session: Session, run: Run): Promise<RunOutcome> {
     const { signal } = run.controller;
-    await this.ctx.serial("agent/before-start", session);
+    await this.ctx.serial("agent/before-start", session, signal);
     let compactedForLength = false;
     let lengthContinuations = 0;
     let emptyContinuations = 0;
@@ -225,9 +230,11 @@ export class AgentLoop extends Service implements Agents {
       // Before the first call the latest turn is only the new prompt, so it stays verbatim;
       // later in the run it holds the tool results that grew the context (ADR 0008).
       await compactIfLarge(this.compactionHost(), session, signal, turn === 1);
+      if (signal.aborted) return "aborted";
 
       this.delta(session, { type: "turn-start", turn });
       await this.ctx.serial("agent/turn-start", session, turn);
+      if (signal.aborted) return "aborted";
 
       const state = session.state();
       const model = state.model;
@@ -238,12 +245,22 @@ export class AgentLoop extends Service implements Agents {
         && response.message.content.length === 0 && !compactedForLength) {
         // Nothing was said yet: shrink the context and try the same turn again.
         compactedForLength = true;
-        if (await summarizeSession(this.compactionHost(), session, signal, "full") !== undefined) {
+        const compacted = await summarizeSession(this.compactionHost(), session, signal, "full");
+        if (signal.aborted) {
+          await this.ctx.serial("agent/turn-end", session, turn);
+          return "aborted";
+        }
+        if (compacted !== undefined) {
           turn -= 1;
           continue;
         }
       }
       if (response.reason !== "error") compactedForLength = false;
+
+      if ((response.reason === "aborted" || signal.aborted) && response.message.content.length === 0) {
+        await this.ctx.serial("agent/turn-end", session, turn);
+        return "aborted";
+      }
 
       session.append("assistant", {
         content: response.message.content,
@@ -312,6 +329,13 @@ export class AgentLoop extends Service implements Agents {
   private async call(session: Session, run: Run, model: ModelRef, signal: AbortSignal) {
     const tools = this.ctx.tools.schemas(session.id);
     const system = await this.ctx.systemPrompt.build({ sessionId: session.id, cwd: session.header.cwd, model, tools });
+    if (signal.aborted) {
+      return {
+        message: { role: "assistant" as const, content: [] },
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        reason: "aborted" as const,
+      };
+    }
     const state = session.state();
     const request: LlmRequest = {
       provider: model.provider,
@@ -348,6 +372,7 @@ export class AgentLoop extends Service implements Agents {
     const outputs: Array<ToolOutput | undefined> = new Array(calls.length);
     try {
       for (const [batchIndex, batch] of batches.entries()) {
+        if (signal.aborted) break;
         if (batchIndex > 0 && !signal.aborted && run.steer.length > 0) {
           for (const remaining of batches.slice(batchIndex)) {
             for (const { index } of remaining) {

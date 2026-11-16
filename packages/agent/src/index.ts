@@ -19,7 +19,7 @@ declare module "@deepseek-ai/cordis" {
 
   interface Events {
     /** A run is starting, before its first model call. */
-    "agent/before-start"(session: Session): Promise<void> | void;
+    "agent/before-start"(session: Session, signal?: AbortSignal): Promise<void> | void;
     /** Before each model call of a run; `turn` counts from 1. */
     "agent/turn-start"(session: Session, turn: number): Promise<void> | void;
     /** After a model call and the tools it asked for. */
@@ -46,7 +46,7 @@ export type AgentDelta =
   | { type: "tool-end"; callId: string; isError: boolean }
   | { type: "queue"; steer: number; followUp: number }
   | { type: "compaction-start" }
-  | { type: "compaction-end"; ok: boolean };
+  | { type: "compaction-end"; ok: boolean; aborted?: boolean };
 
 /** What a client that subscribes mid-run needs to catch up on live state. */
 export interface AgentStatus {

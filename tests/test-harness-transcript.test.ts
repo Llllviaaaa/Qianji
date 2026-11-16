@@ -18,6 +18,7 @@ import {
   planWidgetLines,
   replayToUi,
   resetStreamingAssistant,
+  settleStoppedTurn,
   streamAssistant,
 } from "../src/lib/transcript";
 
@@ -321,5 +322,46 @@ describe("mid-stream snapshot replay", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe("Partial");
     expect(events.at(-1)).toEqual({ type: "queue", steering: 1, followUp: 0 });
+  });
+
+  it("treats aborted compaction-end as non-failed and settles stopped turns cleanly", () => {
+    const translator = new TranscriptTranslator();
+    expect(translator.delta({ type: "compaction-end", ok: false, aborted: true })).toEqual([
+      { type: "compaction-end", failed: false },
+    ]);
+    expect(translator.delta({ type: "compaction-end", ok: false })).toEqual([
+      { type: "compaction-end", failed: true },
+    ]);
+
+    const settled = [
+      { id: "u1", role: "user" as const, content: "hi", timestamp: 1 },
+      { id: "a1", role: "assistant" as const, content: "done", isStreaming: false, isAborted: false, timestamp: 2 },
+    ];
+    expect(settleStoppedTurn(settled)).toBe(settled);
+
+    const withEmptyPlaceholder = [
+      ...settled,
+      { id: "u2", role: "user" as const, content: "next", timestamp: 3 },
+      { id: "a2", role: "assistant" as const, content: "", isStreaming: true, timestamp: 4 },
+    ];
+    expect(settleStoppedTurn(withEmptyPlaceholder).map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
+
+    const partialWithTool = [
+      { id: "u1", role: "user" as const, content: "go", timestamp: 1 },
+      {
+        id: "a1",
+        role: "assistant" as const,
+        content: "partial",
+        isStreaming: true,
+        toolCalls: [{ id: "c1", name: "bash", args: {}, running: true }],
+        timestamp: 2,
+      },
+    ];
+    const result = settleStoppedTurn(partialWithTool, 999);
+    expect(result[1]).toMatchObject({
+      isStreaming: false,
+      isAborted: true,
+      toolCalls: [{ id: "c1", running: false, isError: true, finishedAt: 999 }],
+    });
   });
 });

@@ -128,6 +128,10 @@ async function runSubagentInternal(
     }
     prepared = prep.worktree;
   }
+  if (env.signal.aborted) {
+    if (prepared !== undefined) await cleanupWorktree(prepared.repoRoot, prepared.wtRoot);
+    return { result: { ...task, sessionId: "", ok: false, output: "", error: "Aborted" } };
+  }
 
   const sessionCwd = prepared !== undefined ? prepared.sessionCwd : parent.header.cwd;
   const child = ctx.sessions.create({ cwd: sessionCwd, parent: { sessionId: parent.id, callId: env.callId ?? "" } });
@@ -293,6 +297,9 @@ export function delegateTool(ctx: Context, config: Config): ToolDefinition<{
         tasks: tasks.map((item, index) => ({ ...item, status: statuses[index], sessionId: sessions[index] })),
       });
       const outcomes = await mapWithConcurrency(tasks, concurrency, async (item, index) => {
+        if (env.signal.aborted) {
+          return { result: { ...item, sessionId: "", ok: false, output: "", error: "Aborted" } };
+        }
         statuses[index] = "running";
         publish();
         const itemOutcome = await runSubagentInternal(ctx, parent, item, permission, env, config, {

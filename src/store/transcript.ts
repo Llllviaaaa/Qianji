@@ -6,7 +6,7 @@ import { requestOpenSettings } from "../lib/shellBridge";
 import { appendManagedQueue, insertManagedQueueItem, moveManagedQueueItem, removeManagedQueueItem } from "../lib/managedQueue";
 import { completionNotification, isSilentUiRequest, uiRequestNotification } from "../lib/eventNotifications";
 import { agentBrowserFromResult, computerFromResult, isGrokBrowserTool, isGrokComputerTool } from "../lib/toolPanels";
-import { completeAssistant, endToolCall, interruptTurn, progressToolCall, replaceOrAppend, resetStreamingAssistant, startAssistant, startToolCall } from "../lib/transcript";
+import { completeAssistant, endToolCall, interruptTurn, progressToolCall, replaceOrAppend, resetStreamingAssistant, settleStoppedTurn, startAssistant, startToolCall } from "../lib/transcript";
 import type { ManagedQueuedMessage } from "../types";
 import type { GetState, SetState, StoreContext } from "./context";
 import type { TranscriptSlice } from "./types";
@@ -27,11 +27,21 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
     handleEvent: (runtimeId, event) => {
       if (event.type === "turn-start") ctx.updateRuntime(runtimeId, { isStreaming: true });
       if (event.type === "turn-end") {
-        ctx.updateRuntime(runtimeId, { isStreaming: false });
+        ctx.clearPendingAssistantUpdate(runtimeId);
+        ctx.updateRuntime(runtimeId, { isStreaming: false, extensionRequest: null });
         queueMicrotask(() => void ctx.drainManagedFollowUp(runtimeId));
       }
       if (event.type === "ui-request" && !isSilentUiRequest(event.request.method)) {
         ctx.updateRuntime(runtimeId, { extensionRequest: event.request });
+      }
+      if (event.type === "ui-cancel") {
+        if (get().runtimes[runtimeId]?.extensionRequest?.id === event.requestId) {
+          ctx.updateRuntime(runtimeId, { extensionRequest: null });
+        }
+        if (runtimeId === get().runtimeId && get().extensionRequest?.id === event.requestId) {
+          set({ extensionRequest: null });
+        }
+        return;
       }
 
       // A task in the background only notifies.
@@ -51,9 +61,18 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
           set({ isStreaming: true, retryStatus: null });
           return;
         case "turn-end":
+          ctx.clearPendingAssistantUpdate(runtimeId);
           ctx.settleOptimisticPrompt(runtimeId);
           ctx.activeTurnStartedAt = null;
-          set({ isStreaming: false, retryStatus: null });
+          set((state) => ({
+            isStreaming: false,
+            isCompacting: false,
+            retryStatus: null,
+            steeringQueue: [],
+            followUpQueue: [],
+            extensionRequest: null,
+            messages: settleStoppedTurn(state.messages),
+          }));
           if ((ctx.managedFollowUpsByRuntime.get(runtimeId) ?? []).length === 0) {
             ctx.raise(completionNotification(runtimeId, {
               cwd: get().cwd,
@@ -334,15 +353,52 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
 
     abort: async () => {
       const runtimeId = get().runtimeId;
-      if (runtimeId) ctx.suppressManagedDrainFor.add(runtimeId);
+      if (!runtimeId) {
+        ctx.activeTurnStartedAt = null;
+        set((state) => ({
+          isStreaming: false,
+          isCompacting: false,
+          retryStatus: null,
+          steeringQueue: [],
+          followUpQueue: [],
+          extensionRequest: null,
+          messages: settleStoppedTurn(state.messages),
+        }));
+        return;
+      }
+      if ((ctx.managedFollowUpsByRuntime.get(runtimeId)?.length ?? 0) > 0) {
+        ctx.suppressManagedDrainFor.add(runtimeId);
+      }
+      ctx.clearPendingAssistantUpdate(runtimeId);
+      if (get().isStreaming) set({ retryStatus: "正在停止…" });
       try {
-        await harnessRuntimes.abort(ctx.activeRuntime());
+        await harnessRuntimes.abort(runtimeId);
       } catch (error) {
-        if (runtimeId) ctx.suppressManagedDrainFor.delete(runtimeId);
-        throw error;
-      } finally {
-        if (runtimeId) ctx.settleOptimisticPrompt(runtimeId);
-        set({ isStreaming: false });
+        ctx.suppressManagedDrainFor.delete(runtimeId);
+        const live = await harnessRuntimes.state(runtimeId).catch(() => null);
+        if (live?.isStreaming) {
+          if (get().runtimeId === runtimeId) set({ retryStatus: null });
+          ctx.toast(`停止对话失败：${describeError(error)}`, "error");
+          throw error;
+        }
+      }
+      // Let any turn-end microtask queued before abort resolved observe suppressManagedDrainFor.
+      await Promise.resolve();
+      ctx.suppressManagedDrainFor.delete(runtimeId);
+      ctx.clearPendingAssistantUpdate(runtimeId);
+      ctx.settleOptimisticPrompt(runtimeId);
+      ctx.updateRuntime(runtimeId, { isStreaming: false, extensionRequest: null });
+      if (get().runtimeId === runtimeId) {
+        ctx.activeTurnStartedAt = null;
+        set((state) => ({
+          isStreaming: false,
+          isCompacting: false,
+          retryStatus: null,
+          steeringQueue: [],
+          followUpQueue: [],
+          extensionRequest: null,
+          messages: settleStoppedTurn(state.messages),
+        }));
       }
     },
 

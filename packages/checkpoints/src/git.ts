@@ -36,8 +36,11 @@ interface GitResult {
 function runGit(
   cwd: string,
   args: string[],
-  options: { env?: Record<string, string>; input?: Buffer | string } = {},
+  options: { env?: Record<string, string>; input?: Buffer | string; signal?: AbortSignal } = {},
 ): Promise<GitResult> {
+  if (options.signal?.aborted) {
+    return Promise.reject(new Error("Checkpoint aborted"));
+  }
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
       cwd,
@@ -47,10 +50,30 @@ function runGit(
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill();
+      } catch {
+        // Already exited.
+      }
+      reject(new Error("Checkpoint aborted"));
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", reject);
+    child.once("error", (error) => {
+      options.signal?.removeEventListener("abort", onAbort);
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
     child.once("close", (code) => {
+      options.signal?.removeEventListener("abort", onAbort);
+      if (settled) return;
+      settled = true;
       const output = { stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) };
       if (code === 0) resolve(output);
       else reject(new Error(output.stderr.toString("utf8").trim() || `git ${args[0]} failed with code ${code}`));
@@ -60,42 +83,42 @@ function runGit(
   });
 }
 
-async function repositoryRoot(cwd: string): Promise<string | null> {
+async function repositoryRoot(cwd: string, signal?: AbortSignal): Promise<string | null> {
   try {
-    const result = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+    const result = await runGit(cwd, ["rev-parse", "--show-toplevel"], { signal });
     return result.stdout.toString("utf8").trim() || null;
   } catch {
     return null;
   }
 }
 
-async function headTree(root: string): Promise<string | null> {
+async function headTree(root: string, signal?: AbortSignal): Promise<string | null> {
   try {
-    const result = await runGit(root, ["rev-parse", "--verify", "HEAD^{tree}"]);
+    const result = await runGit(root, ["rev-parse", "--verify", "HEAD^{tree}"], { signal });
     return result.stdout.toString("utf8").trim() || null;
   } catch {
     return null;
   }
 }
 
-async function worktreeTree(root: string): Promise<string> {
+async function worktreeTree(root: string, signal?: AbortSignal): Promise<string> {
   const temp = await mkdtemp(join(tmpdir(), "qianji-checkpoint-"));
   const indexFile = join(temp, "index");
   const env = { GIT_INDEX_FILE: indexFile };
   try {
-    const base = await headTree(root);
-    if (base) await runGit(root, ["read-tree", base], { env });
-    else await runGit(root, ["read-tree", "--empty"], { env });
-    await runGit(root, ["add", "-A", "--", "."], { env });
-    const tree = await runGit(root, ["write-tree"], { env });
+    const base = await headTree(root, signal);
+    if (base) await runGit(root, ["read-tree", base], { env, signal });
+    else await runGit(root, ["read-tree", "--empty"], { env, signal });
+    await runGit(root, ["add", "-A", "--", "."], { env, signal });
+    const tree = await runGit(root, ["write-tree"], { env, signal });
     return tree.stdout.toString("utf8").trim();
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
 }
 
-async function indexTree(root: string): Promise<string> {
-  const result = await runGit(root, ["write-tree"]);
+async function indexTree(root: string, signal?: AbortSignal): Promise<string> {
+  const result = await runGit(root, ["write-tree"], { signal });
   return result.stdout.toString("utf8").trim();
 }
 
@@ -123,18 +146,21 @@ export async function pruneWorkspaceCheckpoints(root: string, retain = QIANJI_CH
 }
 
 /** Capture tracked and non-ignored workspace files without touching the real Git index. */
-export async function createWorkspaceCheckpoint(cwd: string): Promise<WorkspaceCheckpoint | null> {
-  const root = await repositoryRoot(cwd);
-  if (!root) return null;
+export async function createWorkspaceCheckpoint(cwd: string, signal?: AbortSignal): Promise<WorkspaceCheckpoint | null> {
+  if (signal?.aborted) return null;
+  const root = await repositoryRoot(cwd, signal);
+  if (!root || signal?.aborted) return null;
   try {
-    const [tree, stagedTree] = await Promise.all([worktreeTree(root), indexTree(root)]);
+    const [tree, stagedTree] = await Promise.all([worktreeTree(root, signal), indexTree(root, signal)]);
+    if (signal?.aborted) return null;
     const id = randomUUID();
     const ref = `refs/qianji/checkpoints/${id}`;
     const commit = await runGit(root, ["commit-tree", tree], {
       env: checkpointEnvironment(),
       input: `Qianji workspace checkpoint ${id}\n`,
+      signal,
     });
-    await runGit(root, ["update-ref", ref, commit.stdout.toString("utf8").trim()]);
+    await runGit(root, ["update-ref", ref, commit.stdout.toString("utf8").trim()], { signal });
     await pruneWorkspaceCheckpoints(root);
     return {
       version: 1,

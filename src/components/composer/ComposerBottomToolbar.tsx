@@ -365,7 +365,7 @@ export function ComposerBottomToolbar({
             />
           ))}
         {isStreaming ? (
-          <button type="button" className="stop-button dsh-primary-send" onClick={onStop} title="停止">
+          <button type="button" className="stop-button dsh-primary-send" onClick={onStop} aria-label="停止" title="停止">
             <Square size={11} fill="currentColor" />
           </button>
         ) : (
