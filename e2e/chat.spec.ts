@@ -3,16 +3,26 @@ import { join } from "node:path";
 import { answer, composer, expect, send, settled, test, textReply, toolReply, userBubble, userRow } from "./fixtures.ts";
 
 test("send a message and watch the reply stream in", async ({ app, harness }) => {
-  harness.provider.push([
-    { type: "text-delta", index: 0, text: "Streaming " },
-    { type: "text-delta", index: 0, text: "works " },
-    { type: "text-delta", index: 0, text: "end to end." },
-    { type: "finish", reason: "stop" },
-  ]);
+  let releaseStream = () => {};
+  const finishGate = new Promise<void>((resolve) => {
+    releaseStream = resolve;
+  });
+  harness.provider.push(async function* (_request, signal) {
+    signal.addEventListener("abort", releaseStream, { once: true });
+    yield { type: "text-delta", index: 0, text: "Streaming " };
+    yield { type: "text-delta", index: 0, text: "works " };
+    await finishGate;
+    yield { type: "text-delta", index: 0, text: "end to end." };
+    yield { type: "finish", reason: "stop" };
+  });
   await send(app, "Say hello");
   await expect(userBubble(app, "Say hello")).toBeVisible();
-  // The reply shows while it streams, then settles.
-  await expect(app.locator(".dshc-answer[data-streaming]")).toBeVisible();
+  // The reply shows while it streams, then settles once the remaining chunks arrive.
+  try {
+    await expect(app.locator(".dshc-answer[data-streaming]")).toContainText("Streaming works");
+  } finally {
+    releaseStream();
+  }
   await expect(answer(app, "Streaming works end to end.")).toBeVisible();
   await expect(app.locator(".dshc-answer[data-streaming]")).toHaveCount(0);
   expect(harness.provider.requests).toHaveLength(1);

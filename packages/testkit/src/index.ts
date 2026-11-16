@@ -8,7 +8,10 @@ import type { LlmAdapter, LlmErrorInfo, LlmRequest, StreamChunk, Usage } from "@
 import type { Session } from "@qianji/session";
 
 /** One scripted model call: its chunks, or a function of the request that returns them. */
-export type ScriptedReply = StreamChunk[] | ((request: LlmRequest) => StreamChunk[]);
+export type ScriptedReply =
+  | Iterable<StreamChunk>
+  | AsyncIterable<StreamChunk>
+  | ((request: LlmRequest, signal: AbortSignal) => Iterable<StreamChunk> | AsyncIterable<StreamChunk>);
 
 export interface ScriptedOptions {
   /** Wait this long before each chunk, so tests can act mid-stream. */
@@ -66,8 +69,8 @@ export class ScriptedProvider implements LlmAdapter {
     this.requests.push(structuredClone(request));
     const next = this.replies.shift();
     if (next === undefined) throw new Error(`No scripted reply left for call ${this.requests.length}`);
-    const chunks = typeof next === "function" ? next(request) : next;
-    for (const chunk of chunks) {
+    const chunks = typeof next === "function" ? next(request, signal) : next;
+    for await (const chunk of chunks) {
       if (this.options.chunkDelayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, this.options.chunkDelayMs));
       if (signal.aborted) {
         yield { type: "finish", reason: "aborted" };

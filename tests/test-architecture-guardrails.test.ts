@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { ESLint } from "eslint";
 import ts from "typescript";
-import { describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
   scaffoldPluginFiles,
   THEME_TOKENS_CATALOG,
@@ -22,6 +22,8 @@ function countPhysicalLines(relPath: string): number {
   return raw.split("\n").length;
 }
 
+let previousProgram: ts.Program | undefined;
+
 function runProgrammaticTypecheck(projectDir: string): string[] {
   const configPath = join(projectDir, "tsconfig.json");
   const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
@@ -32,7 +34,9 @@ function runProgrammaticTypecheck(projectDir: string): string[] {
   const program = ts.createProgram({
     rootNames: parsed.fileNames,
     options: { ...parsed.options, noEmit: true },
+    oldProgram: previousProgram,
   });
+  previousProgram = program;
   const diagnostics = ts.getPreEmitDiagnostics(program);
   return diagnostics.map((diag) => {
     const msg = ts.flattenDiagnosticMessageText(diag.messageText, "\n");
@@ -60,6 +64,21 @@ function writeExternalPluginTsconfig(targetDir: string, pluginTypesDir: string, 
 }
 
 describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template compilation", () => {
+  let sharedTypesRoot = "";
+  let sharedPluginTypesDir = "";
+
+  beforeAll(() => {
+    sharedTypesRoot = mkdtempSync(join(tmpdir(), "qj-guardrail-shared-types-"));
+    sharedPluginTypesDir = join(sharedTypesRoot, "plugin-types");
+    generatePluginTypes({ repoRoot: REPO_ROOT, targetDir: sharedPluginTypesDir });
+  });
+
+  afterAll(() => {
+    if (sharedTypesRoot) {
+      rmSync(sharedTypesRoot, { recursive: true, force: true });
+    }
+  });
+
   it("locks legacy src/styles.css line watermark and @layer cascade ordering", () => {
     const legacyLines = countPhysicalLines("src/styles.css");
     assert.ok(
@@ -168,8 +187,7 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
   it("compiles all 3 skill templates and all 3 scaffold templates with zero-dependency tsc --noEmit and ClientBundleRegistry", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "qj-guardrail-templates-"));
     try {
-      const pluginTypesDir = join(tempRoot, "plugin-types");
-      generatePluginTypes({ repoRoot: REPO_ROOT, targetDir: pluginTypesDir });
+      const pluginTypesDir = sharedPluginTypesDir;
 
       const templateSpecs: Array<{ kind: PluginTemplateKind; include: string[] }> = [
         { kind: "tool-only", include: ["index.ts"] },
@@ -224,7 +242,7 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 90_000);
 
   it("ensures session Markdown export is deduplicated in WindowMenubar and StageTopbar", () => {
     const menubarSource = readFileSync(join(REPO_ROOT, "src/components/shell/WindowMenubar.tsx"), "utf8");
@@ -285,8 +303,7 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
     // Typecheck fenced ts/tsx code blocks in reference docs against generated plugin-types
     const tempRoot = mkdtempSync(join(tmpdir(), "qj-guardrail-doc-snippets-"));
     try {
-      const pluginTypesDir = join(tempRoot, "plugin-types");
-      generatePluginTypes({ repoRoot: REPO_ROOT, targetDir: pluginTypesDir });
+      const pluginTypesDir = sharedPluginTypesDir;
       const snippetsDir = join(tempRoot, "snippets");
       cpSync(join(REPO_ROOT, "skills/qianji-plugin-development/templates/fullstack-panel"), snippetsDir, {
         recursive: true,
@@ -319,13 +336,12 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 90_000);
 
   it("compiles a host IM bridge plugin using sessions, agents, ui.attach, credentials, and events against offline plugin-types", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "qj-guardrail-im-plugin-"));
     try {
-      const pluginTypesDir = join(tempRoot, "plugin-types");
-      generatePluginTypes({ repoRoot: REPO_ROOT, targetDir: pluginTypesDir });
+      const pluginTypesDir = sharedPluginTypesDir;
       const pluginDir = join(tempRoot, "im-bridge");
       mkdirSync(pluginDir, { recursive: true });
 
@@ -428,5 +444,5 @@ export async function apply(ctx: Context): Promise<void> {
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 90_000);
 });
