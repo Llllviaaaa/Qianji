@@ -1,3 +1,4 @@
+import type { ClientPageContribution, ClientSidebarSectionContribution } from "../../lib/clientContributions";
 import { sameLocalPath } from "../../lib/pathIdentity";
 import { sessionTitle } from "../../lib/sessionTitle";
 import {
@@ -7,7 +8,7 @@ import {
 import type { AppNotification, ProjectConfig, SessionInfo, SessionSearchMatch } from "../../types";
 import type { SettingsPage } from "../SettingsModal";
 
-export type SidebarHub = "scheduled" | "plugins" | null;
+export type SidebarHub = "scheduled" | "plugins" | `plugin:${string}` | null;
 export type SidebarGroupMode = "project" | "recent";
 
 export interface SidebarProps {
@@ -22,6 +23,9 @@ export interface SidebarProps {
   onNewSession: () => void;
   onOpenScheduled: () => void;
   onOpenPlugins?: () => void;
+  pluginPages?: readonly ClientPageContribution[];
+  onOpenPluginPage?: (pageId: string) => void;
+  leftSidebarSections?: readonly ClientSidebarSectionContribution[];
   onOpenSession: (session: SessionInfo) => void;
   onOpenNotification: (notification: AppNotification) => void;
   onMarkAllNotificationsRead: () => void;

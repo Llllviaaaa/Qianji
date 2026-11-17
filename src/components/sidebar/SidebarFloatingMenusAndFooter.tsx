@@ -8,8 +8,10 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
+import type { ClientSidebarSectionContribution } from "../../lib/clientContributions";
 import { sessionTitle } from "../../lib/sessionTitle";
 import type { ProjectConfig, SessionInfo } from "../../types";
+import { SlotEntryHost } from "../common/ErrorBoundary";
 import { PluginMenuItems } from "../common/PluginMenuItems";
 import type { SettingsPage } from "../SettingsModal";
 import {
@@ -19,6 +21,9 @@ import {
 } from "./sidebarHelpers";
 
 export interface SidebarFloatingMenusAndFooterProps {
+  cwd: string;
+  currentSessionFile: string | null;
+  leftSidebarSections?: readonly ClientSidebarSectionContribution[];
   projectMenu: PositionedProjectMenu | null;
   setProjectMenu: (next: PositionedProjectMenu | null) => void;
   groups: Array<[string, SessionInfo[]]>;
@@ -40,6 +45,9 @@ export interface SidebarFloatingMenusAndFooterProps {
 }
 
 export function SidebarFloatingMenusAndFooter({
+  cwd,
+  currentSessionFile,
+  leftSidebarSections,
   projectMenu,
   setProjectMenu,
   groups,
@@ -132,6 +140,20 @@ export function SidebarFloatingMenusAndFooter({
           </div>
           <div><Folder size={15} /><span>{displayProjectName(threadPreview.session.cwd)}</span></div>
           <div><GitBranch size={15} /><span>{branchByWorkspace[threadPreview.session.cwd] || "读取中..."}</span></div>
+        </div>
+      )}
+
+      {leftSidebarSections !== undefined && leftSidebarSections.length > 0 && (
+        <div className="pid-sidebar-plugin-slot" data-slot="sidebar-plugins">
+          {leftSidebarSections.map((section) => (
+            <div key={section.id} className="pid-sidebar-plugin-section">
+              <SlotEntryHost
+                entry={section}
+                context={{ cwd, sessionFile: currentSessionFile }}
+                slotName="leftSidebar"
+              />
+            </div>
+          ))}
         </div>
       )}
 
