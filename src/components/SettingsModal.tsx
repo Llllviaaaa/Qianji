@@ -3,7 +3,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { ArrowLeft, Maximize2, Minimize2, X } from "lucide-react";
 import { BUILTIN_APPEARANCE_CATALOG, type AppearanceCatalog } from "../lib/appearanceCatalog";
 import { useClientContributions, type SettingsSlotContext } from "../lib/clientContributions";
-import { pluginSettingsPageId, type SettingsPageId } from "../lib/shellBridge";
+import type { SettingsPageId } from "../lib/shellBridge";
 import { ModelsPage } from "./ModelsPage";
 import { PluginsSettingsPanel } from "./PluginsSettingsPanel";
 import { AppearancePage } from "./settings/AppearanceSettingsPage";
@@ -12,6 +12,7 @@ import {
   BUILTIN_SETTINGS_NAV,
   PluginSettingsContent,
   pluginSettingsNavItems,
+  SettingsExtensionNavGroup,
   type SettingsNavItem,
 } from "./settings/settingsNavigation";
 import { DEFAULTS, NAV_SPRING, normalizeSettingsDisplayMode } from "./settings/settingsPrimitives";
@@ -150,18 +151,10 @@ export function SettingsModal({
   }, [isPage, update]);
   const { settingsPages, settingsSections } = useClientContributions();
   const pluginNav = useMemo(() => pluginSettingsNavItems(settingsPages), [settingsPages]);
-  const requestedPluginId = pluginSettingsPageId(active);
-  const matchedPluginNav = requestedPluginId !== undefined
-    ? pluginNav.find((item) => item.id === active)
-    : undefined;
-  const navPageId: SettingsPage = active === "mcp" || active === "skills"
-    ? "plugins"
-    : requestedPluginId !== undefined
-      ? (matchedPluginNav ? "plugins" : "general")
-      : active;
+  const navPageId: SettingsPage = active === "mcp" || active === "skills" ? "plugins" : active;
   const initialExpandPluginId = active === "mcp" ? "mcp" : active === "skills" ? "prompt-context" : undefined;
   // A plugin page that was unloaded while open falls back to "general".
-  const activeMeta = BUILTIN_SETTINGS_NAV.find((item) => item.id === navPageId) ?? BUILTIN_SETTINGS_NAV[0];
+  const activeMeta = [...BUILTIN_SETTINGS_NAV, ...pluginNav].find((item) => item.id === navPageId) ?? BUILTIN_SETTINGS_NAV[0];
   const shownPage = activeMeta.id;
   const isWideGrid = activeMeta.wide;
   const slotContext: SettingsSlotContext = { cwd, sessionFile, page: shownPage, closeSettings };
@@ -228,6 +221,11 @@ export function SettingsModal({
           <LayoutGroup id="settings-sidebar-nav">
             <nav className="settings-nav-scroll" aria-label="设置分类">
               {BUILTIN_SETTINGS_NAV.map(renderNavButton)}
+              <SettingsExtensionNavGroup
+                items={pluginNav}
+                shownPage={shownPage}
+                renderNavButton={renderNavButton}
+              />
             </nav>
           </LayoutGroup>
 
@@ -295,18 +293,13 @@ export function SettingsModal({
                 {shownPage === "plugins" && (
                   <PluginsSettingsPanel
                     cwd={cwd}
-                    sessionFile={sessionFile}
                     form={form}
                     onSyncAppSetting={update}
                     initialExpandPluginId={initialExpandPluginId}
-                    activePluginPageId={matchedPluginNav?.plugin?.id ?? null}
-                    onSelectPluginPage={(subId) => setActive(subId === null ? "plugins" : `plugin:${subId}`)}
                     onDismissHub={closeSettings}
                   />
                 )}
-                {shownPage !== "plugins" && (
-                  <PluginSettingsContent page={activeMeta} sections={settingsSections} context={slotContext} />
-                )}
+                <PluginSettingsContent page={activeMeta} sections={settingsSections} context={slotContext} />
               </motion.div>
             </AnimatePresence>
           </div>
