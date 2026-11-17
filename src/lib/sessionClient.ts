@@ -36,6 +36,11 @@ export const sessionClient = {
   async archive(file: string): Promise<void> {
     await harnessRuntimes.call("session.archive", { sessionId: hostId(file), archived: true });
   },
+  async rename(file: string, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    await harnessRuntimes.call("session.rename", { sessionId: hostId(file), title: trimmed });
+  },
   async restore(file: string): Promise<void> {
     await harnessRuntimes.call("session.archive", { sessionId: hostId(file), archived: false });
   },

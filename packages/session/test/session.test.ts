@@ -224,6 +224,34 @@ describe("summaries", () => {
       messageCount: 2,
     });
   });
+
+  it("tracks updatedAt from conversation activity events while ignoring label, model, and effort changes", () => {
+    const header = { format: "pid.session" as const, version: 1, id: "s-ts", createdAt: "2026-01-01T00:00:00.000Z", cwd: "/w" };
+    const metadataOnly: SessionEvent[] = [
+      { seq: 1, ts: "2026-01-02T00:00:00.000Z", type: "model", data: model },
+      { seq: 2, ts: "2026-01-02T00:01:00.000Z", type: "effort", data: { effort: "high" } },
+      { seq: 3, ts: "2026-01-02T00:02:00.000Z", type: "label", data: { title: "Renamed" } },
+    ];
+    expect(summarize(header, metadataOnly)).toMatchObject({
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      lastSeq: 3,
+    });
+
+    const withActivity: SessionEvent[] = [
+      { seq: 1, ts: "2026-01-02T10:00:00.000Z", type: "user", data: { content: text("hi") } },
+      { seq: 2, ts: "2026-01-02T10:01:00.000Z", type: "assistant", data: { content: text("hello"), model, usage, stop: "stop" } },
+      { seq: 3, ts: "2026-01-03T12:00:00.000Z", type: "compaction", data: { throughSeq: 2, summary: "sum" } },
+      { seq: 4, ts: "2026-01-04T12:00:00.000Z", type: "rewind", data: { toSeq: 2 } },
+      { seq: 5, ts: "2026-01-10T00:00:00.000Z", type: "label", data: { title: "Custom" } },
+      { seq: 6, ts: "2026-01-10T00:05:00.000Z", type: "label", data: { archived: true } },
+      { seq: 7, ts: "2026-01-10T00:06:00.000Z", type: "model", data: model },
+      { seq: 8, ts: "2026-01-10T00:07:00.000Z", type: "effort", data: { effort: "low" } },
+    ];
+    expect(summarize(header, withActivity)).toMatchObject({
+      updatedAt: "2026-01-04T12:00:00.000Z",
+      lastSeq: 8,
+    });
+  });
 });
 
 describe("sessions service", () => {

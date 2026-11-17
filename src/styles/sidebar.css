@@ -1,0 +1,556 @@
+/*
+ * Qianji — Primary Sidebar Tree, Session Rows & Time Buckets (`sidebar.css`)
+ *
+ * Authored in `@layer components` above `legacy` and `skin`, using `--qj-*`
+ * semantic tokens so Light and Dark themes stay consistent without touching
+ * legacy `src/styles.css`.
+ */
+
+/* ── Project Group Header & Folder ↔ Chevron In-Place Swap ─────────── */
+
+.codex-shot .project-block {
+  position: relative;
+  margin: 0;
+}
+
+.codex-shot .project-block + .project-block {
+  margin-top: 6px;
+}
+
+.codex-shot .project-header-row {
+  position: relative;
+  width: 100%;
+  min-height: 29px;
+  height: 29px;
+  margin: 0;
+  padding: 0 5px 0 6px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  transition: background-color 120ms ease;
+}
+
+.codex-shot .project-header-row:hover,
+.codex-shot .project-header-row:has(:focus-visible),
+.codex-shot .project-block.is-menu-open .project-header-row {
+  background: var(--qj-bg-hover);
+}
+
+.codex-shot .project-header-row:focus-within:not(:hover):not(:has(:focus-visible)) {
+  background: transparent;
+}
+
+.codex-shot .project-collapse-toggle,
+.codex-shot .project-folder-static {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  display: inline-grid;
+  place-items: center;
+}
+
+.codex-shot .project-collapse-toggle {
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .project-collapse-toggle:hover {
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .project-collapse-toggle .project-folder-glyph {
+  display: block;
+}
+
+.codex-shot .project-collapse-toggle .project-chevron-glyph {
+  display: none;
+  transition: transform 140ms ease;
+}
+
+.codex-shot .project-header-row:hover .project-collapse-toggle .project-folder-glyph,
+.codex-shot .project-collapse-toggle:focus-visible .project-folder-glyph,
+.codex-shot .project-collapse-toggle.is-collapsed .project-folder-glyph {
+  display: none;
+}
+
+.codex-shot .project-header-row:hover .project-collapse-toggle .project-chevron-glyph,
+.codex-shot .project-collapse-toggle:focus-visible .project-chevron-glyph,
+.codex-shot .project-collapse-toggle.is-collapsed .project-chevron-glyph {
+  display: block;
+}
+
+.codex-shot .project-collapse-toggle.is-collapsed .project-chevron-glyph {
+  transform: rotate(-90deg);
+}
+
+.codex-shot .project-header-row .project-header,
+.codex-shot .project-block.is-current .project-header {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  height: 100%;
+  min-height: 29px;
+  margin: 0;
+  padding: 0 4px 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.codex-shot .project-header-row .project-header:hover {
+  background: transparent;
+}
+
+.codex-shot .project-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 18px;
+  color: color-mix(in srgb, var(--qj-text-primary) 86%, var(--qj-text-secondary));
+  transition: color 120ms ease;
+}
+
+.codex-shot .project-header-row:hover .project-name,
+.codex-shot .project-block.is-current .project-name,
+.codex-shot .project-block.is-menu-open .project-name {
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .project-header > .project-pinned-mark {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--qj-text-muted);
+  opacity: 0.85;
+  transform: rotate(-18deg);
+}
+
+.codex-shot .project-header > .project-status {
+  margin: 0 0 0 2px;
+}
+
+.codex-shot .project-count {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--qj-text-primary) 7%, transparent);
+  color: var(--qj-text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-shot .project-actions {
+  position: static;
+  flex: 0 0 auto;
+  height: 24px;
+  margin-left: auto;
+  display: none;
+  align-items: center;
+  gap: 1px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.codex-shot .project-header-row:hover .project-actions,
+.codex-shot .project-header-row:has(:focus-visible) .project-actions,
+.codex-shot .project-block.is-menu-open .project-actions {
+  display: inline-flex;
+}
+
+.codex-shot .project-actions > button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .project-actions > button:hover {
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
+}
+
+/* ── Tree Guide & Session Rows ─────────────────────────────────────── */
+
+.codex-shot .project-block > .thread-list {
+  margin: 1px 0 4px 15.5px;
+  padding: 1px 0 1px 8px;
+  border-left: 1px solid var(--qj-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  transition: border-color 140ms ease;
+}
+
+.codex-shot .project-block:hover > .thread-list,
+.codex-shot .project-block.is-current > .thread-list {
+  border-left-color: var(--qj-border-default);
+}
+
+.codex-shot .thread-bucket-section + .thread-bucket-section {
+  margin-top: 8px;
+}
+
+.codex-shot .thread-bucket-label {
+  padding: 4px 8px 3px;
+  color: var(--qj-text-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 16px;
+  user-select: none;
+}
+
+.codex-shot .thread-list-recent .thread-list {
+  margin: 0;
+  padding: 0;
+  border-left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.codex-shot .thread-list-recent .thread-row {
+  padding: 0 8px;
+}
+
+.codex-shot .thread-row-shell {
+  position: relative;
+  width: 100%;
+  min-height: 30px;
+  border-radius: 7px;
+}
+
+.codex-shot .thread-row-bar {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  border-radius: 7px;
+  transition: background-color 120ms ease;
+}
+
+.codex-shot .thread-row-bar:hover,
+.codex-shot .thread-row-shell.is-menu-open .thread-row-bar {
+  background: var(--qj-bg-hover);
+}
+
+.codex-shot .thread-row-shell.active .thread-row-bar {
+  background: var(--qj-bg-active);
+  box-shadow: inset 0 0 0 1px var(--qj-border-subtle);
+}
+
+.codex-shot .thread-row-shell .thread-row,
+.codex-shot .thread-row-shell.active .thread-row,
+.codex-shot .thread-row,
+.codex-shot .thread-row.active,
+:root[data-theme="dark"] .codex-shot .thread-row.active,
+:root[data-theme="light"] .codex-shot .thread-row.active {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  height: 100%;
+  min-height: 30px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--qj-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 440;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.codex-shot .thread-row:hover,
+.codex-shot .thread-row-shell:hover .thread-row,
+.codex-shot .thread-row-shell.is-menu-open .thread-row {
+  background: transparent;
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .thread-row-shell.active .thread-row,
+.codex-shot .thread-row.active,
+:root[data-theme="dark"] .codex-shot .thread-row.active,
+:root[data-theme="light"] .codex-shot .thread-row.active {
+  color: var(--qj-text-primary);
+  font-weight: 540;
+}
+
+.codex-shot .thread-pin-indicator {
+  flex: 0 0 auto;
+  color: var(--qj-text-muted);
+  opacity: 0.85;
+  transform: rotate(-18deg);
+}
+
+.codex-shot .thread-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-shot .thread-project-tag {
+  flex: 0 0 auto;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--qj-text-primary) 5.5%, transparent);
+  color: var(--qj-text-muted);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.codex-shot .thread-row-time {
+  flex: 0 0 auto;
+  color: var(--qj-text-muted);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-shot .thread-row-shell:hover .thread-row-time,
+.codex-shot .thread-row-shell:focus-within .thread-row-time,
+.codex-shot .thread-row-shell:has(:focus-visible) .thread-row-time {
+  visibility: visible;
+}
+
+.codex-shot .thread-row-shell:hover .thread-row-time:not(.thread-row-badge),
+.codex-shot .thread-row-shell:has(:focus-visible) .thread-row-time:not(.thread-row-badge),
+.codex-shot .thread-row-shell.is-menu-open .thread-row-time:not(.thread-row-badge) {
+  display: none;
+}
+
+.codex-shot .thread-row-shell:hover .thread-project-tag,
+.codex-shot .thread-row-shell:has(:focus-visible) .thread-project-tag,
+.codex-shot .thread-row-shell.is-menu-open .thread-project-tag {
+  display: none;
+}
+
+.codex-shot .thread-row-actions {
+  position: static;
+  flex: 0 0 auto;
+  height: 24px;
+  padding-right: 3px;
+  display: none;
+  align-items: center;
+  gap: 1px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.codex-shot .thread-row-shell:hover .thread-row-actions,
+.codex-shot .thread-row-shell:has(:focus-visible) .thread-row-actions,
+.codex-shot .thread-row-shell.is-menu-open .thread-row-actions {
+  display: inline-flex;
+}
+
+.codex-shot .thread-row-shell:hover .thread-row,
+.codex-shot .thread-row-shell:has(:focus-visible) .thread-row,
+.codex-shot .thread-row-shell.is-menu-open .thread-row {
+  padding-right: 2px;
+}
+
+.codex-shot .thread-row-actions > button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .thread-row-actions > button:hover,
+.codex-shot .thread-row-actions > button.is-pinned {
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .thread-search-snippet {
+  padding: 0 8px 5px 10px;
+  color: var(--qj-text-muted);
+}
+
+/* ── Inline Rename & Expand Toggle ─────────────────────────────────── */
+
+.codex-shot .thread-rename-editor {
+  width: 100%;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px 2px 6px;
+}
+
+.codex-shot .thread-rename-editor input {
+  min-width: 0;
+  height: 25px;
+  flex: 1;
+  border: 1px solid var(--qj-border-strong);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  padding: 0 7px;
+  font: 12.5px/1 var(--font-ui);
+}
+
+.codex-shot .thread-rename-editor input:focus {
+  border-color: var(--qj-brand-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--qj-brand-primary) 16%, transparent);
+}
+
+.codex-shot .thread-rename-editor button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.codex-shot .thread-rename-editor button:hover {
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
+}
+
+.codex-shot .expand-threads {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  margin-top: 2px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.codex-shot .expand-threads:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+/* ── Context Menu Danger Action & Archived List ────────────────────── */
+
+.codex-shot .project-context-menu > button.danger:hover,
+.codex-shot .thread-context-menu > button.danger:hover {
+  background: color-mix(in srgb, var(--qj-status-danger) 13%, transparent);
+  color: var(--qj-status-danger);
+}
+
+.codex-shot .project-context-menu > button.danger:hover svg,
+.codex-shot .thread-context-menu > button.danger:hover svg {
+  color: var(--qj-status-danger);
+}
+
+.codex-shot .dsh-claude-archive-row {
+  padding: 0 3px 0 0;
+  gap: 2px;
+  cursor: default;
+}
+
+.codex-shot .dsh-claude-archive-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0 6px 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.codex-shot .dsh-claude-archive-project {
+  flex: 0 1 auto;
+  max-width: 66px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--qj-text-primary) 5.5%, transparent);
+  color: var(--qj-text-muted);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.codex-shot .dsh-claude-archive-actions {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 1px;
+}
+
+.codex-shot .dsh-claude-archive-row:hover .dsh-claude-archive-actions,
+.codex-shot .dsh-claude-archive-row:has(:focus-visible) .dsh-claude-archive-actions,
+.codex-shot .dsh-claude-archive-row:has(:focus-visible) .dsh-claude-archive-action {
+  display: inline-flex;
+}
+
+.codex-shot .dsh-claude-archive-row:has(:focus-visible) .dsh-claude-archive-time {
+  display: none;
+}
+
+.codex-shot .dsh-claude-archive-row:hover .dsh-claude-archive-project,
+.codex-shot .dsh-claude-archive-row:has(:focus-visible) .dsh-claude-archive-project {
+  display: none;
+}

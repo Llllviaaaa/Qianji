@@ -1,6 +1,5 @@
 import {
   Archive,
-  Folder,
   FolderOpen,
   GitBranch,
   Pin,
@@ -9,16 +8,11 @@ import {
   X,
 } from "lucide-react";
 import type { ClientSidebarSectionContribution } from "../../lib/clientContributions";
-import { sessionTitle } from "../../lib/sessionTitle";
 import type { ProjectConfig, SessionInfo } from "../../types";
 import { SlotEntryHost } from "../common/ErrorBoundary";
 import { PluginMenuItems } from "../common/PluginMenuItems";
 import type { SettingsPage } from "../SettingsModal";
-import {
-  relativeTime,
-  type PositionedProjectMenu,
-  type PositionedThreadPreview,
-} from "./sidebarHelpers";
+import type { PositionedProjectMenu } from "./sidebarHelpers";
 
 export interface SidebarFloatingMenusAndFooterProps {
   cwd: string;
@@ -34,11 +28,6 @@ export interface SidebarFloatingMenusAndFooterProps {
   beginProjectRename: (workspace: string) => void;
   onArchiveProject: (workspace: string, sessions: SessionInfo[]) => void | Promise<void>;
   removeProject: (workspace: string) => Promise<void>;
-  threadPreview: PositionedThreadPreview | null;
-  keepPreviewOpen: () => void;
-  schedulePreviewClose: () => void;
-  displayProjectName: (workspace: string) => string;
-  branchByWorkspace: Record<string, string>;
   closePopovers: () => void;
   onOpenSettings: (page: SettingsPage) => void;
   settingsShortcut?: string;
@@ -58,11 +47,6 @@ export function SidebarFloatingMenusAndFooter({
   beginProjectRename,
   onArchiveProject,
   removeProject,
-  threadPreview,
-  keepPreviewOpen,
-  schedulePreviewClose,
-  displayProjectName,
-  branchByWorkspace,
   closePopovers,
   onOpenSettings,
   settingsShortcut,
@@ -126,22 +110,6 @@ export function SidebarFloatingMenusAndFooter({
           </div>
         );
       })()}
-
-      {threadPreview && (
-        <div
-          className="thread-hover-card"
-          style={{ top: threadPreview.top }}
-          onMouseEnter={keepPreviewOpen}
-          onMouseLeave={schedulePreviewClose}
-        >
-          <div className="thread-hover-heading">
-            <strong>{sessionTitle(threadPreview.session)}</strong>
-            <span>{relativeTime(threadPreview.session)}</span>
-          </div>
-          <div><Folder size={15} /><span>{displayProjectName(threadPreview.session.cwd)}</span></div>
-          <div><GitBranch size={15} /><span>{branchByWorkspace[threadPreview.session.cwd] || "读取中..."}</span></div>
-        </div>
-      )}
 
       {leftSidebarSections !== undefined && leftSidebarSections.length > 0 && (
         <div className="pid-sidebar-plugin-slot" data-slot="sidebar-plugins">

@@ -277,10 +277,11 @@ export function useShellWorkspaceAndSidebar({
     }
   }, [isDefaultWorkspace, isTauri, setDraftWorkspace]);
 
-  const pickFolder = useCallback(async () => {
+  const pickFolder = useCallback(async (): Promise<string | null> => {
     const selected = await open({ directory: true, multiple: false, title: "打开工作区" });
-    if (typeof selected !== "string") return;
+    if (typeof selected !== "string") return null;
     selectWorkspace(selected);
+    return selected;
   }, [selectWorkspace]);
 
   const openPreviewFile = useCallback((path: string, line?: number) => {

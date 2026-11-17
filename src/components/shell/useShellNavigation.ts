@@ -189,6 +189,34 @@ export function useShellNavigation({
     );
   }, [applyNavigationTarget, forgetArchivedSessions]);
 
+  const deleteConversation = useCallback(async (
+    target: Pick<SessionInfo, "cwd" | "file">,
+    fallbackWorkspace: string,
+  ) => {
+    const activeFile = useAppStore.getState().sessionFile;
+    const isActive = Boolean(activeFile && sameLocalPath(target.file, activeFile));
+    if (isActive) {
+      await useAppStore.getState().abort().catch(() => undefined);
+      window.localStorage.removeItem(ACTIVE_RUNTIME_KEY);
+      window.localStorage.removeItem(LAST_TASK_KEY);
+      await useAppStore.getState().disconnect().catch(() => undefined);
+      await applyNavigationTarget({ kind: "home", workspace: target.cwd || fallbackWorkspace });
+    }
+    try {
+      await agent.deleteSession(target.file);
+    } catch (error) {
+      useAppStore.getState().showToast(`删除失败：${describeError(error)}`, "error");
+      return;
+    }
+    forgetArchivedSessions([target.file]);
+    try {
+      await useAppStore.getState().refreshSessions();
+    } catch (error) {
+      useAppStore.getState().appendLog(`删除后刷新会话失败：${describeError(error)}`);
+    }
+    useAppStore.getState().showToast("已删除对话", "info");
+  }, [applyNavigationTarget, forgetArchivedSessions]);
+
   // Canonical deduplicated Markdown session exporter (used by both File menu and Thread menu).
   const exportConversationMarkdown = useCallback(async () => {
     const current = useAppStore.getState();
@@ -218,6 +246,7 @@ export function useShellNavigation({
     navigateBack,
     navigateForward,
     archiveConversations,
+    deleteConversation,
     exportConversationMarkdown,
   };
 }

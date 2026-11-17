@@ -204,6 +204,15 @@ describe("menus", () => {
     expect(builtinOnly).toContain("归档对话");
     expect(builtinOnly).not.toContain("sidebar-popover-separator");
 
+    const withManageActions = renderToStaticMarkup(createElement(SidebarThreadMenu, {
+      ...menuProps,
+      onBeginRename: () => undefined,
+      onDelete: () => undefined,
+    }));
+    expect(withManageActions).toContain("重命名对话");
+    expect(withManageActions).toContain("删除对话");
+    expect(withManageActions).toContain("sidebar-popover-separator");
+
     const seen: unknown[] = [];
     clientContributions.registerMenuItem({
       id: "export-session",
@@ -233,8 +242,6 @@ describe("menus", () => {
       onOpen: () => undefined,
       onTogglePinned: () => undefined,
       onArchive: () => undefined,
-      onShowPreview: () => undefined,
-      onHidePreview: () => undefined,
       onContextMenu,
     });
     expect(row.props.onContextMenu).toBe(onContextMenu);
