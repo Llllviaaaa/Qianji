@@ -15,6 +15,7 @@ import * as qianjiClient from "@qianji/client";
 import { CLIENT_SLOT_CATALOG } from "@qianji/protocol";
 import { PluginMenuItems, hasMenuItems, visibleMenuItems } from "../src/components/common/PluginMenuItems";
 import { Markdown } from "../src/components/Markdown";
+import { Sidebar } from "../src/components/Sidebar";
 import { SidebarThreadMenu } from "../src/components/sidebar/SidebarThreadMenu";
 import { SidebarThreadRow } from "../src/components/sidebar/SidebarThreadRow";
 import { SettingsModal } from "../src/components/SettingsModal";
@@ -346,7 +347,7 @@ describe("settings pages and sections", () => {
     expect(html).toContain('data-qj-slot="settings.sections"');
   });
 
-  it("adds an 扩展 group to the Settings sidebar and opens a plugin page with its sections", () => {
+  it("routes settings.pages into PluginsSettingsPanel sub-tabs without appending an 扩展 group to the Settings sidebar", () => {
     clientContributions.registerSettingsPage({
       id: "sync",
       pluginId: "sync-plugin",
@@ -368,12 +369,18 @@ describe("settings pages and sections", () => {
       onSave: () => undefined,
       onClose: () => undefined,
     })));
-    expect(html).toContain('class="settings-nav-group-label">扩展</div>');
+    expect(html).not.toContain("settings-nav-group-label");
+    expect(html).not.toContain(">扩展</div>");
+    expect(html).toMatch(/<nav class="settings-nav-scroll"[^>]*>[\s\S]*?<button[^>]*class="active"[^>]*>[\s\S]*?<span>插件<\/span><\/button><\/nav>/);
+    expect(html).toContain('class="plugins-subtabs-bar"');
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain("已安装与管理");
     expect(html).toContain("云同步");
     expect(html).toContain("跨设备同步会话");
+    expect(html).toContain('class="plugins-subpage-subtitle">跨设备同步会话</p>');
     expect(html).toContain("同步页@/repo");
     expect(html).toContain("高级同步选项");
-    expect(html).toMatch(/<button[^>]*class="active"[^>]*data-qj-contributed-by="sync-plugin"/);
+    expect(html).toMatch(/<button[^>]*role="tab"[^>]*class="plugins-subtab-btn active"[^>]*data-qj-contributed-by="sync-plugin"/);
   });
 
   it("falls back to the general page when the requested plugin page is not registered", () => {
@@ -386,6 +393,68 @@ describe("settings pages and sections", () => {
     })));
     expect(html).not.toContain("settings-nav-group-label");
     expect(html).toContain("对话与输入");
+  });
+
+  it("renders plugin pages inside sidebar-main-nav with overflow folding and places leftSidebar above sidebar-footer", () => {
+    const pages = [
+      { id: "p1", pluginId: "ext-1", label: "扩展页一", render: () => null },
+      { id: "p2", pluginId: "ext-2", label: "扩展页二", render: () => null },
+      { id: "p3", pluginId: "ext-3", label: "扩展页三", render: () => null },
+      { id: "p4", pluginId: "ext-4", label: "扩展页四", render: () => null },
+    ];
+    const leftSections = [
+      {
+        id: "sidebar-status-card",
+        pluginId: "status-plugin",
+        render: ({ cwd }: { cwd: string }) => createElement("div", { className: "plugin-sidebar-card" }, `状态:${cwd}`),
+      },
+    ];
+    const html = renderToStaticMarkup(withQueryClient(createElement(Sidebar, {
+      sessions: [],
+      currentSessionFile: null,
+      runningSessionFiles: [],
+      approvalSessionFiles: [],
+      notifications: [],
+      cwd: "/repo",
+      newTaskActive: false,
+      activeHub: "plugin:p4",
+      onNewSession: () => undefined,
+      onOpenScheduled: () => undefined,
+      onOpenPlugins: () => undefined,
+      pluginPages: pages,
+      onOpenPluginPage: () => undefined,
+      leftSidebarSections: leftSections,
+      onOpenSession: () => undefined,
+      onOpenNotification: () => undefined,
+      onMarkAllNotificationsRead: () => undefined,
+      onDismissNotification: () => undefined,
+      onOpenProject: () => undefined,
+      onNewProjectSession: () => undefined,
+      onArchiveSession: () => undefined,
+      onSessionRestored: () => undefined,
+      onOpenProjectFolder: () => undefined,
+      onCreateWorktree: () => undefined,
+      onArchiveProject: () => undefined,
+      onOpenSettings: () => undefined,
+      onPickFolder: () => undefined,
+    })));
+
+    const navMatch = /<nav class="sidebar-main-nav">([\s\S]*?)<\/nav>/.exec(html);
+    expect(navMatch).not.toBeNull();
+    const navHtml = navMatch?.[1] ?? "";
+    expect(navHtml).toContain("扩展页一");
+    expect(navHtml).toContain("扩展页二");
+    expect(navHtml).not.toContain("扩展页三");
+    expect(navHtml).toContain("扩展页四");
+    expect(navHtml).toContain("更多扩展 (1)");
+    expect(navHtml).toMatch(/class="nav-item pid-sidebar-plugin-nav-btn active"[^>]*data-qj-contributed-by="ext-4"/);
+
+    const slotIdx = html.indexOf("pid-sidebar-plugin-slot");
+    const footerIdx = html.indexOf("sidebar-footer");
+    expect(slotIdx).toBeGreaterThan(-1);
+    expect(footerIdx).toBeGreaterThan(slotIdx);
+    expect(html).toContain("状态:/repo");
+    expect(html).toContain('data-qj-slot="leftSidebar"');
   });
 });
 

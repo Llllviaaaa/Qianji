@@ -43,14 +43,14 @@ export const CLIENT_SLOT_CATALOG: readonly ClientSlotMetadata[] = [
   defineSlot({
     name: "pages",
     method: "ctx.contributions.registerPage",
-    summary: "一级侧边栏导航入口与主舞台全屏功能页",
+    summary: "左侧栏顶部主导航入口与主舞台全屏功能页",
     options: ["id", "label", "icon?", "order?", "render(ctx)"],
     contextFields: ["cwd", "sessionFile"],
   }),
   defineSlot({
     name: "leftSidebar",
     method: "ctx.contributions.registerLeftSidebar",
-    summary: "左侧导航栏底部自定义常驻分区",
+    summary: "左侧栏会话列表下方（底部「设置」按钮上方）自定义常驻分区",
     options: ["id", "order?", "render(ctx)"],
     contextFields: ["cwd", "sessionFile"],
   }),
@@ -156,7 +156,7 @@ export const CLIENT_SLOT_CATALOG: readonly ClientSlotMetadata[] = [
   defineSlot({
     name: "settings.pages",
     method: "ctx.contributions.registerSettingsPage",
-    summary: "设置中心左侧导航「扩展」分组下的独立设置页",
+    summary: "「设置 → 插件」面板顶部子标签页中的独立插件设置视图",
     options: ["id", "label", "icon?", "heading?", "subtitle?", "order?", "wide?", "render(ctx)"],
     contextFields: ["cwd", "sessionFile", "page", "closeSettings"],
     note: "Open it from code with openSettingsPage(id) from @qianji/client.",

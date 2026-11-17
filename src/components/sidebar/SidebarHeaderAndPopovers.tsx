@@ -12,9 +12,11 @@ import {
   X,
 } from "lucide-react";
 import { QIANJI_BRAND_MARK_SVG } from "../../lib/claudeCrabSheets";
+import type { ClientPageContribution } from "../../lib/clientContributions";
 import type { AppNotification } from "../../types";
 import { ChromeInboxIcon, ChromePinIcon, ChromeSearchIcon, DockLeftIcon } from "../common/ChromeIcons";
 import type { SidebarGroupMode, SidebarHub } from "./sidebarHelpers";
+import { SidebarPluginNavItems } from "./SidebarPluginNavItems";
 
 export interface SidebarHeaderAndPopoversProps {
   query: string;
@@ -35,6 +37,8 @@ export interface SidebarHeaderAndPopoversProps {
   onNewSession: () => void;
   onOpenScheduled: () => void;
   onOpenPlugins?: () => void;
+  pluginPages?: readonly ClientPageContribution[];
+  onOpenPluginPage?: (pageId: string) => void;
   workspaceView: "active" | "archived";
   setWorkspaceView: (next: "active" | "archived") => void;
   groupMode: SidebarGroupMode;
@@ -68,6 +72,8 @@ export function SidebarHeaderAndPopovers({
   onNewSession,
   onOpenScheduled,
   onOpenPlugins,
+  pluginPages,
+  onOpenPluginPage,
   workspaceView,
   setWorkspaceView,
   groupMode,
@@ -260,6 +266,14 @@ export function SidebarHeaderAndPopovers({
             <span>扩展插件</span>
           </button>
         )}
+        <SidebarPluginNavItems
+          pages={pluginPages}
+          activeHub={activeHub}
+          onSelectPage={(pageId) => {
+            closePopovers();
+            onOpenPluginPage?.(pageId);
+          }}
+        />
       </nav>
 
       <div className="sidebar-projects-header" data-ws-view={workspaceView}>

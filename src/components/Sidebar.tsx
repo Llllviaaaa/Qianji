@@ -20,6 +20,9 @@ export function Sidebar({
   onNewSession,
   onOpenScheduled,
   onOpenPlugins,
+  pluginPages,
+  onOpenPluginPage,
+  leftSidebarSections,
   onOpenSession,
   onOpenNotification,
   onMarkAllNotificationsRead,
@@ -85,6 +88,8 @@ export function Sidebar({
         onNewSession={onNewSession}
         onOpenScheduled={onOpenScheduled}
         onOpenPlugins={onOpenPlugins}
+        pluginPages={pluginPages}
+        onOpenPluginPage={onOpenPluginPage}
         workspaceView={state.workspaceView}
         setWorkspaceView={state.setWorkspaceView}
         groupMode={state.groupMode}
@@ -153,6 +158,9 @@ export function Sidebar({
       />
 
       <SidebarFloatingMenusAndFooter
+        cwd={cwd}
+        currentSessionFile={currentSessionFile}
+        leftSidebarSections={leftSidebarSections}
         projectMenu={state.projectMenu}
         setProjectMenu={state.setProjectMenu}
         groups={state.groups}

@@ -3,7 +3,7 @@ import type { ClientContributionsSnapshot } from "../../lib/clientContributions"
 import { describeError } from "../../lib/errors";
 import { sameLocalPath } from "../../lib/pathIdentity";
 import type { AppNotification, AppSettings, SessionInfo } from "../../types";
-import { RegionErrorBoundary, SlotEntryHost } from "../common/ErrorBoundary";
+import { RegionErrorBoundary } from "../common/ErrorBoundary";
 import type { SettingsPage } from "../SettingsModal";
 import { Sidebar } from "../Sidebar";
 import type { HubView, NavigationTarget } from "./shellTypes";
@@ -122,10 +122,13 @@ export function PrimarySidebarShell({
                 notifications={notifications}
                 cwd={newTask ? draftWorkspace : cwd}
                 newTaskActive={newTask && hubView === null}
-                activeHub={hubView === "scheduled" ? "scheduled" : hubView === "plugins" ? "plugins" : null}
+                activeHub={hubView}
                 onNewSession={() => navigateFromSidebar({ kind: "home", workspace: draftWorkspace || cwd })}
                 onOpenScheduled={() => navigateFromSidebar({ kind: "hub", view: "scheduled" })}
                 onOpenPlugins={() => navigateFromSidebar({ kind: "hub", view: "plugins" })}
+                pluginPages={contributions.pages}
+                onOpenPluginPage={(id) => navigateFromSidebar({ kind: "hub", view: `plugin:${id}` })}
+                leftSidebarSections={contributions.leftSidebar}
                 onOpenSession={(session) => navigateFromSidebar({ kind: "session", cwd: session.cwd, file: session.file })}
                 onOpenNotification={(notification) => {
                   markNotificationRead(notification.id);
@@ -177,37 +180,6 @@ export function PrimarySidebarShell({
                 onHoverLeave={scheduleSidebarHoverClose}
               />
             </RegionErrorBoundary>
-            {(contributions.pages.length > 0 || contributions.leftSidebar.length > 0) && (
-              <div
-                className="pid-sidebar-plugin-slot"
-                onMouseEnter={!sidebarVisible ? cancelSidebarHoverClose : undefined}
-                onMouseLeave={!sidebarVisible ? scheduleSidebarHoverClose : undefined}
-              >
-                {contributions.pages.map((page) => {
-                  const targetView: HubView = `plugin:${page.id}`;
-                  return (
-                    <button
-                      key={page.id}
-                      type="button"
-                      className={`pid-sidebar-plugin-page-btn${hubView === targetView ? " active" : ""}`}
-                      onClick={() => navigateFromSidebar({ kind: "hub", view: targetView })}
-                    >
-                      {page.icon}
-                      <span>{page.label}</span>
-                    </button>
-                  );
-                })}
-                {contributions.leftSidebar.map((section) => (
-                  <div key={section.id} className="pid-sidebar-plugin-section">
-                    <SlotEntryHost
-                      entry={section}
-                      context={{ cwd: workspaceCwd || cwd, sessionFile }}
-                      slotName="leftSidebar"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
           </>
         )}
       </div>

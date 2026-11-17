@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { PluginInfo } from "@qianji/protocol";
 import { Boxes, ChevronDown, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { useClientContributions } from "../lib/clientContributions";
 import { describeError } from "../lib/errors";
 import { useAppStore } from "../store";
 import type { AppSettings } from "../types";
@@ -10,22 +11,34 @@ import { PluginCard } from "./plugins/PluginCard";
 import type { PluginFilter } from "./plugins/pluginHelpers";
 import { PluginsEmptyHub } from "./plugins/PluginsEmptyHub";
 import { PluginsHeaderBar } from "./plugins/PluginsHeaderBar";
+import {
+  PluginSettingsSubPageView,
+  PluginsManagementSectionsFooter,
+  PluginsSubTabsBar,
+} from "./plugins/PluginsSubPagesHost";
 import { usePluginsPanelState } from "./plugins/usePluginsPanelState";
+import { pluginSettingsNavItems } from "./settings/settingsNavigation";
 import { DEFAULTS } from "./settings/settingsPrimitives";
 
 export interface PluginsSettingsPanelProps {
   cwd: string;
+  sessionFile?: string | null;
   form?: AppSettings;
   onSyncAppSetting?: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   initialExpandPluginId?: string;
+  activePluginPageId?: string | null;
+  onSelectPluginPage?: (pluginPageId: string | null) => void;
   onDismissHub?: () => void;
 }
 
 export function PluginsSettingsPanel({
   cwd,
+  sessionFile = null,
   form,
   onSyncAppSetting,
   initialExpandPluginId,
+  activePluginPageId,
+  onSelectPluginPage,
   onDismissHub,
 }: PluginsSettingsPanelProps) {
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -48,6 +61,14 @@ export function PluginsSettingsPanel({
   );
 
   const state = usePluginsPanelState(cwd, effectiveForm, initialExpandPluginId);
+  const { settingsPages, settingsSections } = useClientContributions();
+  const pluginNav = useMemo(() => pluginSettingsNavItems(settingsPages), [settingsPages]);
+  const [localSubPageId, setLocalSubPageId] = useState<string | null>(null);
+  const requestedSubId = activePluginPageId !== undefined ? activePluginPageId : localSubPageId;
+  const activeSubPage = requestedSubId
+    ? pluginNav.find((item) => item.plugin?.id === requestedSubId)
+    : undefined;
+  const handleSelectSubPage = onSelectPluginPage ?? setLocalSubPageId;
 
   useEffect(() => {
     if (!initialExpandPluginId || state.pluginsQuery.isPending) return;
@@ -109,6 +130,25 @@ export function PluginsSettingsPanel({
 
   return (
     <div ref={panelRef} className="plugins-panel">
+      <PluginsSubTabsBar
+        pluginNav={pluginNav}
+        activeSubPage={activeSubPage}
+        onSelectSubPage={handleSelectSubPage}
+      />
+
+      {activeSubPage !== undefined ? (
+        <PluginSettingsSubPageView
+          page={activeSubPage}
+          sections={settingsSections}
+          context={{
+            cwd,
+            sessionFile: sessionFile ?? null,
+            page: activeSubPage.id,
+            closeSettings: onDismissHub ?? (() => undefined),
+          }}
+        />
+      ) : (
+        <>
           <PluginsHeaderBar
             cwd={cwd}
             busy={busy}
@@ -235,6 +275,16 @@ export function PluginsSettingsPanel({
             </div>
           )}
 
+          <PluginsManagementSectionsFooter
+            sections={settingsSections}
+            context={{
+              cwd,
+              sessionFile: sessionFile ?? null,
+              page: "plugins",
+              closeSettings: onDismissHub ?? (() => undefined),
+            }}
+          />
+
           <AnimatePresence>
             {state.installChannel !== null && (
               <InstallPluginDialog
@@ -248,6 +298,8 @@ export function PluginsSettingsPanel({
               />
             )}
           </AnimatePresence>
+        </>
+      )}
     </div>
   );
 }

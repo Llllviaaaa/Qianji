@@ -24,16 +24,6 @@
   height: 14px;
 }
 
-/* "扩展" group heading above plugin settings pages in the Settings navigation. */
-.settings-nav-group-label {
-  margin: 12px 0 2px;
-  padding: 0 12px;
-  color: var(--qj-text-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
 .settings-plugin-card {
   padding: 14px 16px;
   color: var(--qj-text-primary);
@@ -410,4 +400,81 @@
   height: 2px;
   border-radius: 2px;
   background: var(--qj-text-primary);
+}
+
+/* ── Plugin Settings Sub-Tabs Inside Plugins Panel ─────────────────── */
+
+.plugins-subtabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--qj-border-subtle);
+  padding-bottom: 0;
+  overflow-x: auto;
+}
+
+.plugins-subtab-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--qj-text-secondary);
+  font-family: var(--qj-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 130ms ease, border-color 130ms ease;
+}
+
+.plugins-subtab-btn svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.plugins-subtab-btn:hover {
+  color: var(--qj-text-primary);
+}
+
+.plugins-subtab-btn.active {
+  color: var(--qj-text-primary);
+  font-weight: 600;
+  border-bottom-color: var(--qj-text-primary);
+}
+
+.plugins-subpage-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 740px;
+}
+
+.plugins-subpage-stage.is-wide {
+  max-width: none;
+}
+
+.plugins-subpage-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plugins-subpage-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 620;
+  color: var(--qj-text-primary);
+}
+
+.plugins-subpage-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--qj-text-secondary);
+  line-height: 1.45;
 }

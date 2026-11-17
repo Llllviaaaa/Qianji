@@ -99,12 +99,12 @@ test("a client plugin extends settings, menus, keybindings, file and session men
     writeFileSync(join(pluginDir, "client.tsx"), CLIENT_SOURCE);
     await installPlugin(app, pluginDir);
 
-    // Settings: an 扩展 group with the plugin page, and a card on the built-in General page.
+    // Settings: plugin page appears inside Plugins sub-tabs (no 扩展 group in left rail), plus a card on General.
     const nav = app.locator(".settings-nav-scroll");
-    await expect(nav.locator(".settings-nav-group-label")).toHaveText("扩展");
-    await nav.getByRole("button", { name: "扩展点演示" }).click();
+    await expect(nav.locator(".settings-nav-group-label")).toHaveCount(0);
+    await app.locator(".plugins-subtabs-bar").getByRole("tab", { name: "扩展点演示" }).click();
     await expect(app.getByTestId("ext-settings-page")).toHaveText("设置页内容@plugin:ext-points");
-    await expect(app.locator(".settings-header-sub")).toHaveText("插件贡献的设置页");
+    await expect(app.locator(".plugins-subpage-subtitle")).toHaveText("插件贡献的设置页");
     await nav.getByRole("button", { name: "通用" }).click();
     await expect(app.locator(".settings-plugin-section h2")).toHaveText("扩展点卡片");
     await expect(app.getByTestId("ext-general-section")).toBeVisible();
