@@ -88,6 +88,7 @@ export const agent = {
   exportSessionMarkdown: sessionClient.exportMarkdown,
   listArchivedSessions: sessionClient.listArchived,
   archiveSession: sessionClient.archive,
+  renameSession: sessionClient.rename,
   restoreSession: sessionClient.restore,
   deleteSession: sessionClient.delete,
   getSettings: () => invoke<AppSettings>("get_settings"),

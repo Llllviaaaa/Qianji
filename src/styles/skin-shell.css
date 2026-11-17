@@ -218,8 +218,7 @@ body.sidebar-is-resizing .codex-shot .sidebar-resizer::after {
 
 .codex-shot .app-menu-dropdown,
 .codex-shot .topbar-menu,
-.codex-shot .sidebar-popover,
-.codex-shot .thread-hover-card {
+.codex-shot .sidebar-popover {
   padding: 6px;
   border: 0;
   border-radius: 18px;
@@ -1148,12 +1147,4 @@ body.sidebar-is-resizing .codex-shot .sidebar-resizer::after {
 
 .codex-shot .dsh-claude-account-btn:hover .sidebar-footer-shortcut {
   opacity: 0.8;
-}
-
-.codex-shot .thread-hover-card {
-  color: var(--text-2);
-}
-
-.codex-shot .thread-hover-heading {
-  color: var(--text);
 }

@@ -4,7 +4,7 @@
  * so hover-preview mode stays open while the pointer is on it.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
-import { Archive, Pin } from "lucide-react";
+import { Archive, Pencil, Pin, Trash2 } from "lucide-react";
 import { sessionTitle } from "../../lib/sessionTitle";
 import type { SessionInfo } from "../../types";
 import { PluginMenuItems } from "../common/PluginMenuItems";
@@ -35,11 +35,21 @@ export interface SidebarThreadMenuProps {
   menu: PositionedThreadMenu;
   pinned: boolean;
   onClose: () => void;
+  onBeginRename?: (session: SessionInfo) => void;
   onTogglePinned: (file: string) => void;
   onArchive: (session: SessionInfo) => void | Promise<void>;
+  onDelete?: (session: SessionInfo) => void | Promise<void>;
 }
 
-export function SidebarThreadMenu({ menu, pinned, onClose, onTogglePinned, onArchive }: SidebarThreadMenuProps) {
+export function SidebarThreadMenu({
+  menu,
+  pinned,
+  onClose,
+  onBeginRename,
+  onTogglePinned,
+  onArchive,
+  onDelete,
+}: SidebarThreadMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { session } = menu;
   const title = sessionTitle(session);
@@ -83,6 +93,18 @@ export function SidebarThreadMenu({ menu, pinned, onClose, onTogglePinned, onArc
       aria-label={title}
       onContextMenu={(event) => event.preventDefault()}
     >
+      {onBeginRename && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose();
+            onBeginRename(session);
+          }}
+        >
+          <Pencil size={14} />重命名对话
+        </button>
+      )}
       <button
         type="button"
         role="menuitem"
@@ -91,7 +113,7 @@ export function SidebarThreadMenu({ menu, pinned, onClose, onTogglePinned, onArc
           onTogglePinned(session.file);
         }}
       >
-        <Pin size={15} />{pinned ? "取消置顶对话" : "置顶对话"}
+        <Pin size={14} />{pinned ? "取消置顶对话" : "置顶对话"}
       </button>
       <button
         type="button"
@@ -101,7 +123,7 @@ export function SidebarThreadMenu({ menu, pinned, onClose, onTogglePinned, onArc
           void onArchive(session);
         }}
       >
-        <Archive size={15} />归档对话
+        <Archive size={14} />归档对话
       </button>
       <PluginMenuItems
         location="sidebar.thread"
@@ -109,6 +131,22 @@ export function SidebarThreadMenu({ menu, pinned, onClose, onTogglePinned, onArc
         onClose={onClose}
         separatorClassName="sidebar-popover-separator"
       />
+      {onDelete && (
+        <>
+          <div className="sidebar-popover-separator" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onClick={() => {
+              onClose();
+              void onDelete(session);
+            }}
+          >
+            <Trash2 size={14} />删除对话
+          </button>
+        </>
+      )}
     </div>
   );
 }

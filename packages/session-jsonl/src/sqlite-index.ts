@@ -16,7 +16,7 @@ import {
   type SessionSummary,
 } from "@qianji/session";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const CJK_CHAR_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu;
 
 /** Insert spaces around CJK characters so SQLite FTS5 `unicode61` indexes every CJK glyph positionally. */

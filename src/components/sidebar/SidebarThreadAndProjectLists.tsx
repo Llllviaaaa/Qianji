@@ -1,31 +1,24 @@
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
-import {
-  ArchiveRestore,
-  Check,
-  ChevronDown,
-  Folder,
-  MoreHorizontal,
-  Pin,
-  SquarePen,
-  Trash2,
-  X,
-} from "lucide-react";
+import { ArchiveRestore, Trash2 } from "lucide-react";
 import { agent } from "../../lib/agent";
 import { sameLocalPath } from "../../lib/pathIdentity";
 import { sessionTitle } from "../../lib/sessionTitle";
 import type { ProjectConfig, SessionInfo } from "../../types";
 import {
   compactRelativeTime,
+  groupSessionsByTimeBucket,
   pathsEqual,
   VISIBLE_RECENT_THREADS,
-  VISIBLE_THREADS_PER_PROJECT,
+  visibleProjectSessions,
   type ProjectDropTarget,
   type SidebarGroupMode,
 } from "./sidebarHelpers";
+import { SidebarProjectSection } from "./SidebarProjectSection";
 import { SidebarThreadRow } from "./SidebarThreadRow";
 
 export interface SidebarThreadAndProjectListsProps {
   workspaceView: "active" | "archived";
+  setWorkspaceView: (next: "active" | "archived") => void;
   groupMode: SidebarGroupMode;
   query: string;
   setQuery: (next: string) => void;
@@ -37,6 +30,7 @@ export interface SidebarThreadAndProjectListsProps {
   approvalSessionFiles: string[];
   pinnedSessionFiles: string[];
   togglePinnedSession: (file: string) => void;
+  unpinSession: (file: string) => void;
   snippetByFile: Map<string, string>;
   archivedLoading: boolean;
   archivedSessions: SessionInfo[];
@@ -52,20 +46,24 @@ export interface SidebarThreadAndProjectListsProps {
   setProjectCollapsed: (workspace: string, collapsed: boolean) => void;
   projectConfig: (workspace: string) => ProjectConfig;
   displayProjectName: (workspace: string) => string;
+  projectMenuWorkspace: string | null;
+  openThreadMenuFile: string | null;
   editingProject: string | null;
   setEditingProject: (next: string | null) => void;
   aliasDraft: string;
   setAliasDraft: (next: string) => void;
   finishProjectRename: () => void;
+  editingSessionFile: string | null;
+  setEditingSessionFile: (next: string | null) => void;
+  sessionTitleDraft: string;
+  setSessionTitleDraft: (next: string) => void;
+  finishSessionRename: () => void;
   draggingWorkspace: string | null;
   projectDropTarget: ProjectDropTarget | null;
   consumeSuppressedProjectClick: () => boolean;
   startProjectDrag: (event: ReactPointerEvent<HTMLDivElement>, workspace: string, pinned: boolean) => void;
   openProjectMenu: (event: ReactMouseEvent<HTMLButtonElement>, workspace: string) => void;
   openThreadMenu: (event: ReactMouseEvent<HTMLElement>, session: SessionInfo) => void;
-  showThreadPreview: (session: SessionInfo, element: HTMLElement) => void;
-  schedulePreviewClose: () => void;
-  clearThreadPreview: () => void;
   closePopovers: () => void;
   onOpenSession: (session: SessionInfo) => void;
   onArchiveSession: (session: SessionInfo) => void | Promise<void>;
@@ -76,6 +74,7 @@ export interface SidebarThreadAndProjectListsProps {
 
 export function SidebarThreadAndProjectLists({
   workspaceView,
+  setWorkspaceView,
   groupMode,
   query,
   setQuery,
@@ -87,6 +86,7 @@ export function SidebarThreadAndProjectLists({
   approvalSessionFiles,
   pinnedSessionFiles,
   togglePinnedSession,
+  unpinSession,
   snippetByFile,
   archivedLoading,
   archivedSessions,
@@ -102,20 +102,24 @@ export function SidebarThreadAndProjectLists({
   setProjectCollapsed,
   projectConfig,
   displayProjectName,
+  projectMenuWorkspace,
+  openThreadMenuFile,
   editingProject,
   setEditingProject,
   aliasDraft,
   setAliasDraft,
   finishProjectRename,
+  editingSessionFile,
+  setEditingSessionFile,
+  sessionTitleDraft,
+  setSessionTitleDraft,
+  finishSessionRename,
   draggingWorkspace,
   projectDropTarget,
   consumeSuppressedProjectClick,
   startProjectDrag,
   openProjectMenu,
   openThreadMenu,
-  showThreadPreview,
-  schedulePreviewClose,
-  clearThreadPreview,
   closePopovers,
   onOpenSession,
   onArchiveSession,
@@ -123,13 +127,20 @@ export function SidebarThreadAndProjectLists({
   onNewProjectSession,
   onPickFolder,
 }: SidebarThreadAndProjectListsProps) {
-  const renderThreadRow = (session: SessionInfo) => {
+  const isImportantSession = (session: SessionInfo) => (
+    (!newTaskActive && sameLocalPath(session.file, currentSessionFile))
+    || runningSessionFiles.some((file) => sameLocalPath(file, session.file))
+    || approvalSessionFiles.some((file) => sameLocalPath(file, session.file))
+  );
+
+  const renderThreadRow = (session: SessionInfo, projectLabel?: string) => {
     const openTargetSession = () => {
       closePopovers();
       setQuery("");
       setProjectCollapsed(session.cwd, false);
       onOpenSession(session);
     };
+    const isEditing = Boolean(editingSessionFile && sameLocalPath(session.file, editingSessionFile));
     return (
       <SidebarThreadRow
         key={session.file}
@@ -137,18 +148,55 @@ export function SidebarThreadAndProjectLists({
         active={!newTaskActive && sameLocalPath(session.file, currentSessionFile)}
         running={runningSessionFiles.some((file) => sameLocalPath(file, session.file))}
         approval={approvalSessionFiles.some((file) => sameLocalPath(file, session.file))}
-        pinned={pinnedSessionFiles.includes(session.file)}
+        pinned={pinnedSessionFiles.some((file) => sameLocalPath(file, session.file))}
+        projectLabel={projectLabel}
         snippet={trimmedQuery ? snippetByFile.get(session.file) : undefined}
+        menuOpen={Boolean(openThreadMenuFile && sameLocalPath(session.file, openThreadMenuFile))}
+        editing={isEditing}
+        renameDraft={isEditing ? sessionTitleDraft : ""}
+        onChangeRenameDraft={setSessionTitleDraft}
+        onCommitRename={finishSessionRename}
+        onCancelRename={() => setEditingSessionFile(null)}
         onOpen={openTargetSession}
         onTogglePinned={() => togglePinnedSession(session.file)}
         onArchive={() => {
-          clearThreadPreview();
           void onArchiveSession(session);
         }}
-        onShowPreview={(element) => showThreadPreview(session, element)}
-        onHidePreview={schedulePreviewClose}
+        onOpenMenu={(event) => openThreadMenu(event, session)}
         onContextMenu={(event) => openThreadMenu(event, session)}
       />
+    );
+  };
+
+  const renderRecentList = () => {
+    const showAllRecent = recentExpanded || Boolean(trimmedQuery);
+    const { visible: visibleRecent, hiddenCount: hiddenRecentCount } = visibleProjectSessions(
+      recentSessions,
+      showAllRecent,
+      isImportantSession,
+      VISIBLE_RECENT_THREADS,
+    );
+    const canCollapseRecent = !trimmedQuery
+      && recentExpanded
+      && visibleProjectSessions(recentSessions, false, isImportantSession, VISIBLE_RECENT_THREADS).hiddenCount > 0;
+    const buckets = groupSessionsByTimeBucket(visibleRecent, pinnedSessionFiles);
+
+    return (
+      <div className="thread-list-recent">
+        {buckets.map((bucket) => (
+          <section key={bucket.id} className="thread-bucket-section">
+            <div className="thread-bucket-label">{bucket.label}</div>
+            <div className="thread-list">
+              {bucket.sessions.map((session) => renderThreadRow(session, displayProjectName(session.cwd)))}
+            </div>
+          </section>
+        ))}
+        {!trimmedQuery && (hiddenRecentCount > 0 || canCollapseRecent) && (
+          <button type="button" className="expand-threads" onClick={() => setRecentExpanded((value) => !value)}>
+            {recentExpanded ? "收起" : `展开其余 ${hiddenRecentCount} 个会话`}
+          </button>
+        )}
+      </div>
     );
   };
 
@@ -162,45 +210,59 @@ export function SidebarThreadAndProjectLists({
             <div className="dsh-claude-archive-status">没有已归档的会话</div>
           ) : (
             archivedSessions.map((session) => (
-              <div key={session.file} className="dsh-claude-archive-row" role="button" tabIndex={0}>
-                <span className="dsh-claude-archive-title" title={sessionTitle(session)}>
-                  {sessionTitle(session)}
-                </span>
-                <span className="dsh-claude-archive-time">{compactRelativeTime(session)}</span>
-                <span className="dsh-claude-archive-action">
-                  <button
-                    type="button"
-                    className="dsh-claude-archive-restore"
-                    title="取消归档"
-                    aria-label="取消归档"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void agent.restoreSession(session.file).then(() => {
-                        void refetchArchived();
-                        onSessionRestored();
-                        window.dispatchEvent(new Event("qianji:projects-changed"));
-                      });
-                    }}
-                  >
-                    <ArchiveRestore size={14} />
-                  </button>
-                </span>
-                <span className="dsh-claude-archive-action">
-                  <button
-                    type="button"
-                    className="dsh-claude-archive-delete"
-                    title="删除会话"
-                    aria-label="删除会话"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void agent.deleteSession(session.file).then(() => {
-                        void refetchArchived();
-                      });
-                    }}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </span>
+              <div key={session.file} className="dsh-claude-archive-row">
+                <button
+                  type="button"
+                  className="dsh-claude-archive-open"
+                  title={sessionTitle(session)}
+                  onClick={() => {
+                    closePopovers();
+                    setQuery("");
+                    setWorkspaceView("active");
+                    onOpenSession(session);
+                  }}
+                >
+                  <span className="dsh-claude-archive-title">{sessionTitle(session)}</span>
+                  <span className="dsh-claude-archive-project">{displayProjectName(session.cwd)}</span>
+                  <span className="dsh-claude-archive-time">{compactRelativeTime(session)}</span>
+                </button>
+                <div className="dsh-claude-archive-actions">
+                  <span className="dsh-claude-archive-action">
+                    <button
+                      type="button"
+                      className="dsh-claude-archive-restore"
+                      title="取消归档"
+                      aria-label="取消归档"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void agent.restoreSession(session.file).then(() => {
+                          void refetchArchived();
+                          onSessionRestored();
+                          window.dispatchEvent(new Event("qianji:projects-changed"));
+                        });
+                      }}
+                    >
+                      <ArchiveRestore size={14} />
+                    </button>
+                  </span>
+                  <span className="dsh-claude-archive-action">
+                    <button
+                      type="button"
+                      className="dsh-claude-archive-delete"
+                      title="删除会话"
+                      aria-label="删除会话"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        unpinSession(session.file);
+                        void agent.deleteSession(session.file).then(() => {
+                          void refetchArchived();
+                        });
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </span>
+                </div>
               </div>
             ))
           )}
@@ -211,141 +273,50 @@ export function SidebarThreadAndProjectLists({
           <button type="button" className="text-link" onClick={onPickFolder}>选择文件夹</button>
         </div>
       ) : groupMode === "recent" ? (
-        <div className="thread-list thread-list-recent">
-          {(recentExpanded || query.trim() ? recentSessions : recentSessions.slice(0, VISIBLE_RECENT_THREADS)).map(renderThreadRow)}
-          {!query.trim() && recentSessions.length > VISIBLE_RECENT_THREADS && (
-            <button type="button" className="expand-threads" onClick={() => setRecentExpanded((value) => !value)}>
-              {recentExpanded ? "收起" : `展开其余 ${recentSessions.length - VISIBLE_RECENT_THREADS} 个会话`}
-            </button>
-          )}
-        </div>
+        renderRecentList()
       ) : (
         groups.map(([workspace, chats]) => {
-          const collapsed = !query.trim() && collapsedProjectPaths.some((path) => pathsEqual(path, workspace));
-          const expanded = Boolean(query.trim()) || expandedProjects[workspace];
-          const visibleChats = expanded ? chats : chats.slice(0, VISIBLE_THREADS_PER_PROJECT);
-          const hiddenChatCount = chats.length - VISIBLE_THREADS_PER_PROJECT;
-          const projectPinned = projectConfig(workspace).pinned;
-          const isEditing = editingProject === workspace;
-          const projectStatus = chats.some((session) => approvalSessionFiles.some((file) => sameLocalPath(file, session.file)))
-            ? "approval"
-            : chats.some((session) => runningSessionFiles.some((file) => sameLocalPath(file, session.file)))
-              ? "running"
-              : null;
+          const collapsed = !trimmedQuery && collapsedProjectPaths.some((path) => pathsEqual(path, workspace));
+          const expanded = Boolean(trimmedQuery) || Boolean(expandedProjects[workspace]);
           const isDragging = draggingWorkspace !== null && pathsEqual(draggingWorkspace, workspace);
           const dropPosition = projectDropTarget && pathsEqual(projectDropTarget.workspace, workspace)
             ? projectDropTarget.position
             : undefined;
+          const menuOpen = Boolean(projectMenuWorkspace && pathsEqual(projectMenuWorkspace, workspace));
 
           return (
-            <section
-              className={`project-block${cwd && pathsEqual(workspace, cwd) ? " is-current" : ""}${isDragging ? " is-dragging" : ""}`}
-              data-workspace={workspace}
-              data-pinned={projectPinned ? "true" : "false"}
-              data-drop-position={dropPosition}
+            <SidebarProjectSection
               key={workspace}
-            >
-              <div
-                className="project-header-row"
-                onPointerDown={(event) => startProjectDrag(event, workspace, projectPinned)}
-              >
-                {isEditing ? (
-                  <form className="project-rename-editor" onSubmit={(event) => { event.preventDefault(); finishProjectRename(); }}>
-                    <input
-                      autoFocus
-                      value={aliasDraft}
-                      onChange={(event) => setAliasDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") setEditingProject(null);
-                      }}
-                      aria-label="项目名称"
-                    />
-                    <button type="submit" title="保存" aria-label="保存"><Check size={14} /></button>
-                    <button type="button" title="取消" aria-label="取消" onClick={() => setEditingProject(null)}><X size={14} /></button>
-                  </form>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="project-header"
-                      title={workspace}
-                      onClick={(event) => {
-                        if (consumeSuppressedProjectClick()) {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          return;
-                        }
-                        closePopovers();
-                        setProjectCollapsed(workspace, false);
-                        onOpenProject(workspace);
-                      }}
-                    >
-                      <Folder size={15} strokeWidth={1.7} />
-                      <span className="project-name">{displayProjectName(workspace)}</span>
-                      {collapsed && projectStatus && (
-                        <span
-                          className="thread-status project-status"
-                          data-status={projectStatus}
-                          title={projectStatus === "approval" ? "有会话等待审批" : "有会话正在运行"}
-                        />
-                      )}
-                      {collapsed && chats.length > 0 && <span className="project-count">{chats.length}</span>}
-                    </button>
-                    <button
-                      type="button"
-                      className={`project-collapse-toggle ${collapsed ? "is-collapsed" : ""}`}
-                      title={collapsed ? "展开会话" : "折叠会话"}
-                      aria-label={`${collapsed ? "展开" : "折叠"} ${displayProjectName(workspace)} 的会话`}
-                      aria-expanded={!collapsed}
-                      disabled={chats.length === 0}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setProjectCollapsed(workspace, !collapsed);
-                      }}
-                    >
-                      <ChevronDown size={13} strokeWidth={1.8} />
-                    </button>
-                    <div className="project-actions">
-                      {projectPinned && <Pin className="project-pinned-mark" size={13} />}
-                      <button
-                        type="button"
-                        title="项目操作"
-                        aria-label={`${displayProjectName(workspace)} 项目操作`}
-                        onClick={(event) => openProjectMenu(event, workspace)}
-                      >
-                        <MoreHorizontal size={15} />
-                      </button>
-                      <button
-                        type="button"
-                        title="在此项目中新建对话"
-                        aria-label={`在 ${displayProjectName(workspace)} 中新建对话`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          closePopovers();
-                          onNewProjectSession(workspace);
-                        }}
-                      >
-                        <SquarePen size={14} />
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-              {!collapsed && (
-                <div className="thread-list">
-                  {visibleChats.map(renderThreadRow)}
-                  {!query.trim() && hiddenChatCount > 0 && (
-                    <button
-                      type="button"
-                      className="expand-threads"
-                      onClick={() => setExpandedProjects((current) => ({ ...current, [workspace]: !current[workspace] }))}
-                    >
-                      {expanded ? "收起" : `展开其余 ${hiddenChatCount} 个会话`}
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
+              workspace={workspace}
+              chats={chats}
+              cwd={cwd}
+              trimmedQuery={trimmedQuery}
+              newTaskActive={newTaskActive}
+              currentSessionFile={currentSessionFile}
+              runningSessionFiles={runningSessionFiles}
+              approvalSessionFiles={approvalSessionFiles}
+              collapsed={collapsed}
+              expanded={expanded}
+              setExpandedProjects={setExpandedProjects}
+              setProjectCollapsed={setProjectCollapsed}
+              projectConfig={projectConfig(workspace)}
+              projectName={displayProjectName(workspace)}
+              menuOpen={menuOpen}
+              isEditing={editingProject === workspace}
+              aliasDraft={aliasDraft}
+              setAliasDraft={setAliasDraft}
+              setEditingProject={setEditingProject}
+              finishProjectRename={finishProjectRename}
+              isDragging={isDragging}
+              dropPosition={dropPosition}
+              consumeSuppressedProjectClick={consumeSuppressedProjectClick}
+              startProjectDrag={startProjectDrag}
+              openProjectMenu={openProjectMenu}
+              closePopovers={closePopovers}
+              onOpenProject={onOpenProject}
+              onNewProjectSession={onNewProjectSession}
+              renderThreadRow={(session) => renderThreadRow(session)}
+            />
           );
         })
       )}

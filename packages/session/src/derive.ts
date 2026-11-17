@@ -232,6 +232,10 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
 
 const FIRST_MESSAGE_CHARS = 200;
 
+function isActivityEvent(event: SessionEvent): boolean {
+  return event.type !== "label" && event.type !== "model" && event.type !== "effort";
+}
+
 export function summarize(header: SessionHeader, events: readonly SessionEvent[]): SessionSummary {
   let title: string | undefined;
   let archived = false;
@@ -283,11 +287,12 @@ export function summarize(header: SessionHeader, events: readonly SessionEvent[]
     }
   }
   const last = events.at(-1);
+  const lastActivity = events.findLast(isActivityEvent);
   return {
     id: header.id,
     cwd: header.cwd,
     createdAt: header.createdAt,
-    updatedAt: last?.ts ?? header.createdAt,
+    updatedAt: lastActivity?.ts ?? header.createdAt,
     ...(title === undefined ? {} : { title }),
     ...(firstMessage === undefined ? {} : { firstMessage }),
     archived,

@@ -272,7 +272,7 @@ export default function App() {
           approvalSessionFiles={approvalSessionFiles} notifications={notifications} workspaceCwd={ws.workspaceCwd}
           cwd={cwd} draftWorkspace={draftWorkspace} newTask={newTask} hubView={hubView} settings={settings}
           sidebarSearchRequested={sidebarSearchRequested} setSidebarSearchRequested={setSidebarSearchRequested}
-          navigateTo={nav.navigateTo} archiveConversations={nav.archiveConversations} refreshSessions={store.refreshSessions}
+          navigateTo={nav.navigateTo} archiveConversations={nav.archiveConversations} deleteConversation={nav.deleteConversation} refreshSessions={store.refreshSessions}
           markNotificationRead={store.markNotificationRead} markAllNotificationsRead={store.markAllNotificationsRead}
           dismissNotification={store.dismissNotification} showToast={store.showToast}
           revealWorkspaceInExplorer={ws.revealWorkspaceInExplorer} openSettingsPage={openSettingsPage}

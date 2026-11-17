@@ -11,7 +11,7 @@ export function sessionTitle(session: SessionInfo): string {
     return "未命名对话";
   }
   if (/^\d{4,}$/.test(raw)) return "未命名对话";
-  return raw.length > 42 ? `${raw.slice(0, 40)}…` : raw;
+  return raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
 }
 
 export function activeSessionTitle({

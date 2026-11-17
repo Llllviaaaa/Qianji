@@ -39,7 +39,7 @@ export interface WindowMenubarProps {
   canOpenWorkspace: boolean;
   preferredWorkspaceEditor: WorkspaceEditorInfo | null;
   openWorkspaceInPreferredApp: () => void;
-  pickFolder: () => Promise<void>;
+  pickFolder: () => Promise<string | null>;
   connected: boolean;
   sessionFile: string | null;
   exportConversationMarkdown: () => Promise<void>;
@@ -156,7 +156,9 @@ export function WindowMenubar({
                   onClick={() => {
                     setAppMenu(null);
                     setSettingsOpen(false);
-                    void pickFolder();
+                    void pickFolder().then((selected) => {
+                      if (selected) navigateTo({ kind: "home", workspace: selected });
+                    });
                   }}
                 >
                   打开项目...

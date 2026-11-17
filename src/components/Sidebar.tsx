@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { sameLocalPath } from "../lib/pathIdentity";
 import { SidebarFloatingMenusAndFooter } from "./sidebar/SidebarFloatingMenusAndFooter";
 import { SidebarHeaderAndPopovers } from "./sidebar/SidebarHeaderAndPopovers";
 import type { SidebarProps } from "./sidebar/sidebarHelpers";
@@ -30,6 +31,8 @@ export function Sidebar({
   onOpenProject,
   onNewProjectSession,
   onArchiveSession,
+  onRenameSession,
+  onDeleteSession,
   onSessionRestored,
   onOpenProjectFolder,
   onCreateWorktree,
@@ -106,6 +109,7 @@ export function Sidebar({
 
       <SidebarThreadAndProjectLists
         workspaceView={state.workspaceView}
+        setWorkspaceView={state.setWorkspaceView}
         groupMode={state.groupMode}
         query={state.query}
         setQuery={state.setQuery}
@@ -117,6 +121,7 @@ export function Sidebar({
         approvalSessionFiles={approvalSessionFiles}
         pinnedSessionFiles={state.pinnedSessionFiles}
         togglePinnedSession={state.togglePinnedSession}
+        unpinSession={state.unpinSession}
         snippetByFile={state.snippetByFile}
         archivedLoading={state.archivedSessionsQuery.isLoading}
         archivedSessions={state.archivedSessions}
@@ -132,11 +137,18 @@ export function Sidebar({
         setProjectCollapsed={state.setProjectCollapsed}
         projectConfig={state.projectConfig}
         displayProjectName={state.displayProjectName}
+        projectMenuWorkspace={state.projectMenu?.workspace ?? null}
+        openThreadMenuFile={threadMenu?.session.file ?? null}
         editingProject={state.editingProject}
         setEditingProject={state.setEditingProject}
         aliasDraft={state.aliasDraft}
         setAliasDraft={state.setAliasDraft}
         finishProjectRename={state.finishProjectRename}
+        editingSessionFile={state.editingSessionFile}
+        setEditingSessionFile={state.setEditingSessionFile}
+        sessionTitleDraft={state.sessionTitleDraft}
+        setSessionTitleDraft={state.setSessionTitleDraft}
+        finishSessionRename={() => state.finishSessionRename(onRenameSession)}
         draggingWorkspace={state.draggingWorkspace}
         projectDropTarget={state.projectDropTarget}
         consumeSuppressedProjectClick={state.consumeSuppressedProjectClick}
@@ -146,9 +158,6 @@ export function Sidebar({
           state.closePopovers();
           openThreadMenu(event, session);
         }}
-        showThreadPreview={state.showThreadPreview}
-        schedulePreviewClose={state.schedulePreviewClose}
-        clearThreadPreview={() => state.setThreadPreview(null)}
         closePopovers={state.closePopovers}
         onOpenSession={onOpenSession}
         onArchiveSession={onArchiveSession}
@@ -171,11 +180,6 @@ export function Sidebar({
         beginProjectRename={state.beginProjectRename}
         onArchiveProject={onArchiveProject}
         removeProject={state.removeProject}
-        threadPreview={state.threadPreview}
-        keepPreviewOpen={state.keepPreviewOpen}
-        schedulePreviewClose={state.schedulePreviewClose}
-        displayProjectName={state.displayProjectName}
-        branchByWorkspace={state.branchByWorkspace}
         closePopovers={state.closePopovers}
         onOpenSettings={onOpenSettings}
         settingsShortcut={settingsShortcut}
@@ -184,10 +188,15 @@ export function Sidebar({
       {threadMenu && (
         <SidebarThreadMenu
           menu={threadMenu}
-          pinned={state.pinnedSessionFiles.includes(threadMenu.session.file)}
+          pinned={state.pinnedSessionFiles.some((file) => sameLocalPath(file, threadMenu.session.file))}
           onClose={closeThreadMenu}
+          onBeginRename={onRenameSession ? state.beginSessionRename : undefined}
           onTogglePinned={state.togglePinnedSession}
           onArchive={onArchiveSession}
+          onDelete={onDeleteSession ? (session) => {
+            state.unpinSession(session.file);
+            return onDeleteSession(session);
+          } : undefined}
         />
       )}
     </aside>

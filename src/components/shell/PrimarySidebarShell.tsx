@@ -2,6 +2,7 @@ import { agent } from "../../lib/agent";
 import type { ClientContributionsSnapshot } from "../../lib/clientContributions";
 import { describeError } from "../../lib/errors";
 import { sameLocalPath } from "../../lib/pathIdentity";
+import { useAppStore } from "../../store";
 import type { AppNotification, AppSettings, SessionInfo } from "../../types";
 import { RegionErrorBoundary } from "../common/ErrorBoundary";
 import type { SettingsPage } from "../SettingsModal";
@@ -41,6 +42,7 @@ export interface PrimarySidebarShellProps {
     fallbackWorkspace: string,
     successMessage: string,
   ) => Promise<void>;
+  deleteConversation: (target: Pick<SessionInfo, "cwd" | "file">, fallbackWorkspace: string) => Promise<void>;
   refreshSessions: () => Promise<unknown>;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
@@ -48,7 +50,7 @@ export interface PrimarySidebarShellProps {
   showToast: (message: string, kind?: "info" | "warning" | "error") => void;
   revealWorkspaceInExplorer: (workspace: string) => void;
   openSettingsPage: (page: SettingsPage) => void;
-  pickFolder: () => Promise<void>;
+  pickFolder: () => Promise<string | null>;
   contributions: ClientContributionsSnapshot;
 }
 
@@ -81,6 +83,7 @@ export function PrimarySidebarShell({
   setSidebarSearchRequested,
   navigateTo,
   archiveConversations,
+  deleteConversation,
   refreshSessions,
   markNotificationRead,
   markAllNotificationsRead,
@@ -147,6 +150,20 @@ export function PrimarySidebarShell({
                 onOpenProject={(workspace) => navigateFromSidebar({ kind: "home", workspace })}
                 onNewProjectSession={(workspace) => navigateFromSidebar({ kind: "home", workspace })}
                 onArchiveSession={(session) => void archiveConversations([session], session.cwd, "已归档对话")}
+                onRenameSession={async (session, nextTitle) => {
+                  const trimmed = nextTitle.trim();
+                  if (!trimmed) return;
+                  try {
+                    await agent.renameSession(session.file, trimmed);
+                    if (sessionFile && sameLocalPath(session.file, sessionFile)) {
+                      useAppStore.setState({ sessionName: trimmed });
+                    }
+                    await refreshSessions();
+                  } catch (error) {
+                    showToast(`重命名失败：${describeError(error)}`, "error");
+                  }
+                }}
+                onDeleteSession={(session) => void deleteConversation(session, session.cwd || workspaceCwd || cwd)}
                 onSessionRestored={() => void refreshSessions()}
                 onOpenProjectFolder={(workspace) => {
                   revealWorkspaceInExplorer(workspace);
@@ -168,7 +185,9 @@ export function PrimarySidebarShell({
                 )}
                 onOpenSettings={openSettingsPage}
                 settingsShortcut={settings?.shortcutSettings ?? "Ctrl+,"}
-                onPickFolder={() => void pickFolder()}
+                onPickFolder={() => void pickFolder().then((selected) => {
+                  if (selected) navigateFromSidebar({ kind: "home", workspace: selected });
+                })}
                 newChatShortcut={settings?.shortcutNewChat ?? "Ctrl+Shift+N"}
                 toggleSidebarShortcut={settings?.shortcutToggleSidebar || "Ctrl+B"}
                 searchRequested={sidebarSearchRequested}

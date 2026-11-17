@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -30,11 +29,10 @@ import {
   sameOrder,
   sessionTimestamp,
   SIDEBAR_PROJECT_ORDER_KEY,
-  SIDEBAR_SESSION_ORDER_KEY,
   type PositionedProjectMenu,
-  type PositionedThreadPreview,
   type SidebarGroupMode,
 } from "./sidebarHelpers";
+import { sortSidebarSessions } from "../../lib/sidebarProjectOrder";
 import { useProjectDragOrder } from "./useProjectDragOrder";
 
 export interface UseSidebarStateOptions {
@@ -56,10 +54,6 @@ export function useSidebarState({
   searchRequested,
   onSearchRequestHandled,
 }: UseSidebarStateOptions) {
-  const previewCloseTimer = useRef<number | null>(null);
-  const inflightBranches = useRef(new Set<string>());
-  const branchFetchedAt = useRef(new Map<string, number>());
-
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -91,14 +85,14 @@ export function useSidebarState({
     }
   }, [pinnedSessionFiles]);
   const [persistedOrder, setPersistedOrder] = useState<SidebarOrder>(() => ({
-    sessions: readStringList(SIDEBAR_SESSION_ORDER_KEY),
+    sessions: [],
     workspaces: readStringList(SIDEBAR_PROJECT_ORDER_KEY),
   }));
   const [projectMenu, setProjectMenu] = useState<PositionedProjectMenu | null>(null);
-  const [threadPreview, setThreadPreview] = useState<PositionedThreadPreview | null>(null);
-  const [branchByWorkspace, setBranchByWorkspace] = useState<Record<string, string>>({});
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
+  const [editingSessionFile, setEditingSessionFile] = useState<string | null>(null);
+  const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [expandedForSession, setExpandedForSession] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
@@ -140,7 +134,9 @@ export function useSidebarState({
   }, [debouncedTrimmedQuery, sessionSearchQuery.data]);
 
   const archivedSessions = useMemo(() => {
-    const allArchived = archivedSessionsQuery.data ?? [];
+    const allArchived = [...(archivedSessionsQuery.data ?? [])].sort(
+      (left, right) => sessionTimestamp(right) - sessionTimestamp(left),
+    );
     if (!trimmedQuery) return allArchived;
     const lower = trimmedQuery.toLowerCase();
     return allArchived.filter((session) => {
@@ -168,19 +164,14 @@ export function useSidebarState({
     () => reconcileSidebarOrder(persistedOrder, sessions, visibleProjectPaths),
     [persistedOrder, sessions, visibleProjectPaths],
   );
-  const stableSessionOrder = sidebarOrder.sessions;
 
   useSyncOnChange([sidebarOrder], () => {
-    if (
-      sameOrder(sidebarOrder.sessions, persistedOrder.sessions)
-      && sameOrder(sidebarOrder.workspaces, persistedOrder.workspaces)
-    ) return;
+    if (sameOrder(sidebarOrder.workspaces, persistedOrder.workspaces)) return;
     setPersistedOrder(sidebarOrder);
   });
   useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_SESSION_ORDER_KEY, JSON.stringify(persistedOrder.sessions));
     window.localStorage.setItem(SIDEBAR_PROJECT_ORDER_KEY, JSON.stringify(persistedOrder.workspaces));
-  }, [persistedOrder]);
+  }, [persistedOrder.workspaces]);
 
   const projectConfig = useCallback(
     (workspace: string): ProjectConfig => projectConfigs.find((project) => pathsEqual(project.path, workspace)) ?? {
@@ -201,7 +192,6 @@ export function useSidebarState({
       const withoutWorkspace = current.filter((path) => !pathsEqual(path, workspace));
       return collapsed ? [...withoutWorkspace, workspace] : withoutWorkspace;
     });
-    setThreadPreview(null);
   }, []);
 
   const groups = useMemo(
@@ -213,18 +203,15 @@ export function useSidebarState({
       workspaceView,
       searchHits: sessionSearchQuery.data,
       pinnedSessionFiles,
-      stableSessionOrder,
       workspaceOrder: sidebarOrder.workspaces,
     }),
-    [pinnedSessionFiles, projectConfigs, query, sessionSearchQuery.data, sessions, sidebarOrder.workspaces, snippetByFile, stableSessionOrder, workspaceView],
+    [pinnedSessionFiles, projectConfigs, query, sessionSearchQuery.data, sessions, sidebarOrder.workspaces, snippetByFile, workspaceView],
   );
 
-  const recentSessions = useMemo(() => groups
-    .flatMap(([, chats]) => chats)
-    .sort((left, right) => {
-      const pinnedOrder = Number(pinnedSessionFiles.includes(right.file)) - Number(pinnedSessionFiles.includes(left.file));
-      return pinnedOrder || sessionTimestamp(right) - sessionTimestamp(left);
-    }), [groups, pinnedSessionFiles]);
+  const recentSessions = useMemo(
+    () => sortSidebarSessions(groups.flatMap(([, chats]) => chats), pinnedSessionFiles),
+    [groups, pinnedSessionFiles],
+  );
 
   const unreadNotificationCount = useMemo(
     () => notifications.reduce((count, item) => count + Number(!item.read), 0),
@@ -235,7 +222,6 @@ export function useSidebarState({
     setNotificationsOpen(false);
     setSearchOpen(false);
     setProjectMenu(null);
-    setThreadPreview(null);
     setFilterMenuOpen(false);
   }, []);
 
@@ -251,8 +237,14 @@ export function useSidebarState({
 
   const togglePinnedSession = useCallback((file: string) => {
     setPinnedSessionFiles((current) => (
-      current.includes(file) ? current.filter((item) => item !== file) : [...current, file]
+      current.some((item) => pathsEqual(item, file))
+        ? current.filter((item) => !pathsEqual(item, file))
+        : [...current, file]
     ));
+  }, []);
+
+  const unpinSession = useCallback((file: string) => {
+    setPinnedSessionFiles((current) => current.filter((item) => !pathsEqual(item, file)));
   }, []);
 
   const updateProjectConfig = async (workspace: string, changes: Partial<ProjectConfig>) => {
@@ -279,49 +271,11 @@ export function useSidebarState({
     setProjectMenu((current) => (current?.workspace === workspace ? null : { workspace, top }));
     setNotificationsOpen(false);
     setSearchOpen(false);
-    setThreadPreview(null);
-  };
-
-  const showThreadPreview = (session: SessionInfo, element: HTMLElement) => {
-    if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current);
-    const sidebarRect = sidebarRef.current?.getBoundingClientRect();
-    const rowRect = element.getBoundingClientRect();
-    const top = sidebarRect
-      ? Math.max(58, Math.min(rowRect.top - sidebarRect.top - 8, sidebarRect.height - 152))
-      : 58;
-    setThreadPreview({ session, top });
-    const workspace = session.cwd;
-    const now = Date.now();
-    const lastFetched = branchFetchedAt.current.get(workspace) ?? 0;
-    if (!workspace || inflightBranches.current.has(workspace) || (branchByWorkspace[workspace] !== undefined && now - lastFetched < 15_000)) {
-      return;
-    }
-    inflightBranches.current.add(workspace);
-    void agent.gitSnapshot(workspace)
-      .then((snapshot) => {
-        branchFetchedAt.current.set(workspace, Date.now());
-        setBranchByWorkspace((current) => ({ ...current, [workspace]: snapshot.branch || "本地" }));
-      })
-      .catch(() => {
-        branchFetchedAt.current.set(workspace, Date.now());
-        setBranchByWorkspace((current) => ({ ...current, [workspace]: "本地" }));
-      })
-      .finally(() => {
-        inflightBranches.current.delete(workspace);
-      });
-  };
-
-  const schedulePreviewClose = () => {
-    if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current);
-    previewCloseTimer.current = window.setTimeout(() => setThreadPreview(null), 100);
-  };
-
-  const keepPreviewOpen = () => {
-    if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current);
   };
 
   const beginProjectRename = (workspace: string) => {
     setProjectMenu(null);
+    setEditingSessionFile(null);
     setEditingProject(workspace);
     setAliasDraft(displayProjectName(workspace));
   };
@@ -333,8 +287,30 @@ export function useSidebarState({
     setEditingProject(null);
   };
 
+  const beginSessionRename = useCallback((session: SessionInfo) => {
+    closePopovers();
+    setEditingProject(null);
+    setEditingSessionFile(session.file);
+    setSessionTitleDraft(sessionTitle(session));
+  }, [closePopovers]);
+
+  const finishSessionRename = useCallback((
+    onRenameSession?: (session: SessionInfo, nextTitle: string) => void | Promise<void>,
+  ) => {
+    if (!editingSessionFile) return;
+    const target = sessions.find((session) => sameLocalPath(session.file, editingSessionFile));
+    const nextTitle = sessionTitleDraft.trim();
+    setEditingSessionFile(null);
+    if (!target || !nextTitle || nextTitle === sessionTitle(target)) return;
+    void onRenameSession?.(target, nextTitle);
+  }, [editingSessionFile, sessionTitleDraft, sessions]);
+
   const removeProject = async (workspace: string) => {
     setProjectMenu(null);
+    setPersistedOrder((current) => ({
+      ...current,
+      workspaces: current.workspaces.filter((path) => !pathsEqual(path, workspace)),
+    }));
     setProjectConfigs((current) => (current.some((project) => pathsEqual(project.path, workspace))
       ? current.map((project) => (pathsEqual(project.path, workspace) ? { ...project, hidden: true } : project))
       : [...current, { path: workspace, name: "", pinned: false, hidden: true }]));
@@ -346,16 +322,19 @@ export function useSidebarState({
   };
 
   useEffect(() => {
-    const hasOpenPopover = notificationsOpen || searchOpen || projectMenu || editingProject || filterMenuOpen;
+    const hasOpenPopover = notificationsOpen || searchOpen || projectMenu || editingProject || editingSessionFile || filterMenuOpen;
     if (!hasOpenPopover) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (!sidebarRef.current?.contains(event.target as Node)) {
         closePopovers();
         setEditingProject(null);
+        setEditingSessionFile(null);
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && (filterMenuOpen || projectMenu)) closePopovers();
+      if (event.key !== "Escape") return;
+      if (filterMenuOpen || projectMenu) closePopovers();
+      if (editingSessionFile) setEditingSessionFile(null);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
@@ -363,11 +342,7 @@ export function useSidebarState({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [closePopovers, editingProject, filterMenuOpen, notificationsOpen, projectMenu, searchOpen, sidebarRef]);
-
-  useEffect(() => () => {
-    if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current);
-  }, []);
+  }, [closePopovers, editingProject, editingSessionFile, filterMenuOpen, notificationsOpen, projectMenu, searchOpen, sidebarRef]);
 
   useSyncOnChange([searchRequested], () => {
     if (!searchRequested) return;
@@ -400,11 +375,12 @@ export function useSidebarState({
     query, setQuery, trimmedQuery, searchOpen, setSearchOpen,
     notificationsOpen, setNotificationsOpen, workspaceView, setWorkspaceView, groupMode, setGroupMode,
     recentExpanded, setRecentExpanded, filterMenuOpen, setFilterMenuOpen, expandedProjects, setExpandedProjects,
-    collapsedProjectPaths, pinnedSessionFiles, togglePinnedSession, projectMenu, setProjectMenu,
-    threadPreview, setThreadPreview, branchByWorkspace, editingProject, setEditingProject, aliasDraft, setAliasDraft,
+    collapsedProjectPaths, pinnedSessionFiles, togglePinnedSession, unpinSession, projectMenu, setProjectMenu,
+    editingProject, setEditingProject, aliasDraft, setAliasDraft,
+    editingSessionFile, setEditingSessionFile, sessionTitleDraft, setSessionTitleDraft,
     archivedSessionsQuery, archivedSessions, snippetByFile, groups, recentSessions, unreadNotificationCount,
     projectConfig, displayProjectName, setProjectCollapsed, closePopovers, updateProjectConfig,
-    openProjectMenu, showThreadPreview, schedulePreviewClose, keepPreviewOpen,
-    beginProjectRename, finishProjectRename, removeProject, ...drag,
+    openProjectMenu, beginProjectRename, finishProjectRename, beginSessionRename, finishSessionRename,
+    removeProject, ...drag,
   };
 }
