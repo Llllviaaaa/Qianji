@@ -156,7 +156,7 @@ export const CLIENT_SLOT_CATALOG: readonly ClientSlotMetadata[] = [
   defineSlot({
     name: "settings.pages",
     method: "ctx.contributions.registerSettingsPage",
-    summary: "「设置 → 插件」面板顶部子标签页中的独立插件设置视图",
+    summary: "设置中心左侧导航「扩展」分组下的独立设置页",
     options: ["id", "label", "icon?", "heading?", "subtitle?", "order?", "wide?", "render(ctx)"],
     contextFields: ["cwd", "sessionFile", "page", "closeSettings"],
     note: "Open it from code with openSettingsPage(id) from @qianji/client.",

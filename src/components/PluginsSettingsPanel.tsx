@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { PluginInfo } from "@qianji/protocol";
 import { Boxes, ChevronDown, ShieldAlert, ShieldCheck, X } from "lucide-react";
@@ -11,34 +11,22 @@ import { PluginCard } from "./plugins/PluginCard";
 import type { PluginFilter } from "./plugins/pluginHelpers";
 import { PluginsEmptyHub } from "./plugins/PluginsEmptyHub";
 import { PluginsHeaderBar } from "./plugins/PluginsHeaderBar";
-import {
-  PluginSettingsSubPageView,
-  PluginsManagementSectionsFooter,
-  PluginsSubTabsBar,
-} from "./plugins/PluginsSubPagesHost";
 import { usePluginsPanelState } from "./plugins/usePluginsPanelState";
-import { pluginSettingsNavItems } from "./settings/settingsNavigation";
 import { DEFAULTS } from "./settings/settingsPrimitives";
 
 export interface PluginsSettingsPanelProps {
   cwd: string;
-  sessionFile?: string | null;
   form?: AppSettings;
   onSyncAppSetting?: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   initialExpandPluginId?: string;
-  activePluginPageId?: string | null;
-  onSelectPluginPage?: (pluginPageId: string | null) => void;
   onDismissHub?: () => void;
 }
 
 export function PluginsSettingsPanel({
   cwd,
-  sessionFile = null,
   form,
   onSyncAppSetting,
   initialExpandPluginId,
-  activePluginPageId,
-  onSelectPluginPage,
   onDismissHub,
 }: PluginsSettingsPanelProps) {
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -61,14 +49,15 @@ export function PluginsSettingsPanel({
   );
 
   const state = usePluginsPanelState(cwd, effectiveForm, initialExpandPluginId);
-  const { settingsPages, settingsSections } = useClientContributions();
-  const pluginNav = useMemo(() => pluginSettingsNavItems(settingsPages), [settingsPages]);
-  const [localSubPageId, setLocalSubPageId] = useState<string | null>(null);
-  const requestedSubId = activePluginPageId !== undefined ? activePluginPageId : localSubPageId;
-  const activeSubPage = requestedSubId
-    ? pluginNav.find((item) => item.plugin?.id === requestedSubId)
-    : undefined;
-  const handleSelectSubPage = onSelectPluginPage ?? setLocalSubPageId;
+  const { settingsPages } = useClientContributions();
+  const dedicatedSettingsPluginIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const page of settingsPages) {
+      if (page.pluginId) ids.add(page.pluginId);
+      ids.add(page.id);
+    }
+    return ids;
+  }, [settingsPages]);
 
   useEffect(() => {
     if (!initialExpandPluginId || state.pluginsQuery.isPending) return;
@@ -98,72 +87,57 @@ export function PluginsSettingsPanel({
   ].filter((g): g is { id: string; title: string; items: PluginInfo[] } => g !== null);
   const showGroupHeadings = visibleGroups.length > 1 || (state.filter === "all" && state.bundledList.length > 0);
 
-  const renderCard = (plugin: PluginInfo, compactSystem = false) => (
-    <PluginCard
-      key={`${plugin.tier}:${plugin.id}`}
-      plugin={plugin}
-      compactSystem={compactSystem}
-      cwd={cwd}
-      isTauri={isTauri}
-      busy={busy}
-      clientError={state.clientErrors[plugin.id]}
-      form={effectiveForm}
-      onSyncAppSetting={handleSyncAppSetting}
-      mcpStatuses={state.mcpStatuses}
-      mcpReconnecting={state.mcpReconnectMutation.isPending}
-      onReconnectMcp={(serverId) => state.mcpReconnectMutation.mutate(serverId)}
-      onMcpServersUpdated={state.scheduleMcpRefresh}
-      skills={state.skills}
-      onNotify={state.setNotice}
-      isEditing={state.editingConfigId === plugin.id}
-      onToggleEdit={state.openConfigEditor}
-      configDraft={state.configDraft}
-      onChangeConfigDraft={state.setConfigDraft}
-      onCloseDrawer={() => state.setEditingConfigId(null)}
-      onSaveConfig={state.saveConfig}
-      confirmRemove={state.confirmRemoveId === plugin.id}
-      onSetConfirmRemove={state.setConfirmRemoveId}
-      onRunTask={(task) => state.actionMutation.mutate(task)}
-      onCloseSettings={onDismissHub}
-    />
-  );
+  const renderCard = (plugin: PluginInfo, compactSystem = false) => {
+    const hasDedicatedSettingsPage = dedicatedSettingsPluginIds.has(plugin.id);
+    return (
+      <PluginCard
+        key={`${plugin.tier}:${plugin.id}`}
+        plugin={plugin}
+        compactSystem={compactSystem}
+        hasDedicatedSettingsPage={hasDedicatedSettingsPage}
+        cwd={cwd}
+        isTauri={isTauri}
+        busy={busy}
+        clientError={state.clientErrors[plugin.id]}
+        form={effectiveForm}
+        onSyncAppSetting={handleSyncAppSetting}
+        mcpStatuses={state.mcpStatuses}
+        mcpReconnecting={state.mcpReconnectMutation.isPending}
+        onReconnectMcp={(serverId) => state.mcpReconnectMutation.mutate(serverId)}
+        onMcpServersUpdated={state.scheduleMcpRefresh}
+        skills={state.skills}
+        onNotify={state.setNotice}
+        isEditing={!hasDedicatedSettingsPage && state.editingConfigId === plugin.id}
+        onToggleEdit={state.openConfigEditor}
+        configDraft={state.configDraft}
+        onChangeConfigDraft={state.setConfigDraft}
+        onCloseDrawer={() => state.setEditingConfigId(null)}
+        onSaveConfig={state.saveConfig}
+        confirmRemove={state.confirmRemoveId === plugin.id}
+        onSetConfirmRemove={state.setConfirmRemoveId}
+        onRunTask={(task) => state.actionMutation.mutate(task)}
+        onCloseSettings={onDismissHub}
+      />
+    );
+  };
 
   return (
     <div ref={panelRef} className="plugins-panel">
-      <PluginsSubTabsBar
-        pluginNav={pluginNav}
-        activeSubPage={activeSubPage}
-        onSelectSubPage={handleSelectSubPage}
+      <PluginsHeaderBar
+        cwd={cwd}
+        busy={busy}
+        search={state.search}
+        onChangeSearch={state.setSearch}
+        filter={state.filter}
+        onChangeFilter={state.setFilter}
+        filterTabs={filterTabs}
+        updatableCount={state.updatableCount}
+        onOpenInstall={(ch) => {
+          state.setNotice(null);
+          state.setInstallChannel(ch);
+        }}
+        onRunTask={(task) => state.actionMutation.mutate(task)}
       />
-
-      {activeSubPage !== undefined ? (
-        <PluginSettingsSubPageView
-          page={activeSubPage}
-          sections={settingsSections}
-          context={{
-            cwd,
-            sessionFile: sessionFile ?? null,
-            page: activeSubPage.id,
-            closeSettings: onDismissHub ?? (() => undefined),
-          }}
-        />
-      ) : (
-        <>
-          <PluginsHeaderBar
-            cwd={cwd}
-            busy={busy}
-            search={state.search}
-            onChangeSearch={state.setSearch}
-            filter={state.filter}
-            onChangeFilter={state.setFilter}
-            filterTabs={filterTabs}
-            updatableCount={state.updatableCount}
-            onOpenInstall={(ch) => {
-              state.setNotice(null);
-              state.setInstallChannel(ch);
-            }}
-            onRunTask={(task) => state.actionMutation.mutate(task)}
-          />
 
           <AnimatePresence initial={false}>
             {state.notice !== null && (
@@ -275,31 +249,19 @@ export function PluginsSettingsPanel({
             </div>
           )}
 
-          <PluginsManagementSectionsFooter
-            sections={settingsSections}
-            context={{
-              cwd,
-              sessionFile: sessionFile ?? null,
-              page: "plugins",
-              closeSettings: onDismissHub ?? (() => undefined),
+      <AnimatePresence>
+        {state.installChannel !== null && (
+          <InstallPluginDialog
+            isTauri={isTauri}
+            initialChannel={state.installChannel}
+            onClose={() => state.setInstallChannel(null)}
+            onInstalled={(result, label) => {
+              state.setInstallChannel(null);
+              state.applyMutationResult(result, label);
             }}
           />
-
-          <AnimatePresence>
-            {state.installChannel !== null && (
-              <InstallPluginDialog
-                isTauri={isTauri}
-                initialChannel={state.installChannel}
-                onClose={() => state.setInstallChannel(null)}
-                onInstalled={(result, label) => {
-                  state.setInstallChannel(null);
-                  state.applyMutationResult(result, label);
-                }}
-              />
-            )}
-          </AnimatePresence>
-        </>
-      )}
+        )}
+      </AnimatePresence>
     </div>
   );
 }

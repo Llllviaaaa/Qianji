@@ -8,13 +8,15 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClientProvider } from "@tanstack/react-query";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
 import * as qianjiClient from "@qianji/client";
-import { CLIENT_SLOT_CATALOG } from "@qianji/protocol";
+import { CLIENT_SLOT_CATALOG, type PluginInfo } from "@qianji/protocol";
 import { PluginMenuItems, hasMenuItems, visibleMenuItems } from "../src/components/common/PluginMenuItems";
 import { Markdown } from "../src/components/Markdown";
+import { PluginsSettingsPanel } from "../src/components/PluginsSettingsPanel";
 import { Sidebar } from "../src/components/Sidebar";
 import { SidebarThreadMenu } from "../src/components/sidebar/SidebarThreadMenu";
 import { SidebarThreadRow } from "../src/components/sidebar/SidebarThreadRow";
@@ -43,6 +45,8 @@ import {
   requestOpenSettings,
   resolveSettingsPageId,
 } from "../src/lib/shellBridge";
+import { queryKeys } from "../src/lib/queries";
+import { createQueryClient } from "../src/lib/queryClient";
 import { generatePluginTypes } from "../scripts/generate-plugin-types.mjs";
 import { withQueryClient } from "./support/withQueryClient";
 
@@ -347,7 +351,7 @@ describe("settings pages and sections", () => {
     expect(html).toContain('data-qj-slot="settings.sections"');
   });
 
-  it("routes settings.pages into PluginsSettingsPanel sub-tabs without appending an 扩展 group to the Settings sidebar", () => {
+  it("adds an 扩展 group to the Settings sidebar and opens a plugin page with its sections", () => {
     clientContributions.registerSettingsPage({
       id: "sync",
       pluginId: "sync-plugin",
@@ -369,18 +373,110 @@ describe("settings pages and sections", () => {
       onSave: () => undefined,
       onClose: () => undefined,
     })));
-    expect(html).not.toContain("settings-nav-group-label");
-    expect(html).not.toContain(">扩展</div>");
-    expect(html).toMatch(/<nav class="settings-nav-scroll"[^>]*>[\s\S]*?<button[^>]*class="active"[^>]*>[\s\S]*?<span>插件<\/span><\/button><\/nav>/);
-    expect(html).toContain('class="plugins-subtabs-bar"');
-    expect(html).toContain('role="tablist"');
-    expect(html).toContain("已安装与管理");
+    expect(html).toContain('class="settings-nav-group-label">扩展</span>');
+    expect(html).not.toContain('class="plugins-subtabs-bar"');
     expect(html).toContain("云同步");
     expect(html).toContain("跨设备同步会话");
-    expect(html).toContain('class="plugins-subpage-subtitle">跨设备同步会话</p>');
+    expect(html).toContain('class="settings-header-sub">跨设备同步会话</p>');
     expect(html).toContain("同步页@/repo");
     expect(html).toContain("高级同步选项");
-    expect(html).toMatch(/<button[^>]*role="tab"[^>]*class="plugins-subtab-btn active"[^>]*data-qj-contributed-by="sync-plugin"/);
+    expect(html).toMatch(/<button[^>]*class="active"[^>]*data-qj-contributed-by="sync-plugin"/);
+  });
+
+  it("shows an extension filter box when 6+ settings pages exist and hides duplicate card 配置 buttons", () => {
+    for (let i = 1; i <= 6; i += 1) {
+      clientContributions.registerSettingsPage({
+        id: `ext-page-${i}`,
+        pluginId: i === 1 ? "sync-plugin" : `ext-${i}`,
+        label: `扩展设置 ${i}`,
+        render: () => createElement("div", null, `页 ${i}`),
+      });
+    }
+    const settingsHtml = renderToStaticMarkup(withQueryClient(createElement(SettingsModal, {
+      settings: null,
+      cwd: "/repo",
+      initialPage: "general",
+      onSave: () => undefined,
+      onClose: () => undefined,
+    })));
+    expect(settingsHtml).toContain('class="settings-nav-group-count">6</em>');
+    expect(settingsHtml).toContain('class="settings-nav-filter-input"');
+    expect(settingsHtml).toContain('aria-label="筛选扩展设置"');
+
+    const client = createQueryClient();
+    const plugins: PluginInfo[] = [
+      {
+        id: "sync-plugin",
+        name: "云同步扩展",
+        version: "1.0.0",
+        tier: "user",
+        status: "active",
+        enabled: true,
+        overridesBuiltin: false,
+        removable: true,
+        hasHost: false,
+        hasClient: true,
+        watch: false,
+        configSchema: {
+          type: "object",
+          properties: { endpoint: { type: "string" } },
+        },
+      },
+      {
+        id: "smart-rewind",
+        name: "智能检查点回退",
+        version: "1.0.0",
+        tier: "builtin",
+        status: "active",
+        enabled: true,
+        overridesBuiltin: false,
+        removable: false,
+        hasHost: true,
+        hasClient: true,
+        watch: false,
+        dir: "/plugins/smart-rewind",
+        configSchema: {
+          type: "object",
+          properties: { protectDraft: { type: "boolean" } },
+        },
+      },
+      {
+        id: "observability",
+        name: "可观测性诊断",
+        version: "0.1.0",
+        tier: "builtin",
+        status: "active",
+        enabled: true,
+        overridesBuiltin: false,
+        removable: false,
+        hasHost: true,
+        hasClient: false,
+        watch: false,
+        dir: "/plugins/observability",
+      },
+    ];
+    client.setQueryData(queryKeys.plugins("/repo"), plugins);
+    client.setQueryData(queryKeys.mcpStatus(), []);
+    client.setQueryData(queryKeys.skills("/repo"), []);
+    const panelHtml = renderToStaticMarkup(createElement(
+      QueryClientProvider,
+      { client },
+      createElement(PluginsSettingsPanel, { cwd: "/repo" }),
+    ));
+
+    const cardChunk = (id: string): string => {
+      const marker = `data-plugin-id="${id}"`;
+      const start = panelHtml.indexOf(marker);
+      expect(start, `${id} card should render`).toBeGreaterThan(-1);
+      const end = panelHtml.indexOf("</article>", start);
+      return panelHtml.slice(start, end);
+    };
+    // Plugin with registerSettingsPage uses its left-rail Settings page instead of duplicating 配置 on the card.
+    expect(cardChunk("sync-plugin")).not.toContain("<span>配置</span>");
+    // Schema-backed plugin without registerSettingsPage still exposes inline 配置.
+    expect(cardChunk("smart-rewind")).toContain("<span>配置</span>");
+    // Zero-config bundled plugin does not show an empty JSON 配置 button.
+    expect(cardChunk("observability")).not.toContain("<span>配置</span>");
   });
 
   it("falls back to the general page when the requested plugin page is not registered", () => {

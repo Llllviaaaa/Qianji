@@ -118,7 +118,7 @@ All methods live on `ctx.contributions` (inject `["contributions"]`) and automat
 
 ### Settings, Menus, Shortcuts & Markdown Fences
 
-- **Settings pages (`settings.pages`)**: Each page renders as a sub-tab inside **设置 → 插件** (and the **扩展插件** hub) with nav id `plugin:<id>`. Call `openSettingsPage("<id>")` to open Settings directly on that sub-tab. Pages use the narrow column (`740px`) by default; set `wide: true` for card grids.
+- **Settings pages (`settings.pages`)**: Each page gets an entry under the collapsible **扩展** group in the Settings left sidebar (`plugin:<id>`; becomes searchable automatically at 6+ extension pages). Call `openSettingsPage("<id>")` to open Settings directly on that page. Pages use the narrow column (`740px`) by default; set `wide: true` for card grids. Registering a Settings page automatically hides the duplicate inline **配置** button on the plugin's card under **扩展插件** so configuration has a single conflict-free owner (use `configSchema` alone for lightweight inline options, or `registerSettingsPage` for a full custom Settings page).
 - **Settings sections (`settings.sections`)**: Each section is a titled card appended to a page. Set `page` to a built-in page (`"general" | "appearance" | "providers" | "plugins"`) or to the `id` of a plugin settings page. Store values with your plugin's `configSchema` and `usePluginConfig`, or through your own Host RPC methods.
 - **Menu items (`menus`)**: The `location` field picks the menu and the context type:
 

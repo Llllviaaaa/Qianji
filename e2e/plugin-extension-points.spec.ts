@@ -99,12 +99,16 @@ test("a client plugin extends settings, menus, keybindings, file and session men
     writeFileSync(join(pluginDir, "client.tsx"), CLIENT_SOURCE);
     await installPlugin(app, pluginDir);
 
-    // Settings: plugin page appears inside Plugins sub-tabs (no 扩展 group in left rail), plus a card on General.
+    // Settings: plugin card hides duplicate inline 配置 (since it contributes a Settings page),
+    // while an 扩展 group appears in the Settings left rail alongside Builtin pages and General cards.
+    await expect(
+      app.locator('article[data-plugin-id="e2e-ext-points"]').getByRole("button", { name: "配置" }),
+    ).toHaveCount(0);
     const nav = app.locator(".settings-nav-scroll");
-    await expect(nav.locator(".settings-nav-group-label")).toHaveCount(0);
-    await app.locator(".plugins-subtabs-bar").getByRole("tab", { name: "扩展点演示" }).click();
+    await expect(nav.locator(".settings-nav-group-label")).toHaveText("扩展");
+    await nav.getByRole("button", { name: "扩展点演示" }).click();
     await expect(app.getByTestId("ext-settings-page")).toHaveText("设置页内容@plugin:ext-points");
-    await expect(app.locator(".plugins-subpage-subtitle")).toHaveText("插件贡献的设置页");
+    await expect(app.locator(".settings-header-sub")).toHaveText("插件贡献的设置页");
     await nav.getByRole("button", { name: "通用" }).click();
     await expect(app.locator(".settings-plugin-section h2")).toHaveText("扩展点卡片");
     await expect(app.getByTestId("ext-general-section")).toBeVisible();

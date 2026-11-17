@@ -13,9 +13,11 @@ import { agent } from "../../lib/agent";
 import { pluginClient } from "../../lib/pluginClient";
 import type { AppSettings } from "../../types";
 import { PluginCardDrawer } from "./PluginCardDrawer";
+import { hasRenderableConfigSchema } from "./PluginConfigSchemaForm";
 import {
   canCheckUpdate,
   cleanDisplayName,
+  CORE_EXTENSION_SET,
   coreOperationalChips,
   iconAccentTone,
   isBundledFeaturePlugin,
@@ -30,6 +32,7 @@ import {
 export interface PluginCardProps {
   plugin: PluginInfo;
   compactSystem?: boolean;
+  hasDedicatedSettingsPage?: boolean;
   cwd: string;
   isTauri: boolean;
   busy: boolean;
@@ -57,6 +60,7 @@ export interface PluginCardProps {
 export function PluginCard({
   plugin,
   compactSystem = false,
+  hasDedicatedSettingsPage = false,
   cwd,
   isTauri,
   busy,
@@ -87,6 +91,9 @@ export function PluginCard({
   const cannotDisable = plugin.canDisable === false;
   const switchDisabled = busy || plugin.status === "untrusted" || cannotDisable;
   const isExternal = plugin.tier === "user" || plugin.tier === "workspace";
+  const isStructuredCore = !isExternal && CORE_EXTENSION_SET.has(plugin.id);
+  const hasSchema = hasRenderableConfigSchema(plugin.configSchema);
+  const canConfigureInline = !cannotDisable && !hasDedicatedSettingsPage && (isStructuredCore || hasSchema || isExternal);
   const isBundled = isBundledFeaturePlugin(plugin);
   const isDiskPlugin = isExternal || isBundled;
   const title = cleanDisplayName(plugin);
@@ -241,7 +248,7 @@ export function PluginCard({
                 </button>
               )}
 
-              {!cannotDisable && (
+              {canConfigureInline && (
                 <button
                   type="button"
                   className={`plugin-ghost-btn ${isEditing ? "active" : ""}`}
@@ -346,7 +353,7 @@ export function PluginCard({
       )}
 
       <AnimatePresence initial={false}>
-        {isEditing && (
+        {canConfigureInline && isEditing && (
           <PluginCardDrawer
             plugin={plugin}
             cwd={cwd}

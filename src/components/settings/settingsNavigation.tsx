@@ -2,8 +2,8 @@
  * Settings navigation: the built-in categories plus pages and sections that
  * plugins contribute through `registerSettingsPage` / `registerSettingsSection`.
  */
-import type { ReactNode } from "react";
-import { Boxes, Cpu, Palette, SlidersHorizontal } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Boxes, ChevronDown, Cpu, Palette, Search, SlidersHorizontal } from "lucide-react";
 import type {
   ClientSettingsPageContribution,
   ClientSettingsSectionContribution,
@@ -43,6 +43,84 @@ export function pluginSettingsNavItems(pages: readonly ClientSettingsPageContrib
     wide: page.wide === true,
     plugin: page,
   }));
+}
+
+export function SettingsExtensionNavGroup({
+  items,
+  shownPage,
+  renderNavButton,
+}: {
+  items: readonly SettingsNavItem[];
+  shownPage: SettingsPageId;
+  renderNavButton: (item: SettingsNavItem) => ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [query, setQuery] = useState("");
+  const [prevShown, setPrevShown] = useState(shownPage);
+  if (prevShown !== shownPage) {
+    setPrevShown(shownPage);
+    if (items.some((item) => item.id === shownPage)) {
+      setExpanded(true);
+      const q = query.trim().toLowerCase();
+      if (q !== "") {
+        const activeItem = items.find((item) => item.id === shownPage);
+        const haystack = activeItem
+          ? `${activeItem.label} ${activeItem.heading} ${activeItem.plugin?.pluginId ?? ""}`.toLowerCase()
+          : "";
+        if (!haystack.includes(q)) setQuery("");
+      }
+    }
+  }
+
+  if (items.length === 0) return null;
+
+  const needle = query.trim().toLowerCase();
+  const filteredItems = needle === ""
+    ? items
+    : items.filter((item) => {
+      if (item.id === shownPage) return true;
+      const haystack = `${item.label} ${item.heading} ${item.plugin?.pluginId ?? ""}`.toLowerCase();
+      return haystack.includes(needle);
+    });
+
+  return (
+    <>
+      <div className="settings-nav-group-header">
+        <button
+          type="button"
+          className="settings-nav-group-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <span className="settings-nav-group-label">扩展</span>
+          <span className="settings-nav-group-meta">
+            {items.length > 1 && <em className="settings-nav-group-count">{items.length}</em>}
+            <ChevronDown size={12} className={expanded ? "is-open" : ""} aria-hidden="true" />
+          </span>
+        </button>
+      </div>
+      {expanded && (
+        <>
+          {items.length >= 6 && (
+            <div className="settings-nav-filter-wrap">
+              <Search size={12.5} aria-hidden="true" />
+              <input
+                type="search"
+                className="settings-nav-filter-input"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="筛选扩展设置…"
+                aria-label="筛选扩展设置"
+              />
+            </div>
+          )}
+          {filteredItems.length > 0
+            ? filteredItems.map(renderNavButton)
+            : <div className="settings-nav-empty">无匹配扩展</div>}
+        </>
+      )}
+    </>
+  );
 }
 
 /** Sections whose `page` targets the page on screen (`"general"`, or a plugin page's own id). */
