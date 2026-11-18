@@ -264,6 +264,7 @@ export function settledEmptyTurnHint(options: {
   hasTurnTelemetry: boolean;
   isError?: boolean;
   isAborted?: boolean;
+  stopReason?: string;
 }): { autoOpenProcess: boolean; hint: string | null } {
   if (
     options.working
@@ -276,11 +277,17 @@ export function settledEmptyTurnHint(options: {
     return { autoOpenProcess: false, hint: null };
   }
   if (options.hasProcess) {
+    if (options.toolCallCount > 0) {
+      const hint = options.stopReason === "max-turns"
+        ? "已达到单轮最大执行步数上限，已展开本轮执行步骤（可输入「继续」接着执行）"
+        : options.stopReason === "tool-use"
+          ? "本轮在工具执行后提前结束，已展开本轮执行步骤（可输入「继续」接着执行）"
+          : "模型未输出总结回复，已展开本轮执行步骤（可输入「继续」接着执行）";
+      return { autoOpenProcess: true, hint };
+    }
     return {
       autoOpenProcess: true,
-      hint: options.toolCallCount > 0
-        ? "模型未输出总结回复，已展开本轮执行步骤（可输入「继续」接着执行）"
-        : "模型仅返回了内部思考，未生成可见回复（可重试或调低推理强度）",
+      hint: "模型仅返回了内部思考，未生成可见回复（可重试或调低推理强度）",
     };
   }
   if (options.hasTurnTelemetry) {

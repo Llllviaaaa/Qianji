@@ -21,7 +21,7 @@ import {
   type RunOutcome,
 } from "@qianji/agent";
 import { BlockAssembler, type LlmRequest, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
-import { CONTINUATION_NAMESPACE, type EventOf, type ModelRef, type Session } from "@qianji/session";
+import { CONTINUATION_NAMESPACE, hasVisibleProse, type EventOf, type ModelRef, type Session } from "@qianji/session";
 import "@qianji/system-prompt";
 import { ACTIVATE_TOOLS_NAME, textOutput, type ToolEnv, type ToolOutput } from "@qianji/tools";
 import {
@@ -47,6 +47,7 @@ export const LENGTH_CONTINUATION_PROMPT =
 export const EMPTY_TURN_CONTINUATION_PROMPT =
   "Your previous turn produced no visible response or tool call. Either invoke the next tool needed to advance the task, or provide a clear answer to the user.";
 
+export const DEFAULT_MAX_TURNS = 500;
 export const MAX_LENGTH_CONTINUATIONS = 3;
 export const MAX_EMPTY_CONTINUATIONS = 2;
 export const MAX_PLUGIN_CONTINUATIONS = 2;
@@ -102,7 +103,7 @@ export class AgentLoop extends Service implements Agents {
 
   constructor(ctx: Context, private readonly config: AgentLoopConfig = {}) {
     super(ctx, "agents");
-    this.maxTurns = Math.max(1, config.maxTurns ?? 100);
+    this.maxTurns = Math.max(1, config.maxTurns ?? DEFAULT_MAX_TURNS);
     ctx.effect(() => () => {
       for (const run of this.runs.values()) run.controller.abort();
     }, "agent-loop: abort runs");
@@ -294,7 +295,7 @@ export class AgentLoop extends Service implements Agents {
         continue;
       }
 
-      const hasText = response.message.content.some((block) => block.type === "text" && block.text.trim() !== "");
+      const hasText = response.message.content.some((block) => block.type === "text" && hasVisibleProse(block.text));
       if (response.reason === "length" && lengthContinuations < MAX_LENGTH_CONTINUATIONS) {
         lengthContinuations += 1;
         session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "length", text: LENGTH_CONTINUATION_PROMPT } });

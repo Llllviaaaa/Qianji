@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { LiveDelta, PersistedEvent } from "@qianji/protocol";
 import {
   buildProcessSummary,
   foldWorkingLabel,
@@ -13,6 +14,8 @@ import {
   summarizeProcessGroup,
   USER_MESSAGE_COLLAPSED_LINES,
 } from "../src/components/Message";
+import { historyToUi, settleStoppedTurn, startAssistant, TranscriptTranslator } from "../src/lib/transcript";
+import { mergeAssistantTurn } from "../src/lib/transcriptTurns";
 import { test } from "vitest";
 
 /** The visible words of a rendering, tags removed. */
@@ -429,4 +432,75 @@ test("message actions", async () => {
   }));
   assert.match(words(emptyTelemetryOnly), /已完成，用时 32 秒/);
   assert.match(emptyTelemetryOnly, /模型返回了空响应（可重试、执行 \/compact 压缩上下文或调低推理强度）/);
+});
+
+test("agent-end outcomes and reloaded tool-use hints", () => {
+  const translator = new TranscriptTranslator();
+  assert.deepEqual(
+    translator.delta({ type: "agent-end", outcome: "max-turns" } as LiveDelta),
+    [{ type: "turn-end", outcome: "max-turns" }],
+  );
+
+  const baseHistory: PersistedEvent[] = [
+    { seq: 1, ts: "2026-10-14T10:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "refactor" }] } },
+    {
+      seq: 2,
+      ts: "2026-10-14T10:00:05.000Z",
+      type: "assistant",
+      data: {
+        stop: "tool-use",
+        content: [{ type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } }],
+      },
+    },
+    {
+      seq: 3,
+      ts: "2026-10-14T10:00:06.000Z",
+      type: "tool-result",
+      data: { callId: "c1", name: "read", isError: false, content: [{ type: "text", text: "export const a = 1;" }] },
+    },
+  ];
+
+  // Reloaded stop: "tool-use" turn (non-aborted) surfaces early-end hint instead of blaming empty model summary.
+  const reloadedMessages = historyToUi(baseHistory);
+  const reloadedMerged = mergeAssistantTurn(reloadedMessages.filter((m) => m.role === "assistant"));
+  assert.equal(reloadedMerged.stopReason, "tool-use");
+  assert.equal(reloadedMerged.isAborted, false);
+  const reloadedMarkup = renderToStaticMarkup(createElement(Message, { message: reloadedMerged }));
+  assert.match(reloadedMarkup, /本轮在工具执行后提前结束，已展开本轮执行步骤（可输入「继续」接着执行）/);
+  assert.doesNotMatch(reloadedMarkup, /模型未输出总结回复/);
+
+  // Live outcome: "max-turns" propagates stopReason: "max-turns" and renders the step-limit hint.
+  const maxTurnsSettled = settleStoppedTurn(reloadedMessages, 1_000, "max-turns");
+  const maxTurnsMerged = mergeAssistantTurn(maxTurnsSettled.filter((m) => m.role === "assistant"));
+  assert.equal(maxTurnsMerged.stopReason, "max-turns");
+  const maxTurnsMarkup = renderToStaticMarkup(createElement(Message, { message: maxTurnsMerged }));
+  assert.match(maxTurnsMarkup, /已达到单轮最大执行步数上限，已展开本轮执行步骤（可输入「继续」接着执行）/);
+  assert.doesNotMatch(maxTurnsMarkup, /模型未输出总结回复/);
+
+  // Live outcome: "aborted" right after tools finished (while Turn N+1 produced 0 tokens) marks turn stopped.
+  const withNextPlaceholder = startAssistant(reloadedMessages, 2_000);
+  const abortedSettled = settleStoppedTurn(withNextPlaceholder, 2_500, "aborted");
+  const abortedMerged = mergeAssistantTurn(abortedSettled.filter((m) => m.role === "assistant"));
+  assert.equal(abortedMerged.isAborted, true);
+  const abortedMarkup = renderToStaticMarkup(createElement(Message, { message: abortedMerged }));
+  assert.match(words(abortedMarkup), /已停止/);
+  assert.doesNotMatch(abortedMarkup, /class="dshc-hint"/);
+
+  // Reloaded turn where all tool-use calls failed solely due to user abort sets isAborted: true.
+  const abortedHistory: PersistedEvent[] = [
+    baseHistory[0] as PersistedEvent,
+    {
+      seq: 2, ts: "2026-10-14T10:00:05.000Z", type: "assistant",
+      data: {
+        stop: "tool-use",
+        content: [
+          { type: "tool-call", id: "c1", name: "bash", arguments: { command: "sleep 10" } },
+          { type: "tool-call", id: "c2", name: "read", arguments: { path: "b.ts" } },
+        ],
+      },
+    },
+    { seq: 3, ts: "2026-10-14T10:00:06.000Z", type: "tool-result", data: { callId: "c1", name: "bash", isError: true, content: [{ type: "text", text: "Aborted." }] } },
+    { seq: 4, ts: "2026-10-14T10:00:06.000Z", type: "tool-result", data: { callId: "c2", name: "read", isError: true, content: [{ type: "text", text: "Aborted before the tool ran." }] } },
+  ];
+  assert.equal(historyToUi(abortedHistory)[1]?.isAborted, true);
 });

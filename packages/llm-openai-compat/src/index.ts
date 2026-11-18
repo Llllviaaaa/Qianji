@@ -11,7 +11,6 @@ import {
   joinUrl,
   postSse,
   transformMessagesForProvider,
-  type FinishReason,
   type LlmAdapter,
   type LlmProtocolSpec,
   type LlmRequest,
@@ -26,8 +25,10 @@ import {
   supportsReasoningEffort,
   type ProviderConfig,
 } from "./models.ts";
+import { translateStream } from "./stream.ts";
 
 export { supportsReasoningEffort, type ProviderConfig } from "./models.ts";
+export { translateStream } from "./stream.ts";
 
 export const name = "qianji-llm-openai-compat";
 export const inject = ["llm", "credentials"];
@@ -113,6 +114,8 @@ export function buildRequestBody(
   provider: ProviderConfig,
   unsupportedReasoningModels?: ReadonlySet<string>,
   unsupportedReasoningContentModels?: ReadonlySet<string>,
+  maxCompletionTokensModels?: ReadonlySet<string>,
+  discoveredMaxOutputTokens?: ReadonlyMap<string, number>,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
@@ -128,7 +131,15 @@ export function buildRequestBody(
       function: { name: tool.name, description: tool.description, parameters: tool.parameters },
     }));
   }
-  if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
+  const configuredModel = provider.models?.find((m) => m.id === request.model);
+  const maxTokens = request.maxTokens ?? configuredModel?.maxOutputTokens ?? discoveredMaxOutputTokens?.get(request.model);
+  if (maxTokens !== undefined && maxTokens > 0) {
+    if (maxCompletionTokensModels?.has(request.model)) {
+      body.max_completion_tokens = maxTokens;
+    } else {
+      body.max_tokens = maxTokens;
+    }
+  }
   if (request.temperature !== undefined) body.temperature = request.temperature;
   const effort = effortValue(request.effort);
   if (effort !== undefined && supportsReasoningEffort(request.model, provider, unsupportedReasoningModels)) {
@@ -137,203 +148,11 @@ export function buildRequestBody(
   return body;
 }
 
-const FINISH_REASONS: Record<string, FinishReason | "retryable-error"> = {
-  stop: "stop",
-  end_turn: "stop",
-  length: "length",
-  max_tokens: "length",
-  model_context_window_exceeded: "length",
-  tool_calls: "tool-use",
-  function_call: "tool-use",
-  tool_use: "tool-use",
-  content_filter: "refusal",
-  safety: "refusal",
-  recitation: "refusal",
-  prohibited_content: "refusal",
-  blocklist: "refusal",
-  spii: "refusal",
-  image_safety: "refusal",
-  malformed_function_call: "retryable-error",
-  unexpected_tool_call: "retryable-error",
-  error: "retryable-error",
-  network_error: "retryable-error",
-  other: "retryable-error",
-};
-
-function classifyOpenAiFinishReason(raw: string): FinishReason | "retryable-error" {
-  return FINISH_REASONS[raw.trim().toLowerCase()] ?? "stop";
-}
-
-interface WireDelta {
-  content?: string | null;
-  reasoning_content?: string | null;
-  reasoning?: string | null;
-  tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
-}
-
-interface WireChunk {
-  choices?: Array<{ delta?: WireDelta; finish_reason?: string | null }>;
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    prompt_tokens_details?: { cached_tokens?: number };
-    completion_tokens_details?: { reasoning_tokens?: number };
-    prompt_cache_hit_tokens?: number;
-  } | null;
-  error?: { message?: string; code?: unknown };
-}
-
-/** Translate the provider's SSE stream into StreamChunks. Exported for the tests. */
-export async function* translateStream(events: AsyncIterable<{ data: string }>, providerId: string): AsyncGenerator<StreamChunk> {
-  let next = 0;
-  let thinkingIndex: number | undefined;
-  let textIndex: number | undefined;
-  const toolState = new Map<number, { blockIndex: number; id?: string }>();
-  const activeAliasByWireIndex = new Map<number, number>();
-  let lastImplicitWireIndex: number | undefined;
-  let nextSyntheticWireIndex = 10_000;
-  let reason: FinishReason | undefined;
-  let rawFinishReason: string | undefined;
-  let rawErrorFinishReason: string | undefined;
-  let emittedContent = false;
-  let reportedOutputTokens: number | undefined;
-  let sawDone = false;
-
-  for await (const event of events) {
-    if (event.data === "[DONE]") {
-      sawDone = true;
-      break;
-    }
-    let chunk: WireChunk;
-    try {
-      chunk = JSON.parse(event.data) as WireChunk;
-    } catch {
-      throw new LlmError({ kind: "unknown", message: `${providerId} sent malformed stream data`, retryable: false });
-    }
-    if (chunk.error !== undefined) {
-      throw new LlmError({ kind: "server", message: `${providerId}: ${chunk.error.message ?? "stream error"}`, retryable: true });
-    }
-    for (const choice of chunk.choices ?? []) {
-      const delta = choice.delta ?? {};
-      const thinking = delta.reasoning_content ?? delta.reasoning;
-      if (typeof thinking === "string" && thinking !== "") {
-        thinkingIndex ??= next++;
-        emittedContent = true;
-        yield { type: "thinking-delta", index: thinkingIndex, text: thinking };
-      }
-      if (typeof delta.content === "string" && delta.content !== "") {
-        textIndex ??= next++;
-        emittedContent = true;
-        yield { type: "text-delta", index: textIndex, text: delta.content };
-      }
-      for (const call of delta.tool_calls ?? []) {
-        const callId = typeof call.id === "string" && call.id !== "" ? call.id : undefined;
-        let wireIndex: number;
-        if (typeof call.index === "number") {
-          if (callId !== undefined) {
-            const byId = [...toolState.entries()].find(([, entry]) => entry.id === callId);
-            if (byId !== undefined) {
-              wireIndex = byId[0];
-            } else {
-              const existingAtIndex = toolState.get(call.index);
-              if (existingAtIndex !== undefined && existingAtIndex.id !== undefined && existingAtIndex.id !== callId) {
-                wireIndex = nextSyntheticWireIndex++;
-                activeAliasByWireIndex.set(call.index, wireIndex);
-              } else {
-                wireIndex = call.index;
-                activeAliasByWireIndex.delete(call.index);
-              }
-            }
-          } else {
-            wireIndex = activeAliasByWireIndex.get(call.index) ?? call.index;
-          }
-        } else if (callId !== undefined) {
-          const byId = [...toolState.entries()].find(([, entry]) => entry.id === callId);
-          if (byId !== undefined) {
-            wireIndex = byId[0];
-          } else {
-            wireIndex = nextSyntheticWireIndex++;
-            lastImplicitWireIndex = wireIndex;
-          }
-        } else {
-          wireIndex = lastImplicitWireIndex ?? 0;
-          lastImplicitWireIndex ??= wireIndex;
-        }
-        let entry = toolState.get(wireIndex);
-        if (entry === undefined) {
-          const blockIndex = next++;
-          entry = { blockIndex, id: callId };
-          toolState.set(wireIndex, entry);
-          emittedContent = true;
-          yield { type: "tool-call-start", index: blockIndex, id: callId ?? `call_${blockIndex}`, name: call.function?.name ?? "" };
-        }
-        const args = call.function?.arguments;
-        if (typeof args === "string" && args !== "") yield { type: "tool-call-delta", index: entry.blockIndex, argumentsDelta: args };
-      }
-      if (typeof choice.finish_reason === "string") {
-        rawFinishReason = choice.finish_reason;
-        const classified = classifyOpenAiFinishReason(choice.finish_reason);
-        if (classified === "retryable-error") {
-          rawErrorFinishReason = choice.finish_reason;
-          reason = undefined;
-        } else {
-          rawErrorFinishReason = undefined;
-          reason = classified;
-        }
-      }
-    }
-    if (chunk.usage) {
-      const cached = chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens ?? 0;
-      const reasoning = chunk.usage.completion_tokens_details?.reasoning_tokens;
-      if (typeof chunk.usage.completion_tokens === "number") {
-        reportedOutputTokens = chunk.usage.completion_tokens;
-      }
-      yield {
-        type: "usage",
-        usage: {
-          inputTokens: Math.max(0, (chunk.usage.prompt_tokens ?? 0) - cached),
-          outputTokens: chunk.usage.completion_tokens ?? 0,
-          cacheReadTokens: cached,
-          ...(typeof reasoning === "number" && reasoning > 0 ? { reasoningTokens: reasoning } : {}),
-        },
-      };
-    }
-  }
-  if (!sawDone && reason === undefined && rawErrorFinishReason === undefined) {
-    throw new LlmError({
-      kind: "network",
-      message: `${providerId}: upstream stream ended before completion`,
-      retryable: true,
-    });
-  }
-  if (toolState.size === 0 && reason === undefined && rawErrorFinishReason !== undefined) {
-    throw new LlmError({
-      kind: "server",
-      message: `${providerId} aborted generation with finish_reason=${rawFinishReason ?? rawErrorFinishReason}`,
-      retryable: true,
-    });
-  }
-  const resolvedReason = toolState.size > 0 && (reason === undefined || reason === "stop")
-    ? "tool-use"
-    : (reason ?? "stop");
-  if (
-    !emittedContent
-    && toolState.size === 0
-    && resolvedReason === "stop"
-    && (reportedOutputTokens === undefined || reportedOutputTokens === 0)
-  ) {
-    throw new LlmError({
-      kind: "server",
-      message: `${providerId} returned an empty response stream (0 output tokens)`,
-      retryable: true,
-    });
-  }
-  yield { type: "finish", reason: resolvedReason };
-}
-
 export class OpenAiCompatAdapter implements LlmAdapter {
   private readonly unsupportedReasoningModels = new Set<string>();
   private readonly unsupportedReasoningContentModels = new Set<string>();
+  private readonly maxCompletionTokensModels = new Set<string>();
+  private readonly discoveredMaxOutputTokens = new Map<string, number>();
 
   constructor(private readonly ctx: Context, private readonly provider: ProviderConfig) {}
 
@@ -355,42 +174,44 @@ export class OpenAiCompatAdapter implements LlmAdapter {
 
   async *stream(request: LlmRequest, signal: AbortSignal): AsyncGenerator<StreamChunk> {
     const headers = await this.headers(request);
-    const body = buildRequestBody(
-      request,
-      this.provider,
-      this.unsupportedReasoningModels,
-      this.unsupportedReasoningContentModels,
-    );
-    try {
-      const events = postSse(
-        joinUrl(this.provider.baseUrl, "chat/completions"),
-        headers,
-        body,
-        signal,
-        this.provider.id,
+    const url = joinUrl(this.provider.baseUrl, "chat/completions");
+    let clampedEffort: "low" | "medium" | "high" | undefined;
+    const makeBody = (): Record<string, unknown> => {
+      const built = buildRequestBody(
+        request,
+        this.provider,
+        this.unsupportedReasoningModels,
+        this.unsupportedReasoningContentModels,
+        this.maxCompletionTokensModels,
+        this.discoveredMaxOutputTokens,
       );
-      yield* translateStream(events, this.provider.id);
-    } catch (error) {
-      if (error instanceof LlmError && error.status === 400 && !signal.aborted) {
+      if (clampedEffort !== undefined && "reasoning_effort" in built) {
+        built.reasoning_effort = clampedEffort;
+      }
+      return built;
+    };
+
+    let body = makeBody();
+    for (let attempt = 0; attempt <= 4; attempt++) {
+      try {
+        const events = postSse(url, headers, body, signal, this.provider.id);
+        yield* translateStream(events, this.provider.id);
+        return;
+      } catch (error) {
+        if (!(error instanceof LlmError) || error.status !== 400 || signal.aborted) {
+          throw error;
+        }
+        if ("max_tokens" in body && /max_completion_tokens/i.test(error.message)) {
+          this.maxCompletionTokensModels.add(request.model);
+          body = makeBody();
+          continue;
+        }
         const hasReasoningContent = Array.isArray(body.messages)
           && body.messages.some((msg) => typeof msg === "object" && msg !== null && "reasoning_content" in msg);
         if (hasReasoningContent && /reasoning_content/i.test(error.message)) {
           this.unsupportedReasoningContentModels.add(request.model);
-          const fallbackBody = buildRequestBody(
-            request,
-            this.provider,
-            this.unsupportedReasoningModels,
-            this.unsupportedReasoningContentModels,
-          );
-          const retryEvents = postSse(
-            joinUrl(this.provider.baseUrl, "chat/completions"),
-            headers,
-            fallbackBody,
-            signal,
-            this.provider.id,
-          );
-          yield* translateStream(retryEvents, this.provider.id);
-          return;
+          body = makeBody();
+          continue;
         }
         if ("reasoning_effort" in body) {
           const sentEffort = String(body.reasoning_effort ?? "");
@@ -400,39 +221,19 @@ export class OpenAiCompatAdapter implements LlmAdapter {
             && /(?:invalid.*value|supported values|must be one of|not one of|enum|reasoning_effort)/i.test(error.message)
             && !/(?:unrecognized request argument|unknown (?:parameter|field)|extra_forbidden)/i.test(error.message)
           ) {
-            const clampedBody = { ...body, reasoning_effort: clamped };
-            const retryEvents = postSse(
-              joinUrl(this.provider.baseUrl, "chat/completions"),
-              headers,
-              clampedBody,
-              signal,
-              this.provider.id,
-            );
-            yield* translateStream(retryEvents, this.provider.id);
-            return;
+            clampedEffort = clamped;
+            body = makeBody();
+            continue;
           }
           // If an OpenAI-compat proxy rejects auto-inferred `reasoning_effort`, remember and retry once cleanly without it.
           if (this.provider.reasoningEffort === undefined && /reasoning_effort/i.test(error.message)) {
             this.unsupportedReasoningModels.add(request.model);
-            const fallbackBody = buildRequestBody(
-              request,
-              this.provider,
-              this.unsupportedReasoningModels,
-              this.unsupportedReasoningContentModels,
-            );
-            const retryEvents = postSse(
-              joinUrl(this.provider.baseUrl, "chat/completions"),
-              headers,
-              fallbackBody,
-              signal,
-              this.provider.id,
-            );
-            yield* translateStream(retryEvents, this.provider.id);
-            return;
+            body = makeBody();
+            continue;
           }
         }
+        throw error;
       }
-      throw error;
     }
   }
 
@@ -442,6 +243,11 @@ export class OpenAiCompatAdapter implements LlmAdapter {
     try {
       const body = await getJson(joinUrl(this.provider.baseUrl, "models"), await this.headers(), this.provider.id, signal) as { data?: Array<Record<string, unknown>> };
       discovered = (body.data ?? []).flatMap((model) => (typeof model === "object" && model !== null ? parseDiscoveredModel(model) : []));
+      for (const model of discovered) {
+        if (typeof model.maxOutputTokens === "number" && model.maxOutputTokens > 0) {
+          this.discoveredMaxOutputTokens.set(model.id, model.maxOutputTokens);
+        }
+      }
     } catch (error) {
       if (configured.length === 0) throw error;
     }
