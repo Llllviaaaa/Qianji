@@ -52,6 +52,7 @@ export interface WorkbenchLayoutState {
 
   togglePane: (paneId: string) => void;
   openPane: (paneId: string) => void;
+  activateExtensionPane: (paneId: string) => void;
   closePane: (paneId: string) => void;
   toggleInspector: () => void;
   setInspectorOpen: (open: boolean) => void;
@@ -255,7 +256,7 @@ const initialLayoutState = {
   fileDrawerOpen: true,
   twoPaneDirection: "horizontal" as WorkbenchSplitDirection,
   leftColumnCount: null as number | null,
-  colRatio: 0.54,
+  colRatio: 0.62,
   leftRowRatio: 0.5,
   rightRowRatio: 0.5,
   splitOpen: false,
@@ -300,6 +301,20 @@ export const useWorkbenchLayoutStore = create<WorkbenchLayoutState>((set, get) =
       maximizedPaneId: current.maximizedPaneId && current.maximizedPaneId !== id ? null : current.maximizedPaneId,
     });
     syncLegacyWorkbenchStore(nextPanes, current.inspectorOpen, id);
+  },
+
+  activateExtensionPane: (rawId) => {
+    const id = normalizePaneId(rawId);
+    const current = get();
+    const shouldReplaceSoleInspector = current.openPanes.length === 0 && current.inspectorOpen;
+    const nextInspector = shouldReplaceSoleInspector ? false : current.inspectorOpen;
+    const nextPanes = insertPaneSorted(current.openPanes, id);
+    set({
+      openPanes: nextPanes,
+      inspectorOpen: nextInspector,
+      maximizedPaneId: current.maximizedPaneId && current.maximizedPaneId !== id ? null : current.maximizedPaneId,
+    });
+    syncLegacyWorkbenchStore(nextPanes, nextInspector, id);
   },
 
   closePane: (rawId) => {

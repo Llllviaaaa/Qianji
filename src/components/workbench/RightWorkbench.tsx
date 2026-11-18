@@ -79,7 +79,7 @@ export function RightWorkbench({
     if (!isFloatingInspector) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('.pid-wb-inspector-popover, [data-wb-tab="summary"]')) return;
+      if (target?.closest(".pid-wb-inspector-popover, .pid-wb-topbar-controls")) return;
       useWorkbenchLayoutStore.getState().setInspectorOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -151,12 +151,12 @@ export function RightWorkbench({
           : "docked";
 
   const effectiveWidth = inspectorMode === "sole"
-    ? Math.min(width, 272)
+    ? Math.min(268, resize.max)
     : columns.hasCol2
-      ? Math.max(width, Math.min(resize.max, 980))
+      ? Math.min(resize.max, Math.max(width, Math.round(resize.max * 0.78)))
       : inspectorMode === "docked"
-        ? Math.max(width, Math.min(resize.max, 840))
-        : width;
+        ? Math.min(resize.max, Math.max(width, 720))
+        : Math.min(width, resize.max);
 
   // Keep Terminal & SideChat mounted silently in `.pid-wb-panes-grid` once visited so Shells / Side Chat never reset.
   const persistentPaneIds = [...activePanes];
@@ -222,6 +222,11 @@ export function RightWorkbench({
         style={fullMaximized ? undefined : { width: `${Math.round(effectiveWidth)}px` }}
         aria-label="右侧工作台"
       >
+        {inspectorMode === "floating" && (
+          <div className="pid-wb-inspector-popover" role="region" aria-label="环境与上下文检查器">
+            <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />
+          </div>
+        )}
         <div className="pid-wb-stage">
           {inspectorMode === "sole" && (
             <div className="pid-wb-inspector-sole">
@@ -230,11 +235,6 @@ export function RightWorkbench({
           )}
           {inspectorMode === "docked" && (
             <div className="pid-wb-inspector-docked" aria-label="环境与上下文检查器">
-              <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />
-            </div>
-          )}
-          {inspectorMode === "floating" && (
-            <div className="pid-wb-inspector-popover" role="region" aria-label="环境与上下文检查器">
               <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />
             </div>
           )}

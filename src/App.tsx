@@ -147,7 +147,6 @@ export default function App() {
   const notify = useCallback((msg: string, tone: "info" | "error") => useAppStore.getState().showToast(msg, tone), []);
   const toggleWorkspaceSidebar = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().toggleInspector(); }, []);
   const toggleBottomPanel = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().toggleTerminalShortcutPanel(); }, []);
-  const openBottomTerminal = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().openPane("terminal"); }, []);
   const openSummary = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openSummary("overview"); }, []);
   const openDiagnostics = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openSummary("diagnostics"); }, []);
   const openReview = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openReview(); }, []);
@@ -298,11 +297,8 @@ export default function App() {
                   archiveConversations={nav.archiveConversations} setSettingsOpen={setSettingsOpen} disconnect={store.disconnect}
                   reviewFileCount={reviewGit?.files.length ?? 0} gitDiffStats={gitDiffStats} openReview={openReview}
                   canOpenWorkspace={ws.canOpenWorkspace} gitPushing={actions.gitPushing} openCommitDialog={actions.openCommitDialog}
-                  pushCurrentBranch={actions.pushCurrentBranch} workspaceEditors={ws.workspaceEditors}
-                  preferredWorkspaceEditor={ws.preferredWorkspaceEditor} terminalApps={ws.terminalApps}
-                  openWorkspaceInPreferredApp={ws.openWorkspaceInPreferredApp} chooseWorkspaceEditor={ws.chooseWorkspaceEditor}
-                  openWorkspaceTerminalApp={ws.openWorkspaceTerminalApp} revealWorkspaceInExplorer={ws.revealWorkspaceInExplorer}
-                  openBottomTerminal={openBottomTerminal}
+                  pushCurrentBranch={actions.pushCurrentBranch} preferredWorkspaceEditor={ws.preferredWorkspaceEditor}
+                  openWorkspaceInPreferredApp={ws.openWorkspaceInPreferredApp}
                 />
                 <MainConversationStage
                   workspaceCwd={ws.workspaceCwd} cwd={cwd} draftWorkspace={draftWorkspace}

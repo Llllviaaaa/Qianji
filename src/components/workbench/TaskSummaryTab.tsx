@@ -7,10 +7,13 @@ import {
   FileText,
   Folder,
   Globe,
+  MessageSquare,
   Monitor,
+  Puzzle,
 } from "lucide-react";
 import type { PlanGetResult } from "@qianji/protocol";
 import { agent } from "../../lib/agent";
+import { useClientContributions } from "../../lib/clientContributions";
 import {
   deriveSubagentActivities,
   deriveTaskOutputs,
@@ -23,6 +26,8 @@ import {
   isRpcMethodNotFound,
 } from "../../lib/harnessRuntime";
 import { useAppStore } from "../../store";
+import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchLayoutStore } from "../../stores/workbenchLayoutStore";
 import { previewKindForPath, useWorkbenchStore } from "../../stores/workbenchStore";
 import { WorkbenchContextCard } from "./WorkbenchContextCard";
 
@@ -54,6 +59,9 @@ function renderOutputGlyph(filePath: string) {
 export function TaskSummaryTab({ cwd, sessionFile }: TaskSummaryTabProps) {
   const messages = useAppStore((state) => state.messages);
   const git = useAppStore((state) => state.git);
+  const sideChatEnabled = useBuiltinPluginGatesStore((state) => state.sideChatEnabled);
+  const openPanes = useWorkbenchLayoutStore((state) => state.openPanes);
+  const contributions = useClientContributions();
 
   const hostSessionId = sessionFile && isHarnessSessionFile(sessionFile)
     ? sessionFile.slice(HARNESS_SESSION_PREFIX.length)
@@ -92,15 +100,6 @@ export function TaskSummaryTab({ cwd, sessionFile }: TaskSummaryTabProps) {
         <section className="pid-wb-inspector-section">
           <header className="pid-wb-inspector-head">
             <span>运行环境</span>
-            {cwd && (
-              <button
-                type="button"
-                className="pid-wb-inspector-action"
-                onClick={() => void agent.openWorkspaceInFileManager(cwd)}
-              >
-                打开
-              </button>
-            )}
           </header>
           <div className="pid-wb-env-rows">
             <div className="pid-wb-env-row">
@@ -205,6 +204,44 @@ export function TaskSummaryTab({ cwd, sessionFile }: TaskSummaryTabProps) {
               <p className="pid-wb-inspector-empty">本轮尚未写入或修改工作区文件。</p>
             )}
           </section>
+
+          {/* 4. Extension & Side Chat Panels */}
+          {(sideChatEnabled || contributions.rightWorkbenchTabs.length > 0) && (
+            <section className="pid-wb-inspector-section">
+              <header className="pid-wb-inspector-head">
+                <span>扩展视图</span>
+              </header>
+              <div className="pid-wb-ext-tabs" role="tablist" aria-label="扩展面板">
+                {sideChatEnabled && (
+                  <button
+                    type="button"
+                    role="tab"
+                    data-wb-tab="side-chat"
+                    aria-selected={openPanes.includes("side-chat")}
+                    className={`pid-wb-ext-tab-btn${openPanes.includes("side-chat") ? " active" : ""}`}
+                    onClick={() => useWorkbenchLayoutStore.getState().activateExtensionPane("side-chat")}
+                  >
+                    <MessageSquare size={12} />
+                    <span>侧边对话</span>
+                  </button>
+                )}
+                {contributions.rightWorkbenchTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    data-wb-tab={tab.id}
+                    aria-selected={openPanes.includes(tab.id)}
+                    className={`pid-wb-ext-tab-btn${openPanes.includes(tab.id) ? " active" : ""}`}
+                    onClick={() => useWorkbenchLayoutStore.getState().activateExtensionPane(tab.id)}
+                  >
+                    {tab.icon ?? <Puzzle size={12} />}
+                    <span>{tab.label}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </WorkbenchContextCard>
       </div>
     </div>

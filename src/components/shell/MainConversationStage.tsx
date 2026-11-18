@@ -298,19 +298,6 @@ export function MainConversationStage({
           className="qj-workspace-statusbar"
           role="status"
           aria-label="工作区状态栏"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "12px",
-            minHeight: "24px",
-            padding: "0 12px",
-            borderTop: "1px solid var(--qj-border-subtle, var(--border))",
-            background: "var(--qj-bg-surface, var(--panel))",
-            color: "var(--qj-text-secondary, var(--text-2))",
-            fontSize: "11.5px",
-            flexShrink: 0,
-          }}
         >
           <div style={{ display: "inline-flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
             {contributions.statusBarItems

@@ -1,6 +1,5 @@
 import {
-  FileCode2,
-  GitCompare,
+  FileText,
   Globe,
   MessageSquare,
   Puzzle,
@@ -19,6 +18,16 @@ export interface WorkbenchTopbarControlsProps {
   onBeforeOpen?: () => void;
 }
 
+function ChangesDiffIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.4" stroke="currentColor" strokeWidth="1.25" />
+      <path d="M5.5 6H10.5M8 4.4V7.6" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+      <path d="M5.5 10.6H10.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function WorkbenchTopbarControls({ onBeforeOpen }: WorkbenchTopbarControlsProps) {
   const rightOpen = useWorkbenchStore((state) => state.rightOpen);
   const bottomOpen = useWorkbenchStore((state) => state.bottomOpen);
@@ -35,6 +44,8 @@ export function WorkbenchTopbarControls({ onBeforeOpen }: WorkbenchTopbarControl
   const contributions = useClientContributions();
 
   const activePanes = filterAllowedPanes(openPanes);
+  const activePluginTabs = contributions.rightWorkbenchTabs.filter((tab) => activePanes.includes(tab.id));
+  const showActiveSideChat = sideChatEnabled && activePanes.includes("side-chat");
   const showBottomControl = bottomOpen || contributions.bottomPanelTabs.length > 0;
 
   const handleTogglePane = (id: string) => {
@@ -65,7 +76,7 @@ export function WorkbenchTopbarControls({ onBeforeOpen }: WorkbenchTopbarControl
           aria-pressed={activePanes.includes("review")}
           onClick={() => handleTogglePane("review")}
         >
-          <GitCompare size={15} strokeWidth={1.65} />
+          <ChangesDiffIcon size={15} />
         </button>
       )}
       {webPreviewEnabled && (
@@ -90,7 +101,7 @@ export function WorkbenchTopbarControls({ onBeforeOpen }: WorkbenchTopbarControl
         aria-pressed={activePanes.includes("files")}
         onClick={() => handleTogglePane("files")}
       >
-        <FileCode2 size={15} strokeWidth={1.65} />
+        <FileText size={15} strokeWidth={1.65} />
       </button>
       <button
         type="button"
@@ -103,28 +114,28 @@ export function WorkbenchTopbarControls({ onBeforeOpen }: WorkbenchTopbarControl
       >
         <SquareTerminal size={15} strokeWidth={1.65} />
       </button>
-      {sideChatEnabled && (
+      {showActiveSideChat && (
         <button
           type="button"
           data-wb-tab="side-chat"
-          className={`pid-wb-top-toggle${activePanes.includes("side-chat") ? " active" : ""}`}
-          title="侧边对话"
+          className="pid-wb-top-toggle active"
+          title="关闭侧边对话"
           aria-label="侧边对话"
-          aria-pressed={activePanes.includes("side-chat")}
+          aria-pressed
           onClick={() => handleTogglePane("side-chat")}
         >
           <MessageSquare size={14} strokeWidth={1.65} />
         </button>
       )}
-      {contributions.rightWorkbenchTabs.map((tab) => (
+      {activePluginTabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
           data-wb-tab={tab.id}
-          className={`pid-wb-top-toggle${activePanes.includes(tab.id) ? " active" : ""}`}
-          title={tab.label}
+          className="pid-wb-top-toggle active"
+          title={`关闭${tab.label}`}
           aria-label={tab.label}
-          aria-pressed={activePanes.includes(tab.id)}
+          aria-pressed
           onClick={() => handleTogglePane(tab.id)}
         >
           {tab.icon ?? <Puzzle size={14} strokeWidth={1.65} />}

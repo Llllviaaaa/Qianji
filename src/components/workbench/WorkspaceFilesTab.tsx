@@ -9,7 +9,6 @@ import {
   FolderOpen,
   Globe,
   MessageSquarePlus,
-  RefreshCw,
   Search,
   X,
 } from "lucide-react";
@@ -115,13 +114,6 @@ export function WorkspaceFilesTab({ cwd, onAddToChat }: WorkspaceFilesTabProps) 
     enabled: Boolean(cwd) && debouncedTrimmedQuery.length > 0,
     staleTime: 5_000,
   });
-
-  const refreshAll = useCallback(() => {
-    setChildEntries({});
-    setExpanded({});
-    setDirErrors({});
-    void rootQuery.refetch();
-  }, [rootQuery]);
 
   const toggleDirectory = useCallback(async (dirPath: string) => {
     const nextOpen = !expanded[dirPath];
@@ -248,9 +240,6 @@ export function WorkspaceFilesTab({ cwd, onAddToChat }: WorkspaceFilesTabProps) 
             </button>
           )}
         </div>
-        <button type="button" className="pid-wb-icon-btn" title="刷新文件树" onClick={refreshAll}>
-          <RefreshCw size={13} />
-        </button>
       </div>
 
       <div className="pid-wb-scroll">
