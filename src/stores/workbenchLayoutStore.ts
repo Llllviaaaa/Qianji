@@ -1,39 +1,28 @@
 import { create } from "zustand";
 import { clientContributions } from "../lib/clientContributions";
 import { normalizeLocalPath } from "../lib/pathIdentity";
+import {
+  clampSplitRatio,
+  collectTreePanes,
+  flipRootDirectionInTree,
+  insertPaneIntoTree,
+  moveOrSwapPaneInTree,
+  removePaneFromTree,
+  updateSplitRatioInTree,
+  type DraftDiffComment,
+  type PaneDropZone,
+  type UpsertDraftDiffCommentInput,
+  type WorkbenchSplitDirection,
+  type WorkbenchTileNode,
+} from "../lib/workbenchTiling";
 import { useAppStore } from "../store";
 import { useBuiltinPluginGatesStore } from "./builtinPluginGatesStore";
 import { useWorkbenchStore } from "./workbenchStore";
 
-export type WorkbenchSplitDirection = "horizontal" | "vertical";
-export type PaneDropZone = "swap" | "left" | "right" | "top" | "bottom";
-
-export interface DraftDiffComment {
-  id: string;
-  file: string;
-  line: number;
-  side: "new" | "old";
-  lineText: string;
-  body: string;
-  createdAt: number;
-}
-
-export interface UpsertDraftDiffCommentInput {
-  id?: string;
-  file: string;
-  line: number;
-  side: "new" | "old";
-  lineText: string;
-  body: string;
-}
-
-export interface WorkbenchGridColumns {
-  col1: string[];
-  col2: string[];
-  hasCol2: boolean;
-}
+export * from "../lib/workbenchTiling";
 
 export interface WorkbenchLayoutState {
+  layoutTree: WorkbenchTileNode | null;
   openPanes: string[];
   inspectorOpen: boolean;
   maximizedPaneId: string | null;
@@ -59,6 +48,7 @@ export interface WorkbenchLayoutState {
   toggleMaximizePane: (paneId: string) => void;
   swapOrDockPanes: (sourceId: string, targetId: string, zone?: PaneDropZone) => void;
   setTwoPaneDirection: (direction: WorkbenchSplitDirection) => void;
+  setSplitNodeRatio: (splitId: string, ratio: number) => void;
   setColRatio: (ratio: number) => void;
   setLeftRowRatio: (ratio: number) => void;
   setRightRowRatio: (ratio: number) => void;
@@ -77,21 +67,7 @@ export interface WorkbenchLayoutState {
   resetLayoutForTest: () => void;
 }
 
-const MIN_SPLIT_RATIO = 0.22;
-const MAX_SPLIT_RATIO = 0.78;
 const EMPTY_DRAFT_COMMENTS: DraftDiffComment[] = [];
-
-const PANE_PRIORITY: Record<string, number> = {
-  review: 10,
-  preview: 20,
-  "side-chat": 25,
-  files: 30,
-  terminal: 40,
-};
-
-function paneOrderWeight(id: string): number {
-  return PANE_PRIORITY[id] ?? 28;
-}
 
 export function normalizePaneId(rawId: string): string {
   const trimmed = rawId.trim();
@@ -105,19 +81,11 @@ export function normalizePaneId(rawId: string): string {
   return trimmed;
 }
 
-function insertPaneSorted(panes: readonly string[], paneId: string): string[] {
-  if (panes.includes(paneId)) return [...panes];
-  const weight = paneOrderWeight(paneId);
-  const next = [...panes];
-  const insertAt = next.findIndex((existing) => paneOrderWeight(existing) > weight);
-  if (insertAt < 0) next.push(paneId);
-  else next.splice(insertAt, 0, paneId);
-  return next;
-}
-
-export function clampSplitRatio(ratio: number): number {
-  if (!Number.isFinite(ratio)) return 0.5;
-  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio));
+function deriveDirection(
+  tree: WorkbenchTileNode | null,
+  fallback: WorkbenchSplitDirection,
+): WorkbenchSplitDirection {
+  return tree?.type === "split" ? tree.direction : fallback;
 }
 
 export function isCodePaneTab(tab: string): boolean {
@@ -149,28 +117,6 @@ export function filterAllowedPanes(panes: readonly string[]): string[] {
   });
 }
 
-export function computeGridColumns(
-  panes: readonly string[],
-  twoPaneDirection: WorkbenchSplitDirection,
-  leftColumnCount: number | null,
-): WorkbenchGridColumns {
-  if (panes.length === 0) return { col1: [], col2: [], hasCol2: false };
-  if (panes.length === 1) return { col1: [panes[0] ?? "files"], col2: [], hasCol2: false };
-  if (panes.length === 2) {
-    if (twoPaneDirection === "vertical") {
-      return { col1: [...panes], col2: [], hasCol2: false };
-    }
-    return { col1: [panes[0] ?? "files"], col2: [panes[1] ?? "preview"], hasCol2: true };
-  }
-  const desiredSplit = leftColumnCount ?? 2;
-  const splitIndex = Math.min(panes.length - 1, Math.max(1, desiredSplit));
-  return {
-    col1: panes.slice(0, splitIndex),
-    col2: panes.slice(splitIndex),
-    hasCol2: true,
-  };
-}
-
 export function selectDraftCommentsForCwd(
   state: Pick<WorkbenchLayoutState, "draftCommentsByCwd">,
   cwd: string,
@@ -178,26 +124,6 @@ export function selectDraftCommentsForCwd(
   const key = cwd ? normalizeLocalPath(cwd) : "";
   if (!key) return EMPTY_DRAFT_COMMENTS;
   return state.draftCommentsByCwd[key] ?? EMPTY_DRAFT_COMMENTS;
-}
-
-export function formatDraftDiffCommentsPrompt(comments: readonly DraftDiffComment[]): string {
-  if (comments.length === 0) return "";
-  const lines: string[] = [
-    `请根据以下 ${comments.length} 条代码审查行内批注进行修改：`,
-    "",
-  ];
-  comments.forEach((item, index) => {
-    const sideLabel = item.side === "old" ? "旧行" : "第";
-    const loc = item.side === "old" ? `${item.file} (${sideLabel} ${item.line})` : `${item.file}:${item.line}`;
-    lines.push(`${index + 1}. **${loc}**`);
-    const snippet = item.lineText.trim();
-    if (snippet) {
-      lines.push(`   > \`${snippet.slice(0, 140)}\``);
-    }
-    lines.push(`   - 修改意见：${item.body.trim()}`);
-  });
-  lines.push("", "请逐项应用上述修改，并简要说明改动内容。");
-  return lines.join("\n");
 }
 
 export async function dispatchWorkbenchPrompt(
@@ -250,21 +176,33 @@ function syncLegacyWorkbenchStore(openPanes: readonly string[], inspectorOpen: b
 }
 
 const initialLayoutState = {
+  layoutTree: null as WorkbenchTileNode | null,
   openPanes: [] as string[],
   inspectorOpen: false,
   maximizedPaneId: null as string | null,
   fileDrawerOpen: true,
-  twoPaneDirection: "horizontal" as WorkbenchSplitDirection,
+  twoPaneDirection: "vertical" as WorkbenchSplitDirection,
   leftColumnCount: null as number | null,
   colRatio: 0.62,
   leftRowRatio: 0.5,
   rightRowRatio: 0.5,
   splitOpen: false,
-  splitDirection: "horizontal" as WorkbenchSplitDirection,
+  splitDirection: "vertical" as WorkbenchSplitDirection,
   secondaryTab: "preview",
   splitRatio: 0.5,
   draftCommentsByCwd: {} as Record<string, DraftDiffComment[]>,
 };
+
+function buildTreePatch(nextTree: WorkbenchTileNode | null, fallbackDir: WorkbenchSplitDirection = "vertical") {
+  const nextPanes = collectTreePanes(nextTree);
+  const nextDir = deriveDirection(nextTree, fallbackDir);
+  return {
+    layoutTree: nextTree,
+    openPanes: nextPanes,
+    twoPaneDirection: nextDir,
+    splitDirection: nextDir,
+  };
+}
 
 export const useWorkbenchLayoutStore = create<WorkbenchLayoutState>((set, get) => ({
   ...initialLayoutState,
@@ -273,34 +211,33 @@ export const useWorkbenchLayoutStore = create<WorkbenchLayoutState>((set, get) =
     const id = normalizePaneId(rawId);
     const current = get();
     if (current.openPanes.includes(id)) {
-      const nextPanes = current.openPanes.filter((pane) => pane !== id);
-      const nextMax = current.maximizedPaneId === id ? null : current.maximizedPaneId;
+      const patch = buildTreePatch(removePaneFromTree(current.layoutTree, id));
       set({
-        openPanes: nextPanes,
-        maximizedPaneId: nextMax,
-        leftColumnCount: nextPanes.length < 3 ? null : current.leftColumnCount,
+        ...patch,
+        maximizedPaneId: current.maximizedPaneId === id ? null : current.maximizedPaneId,
+        leftColumnCount: patch.openPanes.length < 3 ? null : current.leftColumnCount,
       });
-      syncLegacyWorkbenchStore(nextPanes, current.inspectorOpen);
+      syncLegacyWorkbenchStore(patch.openPanes, current.inspectorOpen);
       return;
     }
-    const nextPanes = insertPaneSorted(current.openPanes, id);
+    const patch = buildTreePatch(insertPaneIntoTree(current.layoutTree, id));
     set({
-      openPanes: nextPanes,
+      ...patch,
       maximizedPaneId: null,
       ...(id === "files" && rawId === "files" ? { fileDrawerOpen: true } : {}),
     });
-    syncLegacyWorkbenchStore(nextPanes, current.inspectorOpen, id);
+    syncLegacyWorkbenchStore(patch.openPanes, current.inspectorOpen, id);
   },
 
   openPane: (rawId) => {
     const id = normalizePaneId(rawId);
     const current = get();
-    const nextPanes = insertPaneSorted(current.openPanes, id);
+    const patch = buildTreePatch(insertPaneIntoTree(current.layoutTree, id));
     set({
-      openPanes: nextPanes,
+      ...patch,
       maximizedPaneId: current.maximizedPaneId && current.maximizedPaneId !== id ? null : current.maximizedPaneId,
     });
-    syncLegacyWorkbenchStore(nextPanes, current.inspectorOpen, id);
+    syncLegacyWorkbenchStore(patch.openPanes, current.inspectorOpen, id);
   },
 
   activateExtensionPane: (rawId) => {
@@ -308,26 +245,25 @@ export const useWorkbenchLayoutStore = create<WorkbenchLayoutState>((set, get) =
     const current = get();
     const shouldReplaceSoleInspector = current.openPanes.length === 0 && current.inspectorOpen;
     const nextInspector = shouldReplaceSoleInspector ? false : current.inspectorOpen;
-    const nextPanes = insertPaneSorted(current.openPanes, id);
+    const patch = buildTreePatch(insertPaneIntoTree(current.layoutTree, id));
     set({
-      openPanes: nextPanes,
+      ...patch,
       inspectorOpen: nextInspector,
       maximizedPaneId: current.maximizedPaneId && current.maximizedPaneId !== id ? null : current.maximizedPaneId,
     });
-    syncLegacyWorkbenchStore(nextPanes, nextInspector, id);
+    syncLegacyWorkbenchStore(patch.openPanes, nextInspector, id);
   },
 
   closePane: (rawId) => {
     const id = normalizePaneId(rawId);
     const current = get();
-    const nextPanes = current.openPanes.filter((pane) => pane !== id);
-    const nextMax = current.maximizedPaneId === id ? null : current.maximizedPaneId;
+    const patch = buildTreePatch(removePaneFromTree(current.layoutTree, id));
     set({
-      openPanes: nextPanes,
-      maximizedPaneId: nextMax,
-      leftColumnCount: nextPanes.length < 3 ? null : current.leftColumnCount,
+      ...patch,
+      maximizedPaneId: current.maximizedPaneId === id ? null : current.maximizedPaneId,
+      leftColumnCount: patch.openPanes.length < 3 ? null : current.leftColumnCount,
     });
-    syncLegacyWorkbenchStore(nextPanes, current.inspectorOpen);
+    syncLegacyWorkbenchStore(patch.openPanes, current.inspectorOpen);
   },
 
   toggleInspector: () => {
@@ -362,27 +298,39 @@ export const useWorkbenchLayoutStore = create<WorkbenchLayoutState>((set, get) =
     const target = normalizePaneId(rawTarget);
     if (!source || !target || source === target) return;
     const current = get();
-    const panes = [...current.openPanes];
-    const srcIdx = panes.indexOf(source);
-    const dstIdx = panes.indexOf(target);
-    if (srcIdx < 0 || dstIdx < 0) return;
-
-    if (panes.length === 2 && (zone === "left" || zone === "right" || zone === "top" || zone === "bottom")) {
-      const nextDirection: WorkbenchSplitDirection = zone === "top" || zone === "bottom" ? "vertical" : "horizontal";
-      const ordered = zone === "left" || zone === "top" ? [source, target] : [target, source];
-      set({ openPanes: ordered, twoPaneDirection: nextDirection });
-      return;
-    }
-
-    const updated = [...panes];
-    updated[srcIdx] = target;
-    updated[dstIdx] = source;
-    set({ openPanes: updated });
+    const patch = buildTreePatch(
+      moveOrSwapPaneInTree(current.layoutTree, source, target, zone),
+      current.twoPaneDirection,
+    );
+    set(patch);
   },
 
-  setTwoPaneDirection: (direction) => set({ twoPaneDirection: direction, splitDirection: direction }),
-  setColRatio: (ratio) => set({ colRatio: clampSplitRatio(ratio) }),
-  setLeftRowRatio: (ratio) => set({ leftRowRatio: clampSplitRatio(ratio) }),
+  setTwoPaneDirection: (direction) => set((state) => ({
+    layoutTree: flipRootDirectionInTree(state.layoutTree, direction),
+    twoPaneDirection: direction,
+    splitDirection: direction,
+  })),
+
+  setSplitNodeRatio: (splitId, ratio) => set((state) => ({
+    layoutTree: updateSplitRatioInTree(state.layoutTree, splitId, ratio),
+  })),
+
+  setColRatio: (ratio) => set((state) => {
+    const next = clampSplitRatio(ratio);
+    const tree = state.layoutTree?.type === "split" && state.layoutTree.direction === "horizontal"
+      ? updateSplitRatioInTree(state.layoutTree, state.layoutTree.id, next)
+      : state.layoutTree;
+    return { colRatio: next, layoutTree: tree };
+  }),
+
+  setLeftRowRatio: (ratio) => set((state) => {
+    const next = clampSplitRatio(ratio);
+    const tree = state.layoutTree?.type === "split" && state.layoutTree.direction === "vertical"
+      ? updateSplitRatioInTree(state.layoutTree, state.layoutTree.id, next)
+      : state.layoutTree;
+    return { leftRowRatio: next, layoutTree: tree };
+  }),
+
   setRightRowRatio: (ratio) => set({ rightRowRatio: clampSplitRatio(ratio) }),
 
   toggleTerminalShortcutPanel: () => {
@@ -396,44 +344,52 @@ export const useWorkbenchLayoutStore = create<WorkbenchLayoutState>((set, get) =
   setFileDrawerOpen: (open) => set({ fileDrawerOpen: open }),
   toggleFileDrawer: () => set((state) => ({ fileDrawerOpen: !state.fileDrawerOpen })),
 
-  toggleSplit: (primaryTab, workbenchWidth, maximized) => set((state) => {
+  toggleSplit: (primaryTab) => set((state) => {
     if (state.splitOpen && state.openPanes.length >= 2) {
       const keep = state.openPanes[0] ?? normalizePaneId(primaryTab);
-      return { splitOpen: false, openPanes: [keep] };
+      const keepTree: WorkbenchTileNode = { type: "leaf", paneId: keep };
+      return { splitOpen: false, layoutTree: keepTree, openPanes: [keep], twoPaneDirection: "vertical", splitDirection: "vertical" };
     }
-    const direction: WorkbenchSplitDirection = maximized || workbenchWidth >= 660 ? "horizontal" : "vertical";
     const sec = normalizePaneId(pickSecondaryTab(primaryTab));
-    const base = state.openPanes.length > 0 ? state.openPanes : [normalizePaneId(primaryTab)];
-    const nextPanes = base.includes(sec) ? base : insertPaneSorted(base, sec);
+    const baseTree = state.layoutTree ?? insertPaneIntoTree(null, normalizePaneId(primaryTab));
+    const nextTree = insertPaneIntoTree(baseTree, sec);
+    const nextPanes = collectTreePanes(nextTree);
+    const direction = deriveDirection(nextTree, "vertical");
     return {
       splitOpen: true,
       splitDirection: direction,
       twoPaneDirection: direction,
       secondaryTab: sec,
+      layoutTree: nextTree,
       openPanes: nextPanes,
     };
   }),
 
-  setSplitDirection: (direction) => set({ splitDirection: direction, twoPaneDirection: direction }),
+  setSplitDirection: (direction) => set((state) => ({
+    layoutTree: flipRootDirectionInTree(state.layoutTree, direction),
+    splitDirection: direction,
+    twoPaneDirection: direction,
+  })),
   setSecondaryTab: (tab) => set({ secondaryTab: tab }),
   setSplitRatio: (ratio) => set({ splitRatio: clampSplitRatio(ratio), colRatio: clampSplitRatio(ratio) }),
-  closeSplit: () => set((state) => ({ splitOpen: false, openPanes: state.openPanes.slice(0, 1) })),
+  closeSplit: () => set((state) => {
+    const first = state.openPanes[0];
+    const nextTree: WorkbenchTileNode | null = first ? { type: "leaf", paneId: first } : null;
+    return { splitOpen: false, layoutTree: nextTree, openPanes: first ? [first] : [] };
+  }),
 
   upsertDraftComment: (cwd, input) => set((state) => {
     const key = cwd ? normalizeLocalPath(cwd) : "";
     const trimmedBody = input.body.trim();
     if (!key || !trimmedBody) return state;
     const current = state.draftCommentsByCwd[key] ?? [];
-    if (input.id) {
-      const exists = current.some((item) => item.id === input.id);
-      if (exists) {
-        return {
-          draftCommentsByCwd: {
-            ...state.draftCommentsByCwd,
-            [key]: current.map((item) => (item.id === input.id ? { ...item, body: trimmedBody } : item)),
-          },
-        };
-      }
+    if (input.id && current.some((item) => item.id === input.id)) {
+      return {
+        draftCommentsByCwd: {
+          ...state.draftCommentsByCwd,
+          [key]: current.map((item) => (item.id === input.id ? { ...item, body: trimmedBody } : item)),
+        },
+      };
     }
     const created: DraftDiffComment = {
       id: input.id ?? `dc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -449,9 +405,8 @@ export const useWorkbenchLayoutStore = create<WorkbenchLayoutState>((set, get) =
 
   removeDraftComment: (cwd, id) => set((state) => {
     const key = cwd ? normalizeLocalPath(cwd) : "";
-    if (!key) return state;
-    const current = state.draftCommentsByCwd[key];
-    if (!current || current.length === 0) return state;
+    const current = key ? state.draftCommentsByCwd[key] : undefined;
+    if (!key || !current || current.length === 0) return state;
     return { draftCommentsByCwd: { ...state.draftCommentsByCwd, [key]: current.filter((item) => item.id !== id) } };
   }),
 
@@ -470,8 +425,8 @@ useWorkbenchStore.subscribe((state, prev) => {
   if (suppressWorkbenchSync) return;
   const layout = useWorkbenchLayoutStore.getState();
   if (!state.rightOpen) {
-    if (layout.openPanes.length > 0 || layout.inspectorOpen || layout.maximizedPaneId !== null) {
-      useWorkbenchLayoutStore.setState({ openPanes: [], inspectorOpen: false, maximizedPaneId: null, splitOpen: false });
+    if (layout.openPanes.length > 0 || layout.layoutTree !== null || layout.inspectorOpen || layout.maximizedPaneId !== null) {
+      useWorkbenchLayoutStore.setState({ layoutTree: null, openPanes: [], inspectorOpen: false, maximizedPaneId: null, splitOpen: false });
     }
     return;
   }
@@ -487,9 +442,6 @@ useWorkbenchStore.subscribe((state, prev) => {
     return;
   }
   const targetPane = normalizePaneId(state.activeTab);
-  const nextPanes = insertPaneSorted(layout.openPanes, targetPane);
-  useWorkbenchLayoutStore.setState({
-    openPanes: nextPanes,
-    maximizedPaneId: state.rightMaximized ? targetPane : null,
-  });
+  const patch = buildTreePatch(insertPaneIntoTree(layout.layoutTree, targetPane));
+  useWorkbenchLayoutStore.setState({ ...patch, maximizedPaneId: state.rightMaximized ? targetPane : null });
 });

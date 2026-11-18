@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type DragEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
   Columns2,
   Maximize2,
@@ -34,15 +34,22 @@ export interface WorkbenchPaneFrameProps {
   webPreviewEnabled: boolean;
   sideChatEnabled: boolean;
   pluginTabs: readonly ClientWorkbenchTabContribution[];
-  draggingPaneId: string | null;
-  onDragStartPane: (paneId: string) => void;
-  onDragEndPane: () => void;
-  onDropOnPane: (sourceId: string, targetId: string, zone: PaneDropZone) => void;
+  isDragging: boolean;
+  dropZone: PaneDropZone | null;
+  onHeaderPointerDown: (paneId: string, title: string, event: ReactPointerEvent<HTMLElement>) => void;
   onRefreshGit: () => Promise<void>;
   onRestoreFiles: (paths?: string[]) => Promise<void>;
   onRequestReview: (scope?: CodeReviewScope) => void;
   onAddToChat?: (path: string) => void;
 }
+
+const DROP_ZONE_LABELS: Record<PaneDropZone, string> = {
+  top: "上方分屏",
+  bottom: "下方分屏",
+  left: "左侧并排",
+  right: "右侧并排",
+  swap: "互换位置",
+};
 
 function resolvePaneTitle(paneId: string, pluginTabs: readonly ClientWorkbenchTabContribution[]): string {
   switch (paneId) {
@@ -77,10 +84,9 @@ export function WorkbenchPaneFrame({
   webPreviewEnabled,
   sideChatEnabled,
   pluginTabs,
-  draggingPaneId,
-  onDragStartPane,
-  onDragEndPane,
-  onDropOnPane,
+  isDragging,
+  dropZone,
+  onHeaderPointerDown,
   onRefreshGit,
   onRestoreFiles,
   onRequestReview,
@@ -92,55 +98,8 @@ export function WorkbenchPaneFrame({
   const toggleMaximizePane = useWorkbenchLayoutStore((state) => state.toggleMaximizePane);
   const closePane = useWorkbenchLayoutStore((state) => state.closePane);
 
-  const [dropZone, setDropZone] = useState<PaneDropZone | null>(null);
-
   const title = resolvePaneTitle(paneId, pluginTabs);
   const reviewCount = git?.files.length ?? 0;
-
-  const computeDropZone = (event: DragEvent<HTMLElement>): PaneDropZone => {
-    if (!canFlipTwoPane) return "swap";
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return "swap";
-    const relX = (event.clientX - rect.left) / rect.width;
-    const relY = (event.clientY - rect.top) / rect.height;
-    if (relX < 0.24) return "left";
-    if (relX > 0.76) return "right";
-    if (relY < 0.24) return "top";
-    if (relY > 0.76) return "bottom";
-    return "swap";
-  };
-
-  const handleHeaderDragStart = (event: DragEvent<HTMLElement>) => {
-    if (!visible) return;
-    const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("button, input")) {
-      event.preventDefault();
-      return;
-    }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", paneId);
-    onDragStartPane(paneId);
-  };
-
-  const handleDragOver = (event: DragEvent<HTMLElement>) => {
-    if (!visible || !draggingPaneId || draggingPaneId === paneId) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    const nextZone = computeDropZone(event);
-    if (nextZone !== dropZone) setDropZone(nextZone);
-  };
-
-  const handleDrop = (event: DragEvent<HTMLElement>) => {
-    if (!visible) return;
-    event.preventDefault();
-    const source = draggingPaneId || event.dataTransfer.getData("text/plain");
-    const zone = dropZone ?? "swap";
-    setDropZone(null);
-    if (source && source !== paneId) {
-      onDropOnPane(source, paneId, zone);
-    }
-    onDragEndPane();
-  };
 
   const closeTitle = soleDismissiblePane ? "隐藏工作台 (Ctrl+Alt+B)" : `关闭${title}`;
   const maxTitle = maximized ? "还原宽度" : "最大化工作台";
@@ -182,26 +141,21 @@ export function WorkbenchPaneFrame({
 
   return (
     <section
-      className={`pid-wb-grid-pane${dropZone ? ` drop-${dropZone}` : ""}${draggingPaneId === paneId ? " is-dragging" : ""}`}
+      className={`pid-wb-grid-pane${dropZone ? ` drop-${dropZone}` : ""}${isDragging ? " is-dragging" : ""}`}
       data-pane-id={paneId}
       aria-label={title}
       hidden={!visible}
       style={visible ? gridStyle : { display: "none" }}
-      onDragOver={handleDragOver}
-      onDragLeave={() => {
-        if (dropZone !== null) setDropZone(null);
-      }}
-      onDrop={handleDrop}
     >
+      {dropZone !== null && (
+        <div className={`pid-wb-drop-indicator zone-${dropZone}`} aria-hidden="true">
+          <span className="pid-wb-drop-badge">{DROP_ZONE_LABELS[dropZone]}</span>
+        </div>
+      )}
       {paneId !== "preview" && (
         <header
           className="pid-wb-pane-header"
-          draggable={visible}
-          onDragStart={handleHeaderDragStart}
-          onDragEnd={() => {
-            setDropZone(null);
-            onDragEndPane();
-          }}
+          onPointerDown={(event) => onHeaderPointerDown(paneId, title, event)}
         >
           <div className="pid-wb-pane-title-group">
             <span className="pid-wb-pane-title">{title}</span>
@@ -262,9 +216,11 @@ export function WorkbenchPaneFrame({
           sideChatEnabled={sideChatEnabled}
           pluginTabs={pluginTabs}
           paneControls={paneId === "preview" ? sharedWindowControls : undefined}
-          draggableHeader={paneId === "preview" && visible}
-          onHeaderDragStart={paneId === "preview" ? handleHeaderDragStart : undefined}
-          onHeaderDragEnd={paneId === "preview" ? () => { setDropZone(null); onDragEndPane(); } : undefined}
+          onHeaderPointerDown={
+            paneId === "preview"
+              ? (event) => onHeaderPointerDown(paneId, title, event)
+              : undefined
+          }
           onRefreshGit={onRefreshGit}
           onRestoreFiles={onRestoreFiles}
           onRequestReview={onRequestReview}

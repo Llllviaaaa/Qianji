@@ -14,6 +14,8 @@ import { useBuiltinPluginGatesStore } from "../src/stores/builtinPluginGatesStor
 import {
   clampSplitRatio,
   computeGridColumns,
+  computeTileLayout,
+  detectPaneDropZone,
   formatDraftDiffCommentsPrompt,
   selectDraftCommentsForCwd,
   useWorkbenchLayoutStore,
@@ -78,45 +80,71 @@ afterEach(() => {
 });
 
 describe("Claude Desktop 2D Multi-Pane Right Workbench & Hairline Inspector", () => {
-  it("toggles independent top-right panes, enforces 2x2 canonical ordering, and supports drag swap/dock", () => {
+  it("prioritizes top-and-bottom stacking for 2 panes, expands to 2x2, and supports arbitrary pointer dock/swap", () => {
     const layout = useWorkbenchLayoutStore.getState();
     expect(layout.openPanes).toEqual([]);
     expect(layout.inspectorOpen).toBe(false);
     expect(layout.fileDrawerOpen).toBe(true);
+    expect(layout.twoPaneDirection).toBe("vertical");
 
-    // Toggling panes in arbitrary order converges to canonical 2x2 grid: Col 1 [review, preview], Col 2 [files, terminal].
-    layout.togglePane("terminal");
-    layout.togglePane("files");
-    layout.togglePane("preview");
+    // 1 -> 2 panes defaults to top-and-bottom stack (first on top, second on bottom).
     layout.togglePane("review");
-    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual(["review", "preview", "files", "terminal"]);
+    layout.togglePane("preview");
+    const twoState = useWorkbenchLayoutStore.getState();
+    expect(twoState.openPanes).toEqual(["review", "preview"]);
+    expect(twoState.twoPaneDirection).toBe("vertical");
     expect(useWorkbenchStore.getState().rightOpen).toBe(true);
 
-    const fourCols = computeGridColumns(useWorkbenchLayoutStore.getState().openPanes, "horizontal", null);
-    expect(fourCols).toEqual({
+    const twoLayout = computeTileLayout(twoState.layoutTree);
+    expect(twoLayout.hasHorizontalSplit).toBe(false);
+    expect(twoLayout.panes.review).toEqual({ left: 0, top: 0, width: 1, height: 0.5 });
+    expect(twoLayout.panes.preview).toEqual({ left: 0, top: 0.5, width: 1, height: 0.5 });
+    expect(computeGridColumns(["review", "preview"], "vertical", null)).toEqual({
       col1: ["review", "preview"],
-      col2: ["files", "terminal"],
-      hasCol2: true,
-    });
-
-    // Closing two panes leaves 2 panes side-by-side by default, and drag-dropping top/bottom flips to vertical stack.
-    layout.closePane("review");
-    layout.closePane("terminal");
-    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual(["preview", "files"]);
-    expect(computeGridColumns(["preview", "files"], "horizontal", null)).toEqual({
-      col1: ["preview"],
-      col2: ["files"],
-      hasCol2: true,
-    });
-
-    layout.swapOrDockPanes("files", "preview", "top");
-    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual(["files", "preview"]);
-    expect(useWorkbenchLayoutStore.getState().twoPaneDirection).toBe("vertical");
-    expect(computeGridColumns(["files", "preview"], "vertical", null)).toEqual({
-      col1: ["files", "preview"],
       col2: [],
       hasCol2: false,
     });
+
+    // Opening 3rd & 4th panes expands to 2x2 balanced binary split tree.
+    layout.togglePane("files");
+    layout.togglePane("terminal");
+    const fourState = useWorkbenchLayoutStore.getState();
+    expect(fourState.openPanes).toEqual(["review", "preview", "files", "terminal"]);
+    const fourLayout = computeTileLayout(fourState.layoutTree);
+    expect(fourLayout.hasHorizontalSplit).toBe(true);
+    expect(fourLayout.panes.review?.left).toBe(0);
+    expect(fourLayout.panes.review?.top).toBe(0);
+    expect(fourLayout.panes.preview?.left).toBe(0);
+    expect(fourLayout.panes.preview?.top).toBe(0.5);
+    expect(fourLayout.panes.files?.left).toBeGreaterThan(0);
+    expect(fourLayout.panes.files?.top).toBe(0);
+    expect(fourLayout.panes.terminal?.left).toBeGreaterThan(0);
+    expect(fourLayout.panes.terminal?.top).toBe(0.5);
+
+    // Dragging a pane works even when 4 panes are open (e.g. dock terminal onto left of review).
+    layout.swapOrDockPanes("terminal", "review", "left");
+    const lShape = computeTileLayout(useWorkbenchLayoutStore.getState().layoutTree);
+    expect(lShape.panes.terminal?.top).toBe(0);
+    expect(lShape.panes.terminal?.left).toBe(0);
+    expect(lShape.panes.review?.top).toBe(0);
+    expect(lShape.panes.review?.left ?? 0).toBeGreaterThan(0);
+
+    // Closing to 2 panes lets user drag between vertical <-> horizontal <-> swap cleanly.
+    layout.closePane("terminal");
+    layout.closePane("review");
+    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual(["preview", "files"]);
+
+    layout.swapOrDockPanes("files", "preview", "right");
+    const horiz = computeTileLayout(useWorkbenchLayoutStore.getState().layoutTree);
+    expect(horiz.hasHorizontalSplit).toBe(true);
+    expect(horiz.panes.preview).toEqual({ left: 0, top: 0, width: 0.5, height: 1 });
+    expect(horiz.panes.files).toEqual({ left: 0.5, top: 0, width: 0.5, height: 1 });
+
+    layout.swapOrDockPanes("files", "preview", "top");
+    const vert = computeTileLayout(useWorkbenchLayoutStore.getState().layoutTree);
+    expect(vert.hasHorizontalSplit).toBe(false);
+    expect(vert.panes.files).toEqual({ left: 0, top: 0, width: 1, height: 0.5 });
+    expect(vert.panes.preview).toEqual({ left: 0, top: 0.5, width: 1, height: 0.5 });
 
     // Closing all panes closes rightOpen if Inspector is also closed.
     layout.closePane("files");
@@ -124,7 +152,13 @@ describe("Claude Desktop 2D Multi-Pane Right Workbench & Hairline Inspector", ()
     expect(useWorkbenchLayoutStore.getState().openPanes).toEqual([]);
     expect(useWorkbenchStore.getState().rightOpen).toBe(false);
 
-    // Ratio clamping.
+    // Edge zone hit-testing & ratio clamping.
+    expect(detectPaneDropZone(0.5, 0.5)).toBe("swap");
+    expect(detectPaneDropZone(0.1, 0.5)).toBe("left");
+    expect(detectPaneDropZone(0.9, 0.5)).toBe("right");
+    expect(detectPaneDropZone(0.5, 0.1)).toBe("top");
+    expect(detectPaneDropZone(0.5, 0.9)).toBe("bottom");
+
     expect(clampSplitRatio(Number.NaN)).toBe(0.5);
     layout.setColRatio(0.05);
     expect(useWorkbenchLayoutStore.getState().colRatio).toBe(0.22);

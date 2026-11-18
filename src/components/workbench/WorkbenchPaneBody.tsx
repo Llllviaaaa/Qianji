@@ -1,4 +1,4 @@
-import { Suspense, lazy, type DragEvent, type ReactNode } from "react";
+import { Suspense, lazy, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { CodeReviewScope } from "../../lib/codeReview";
 import type { ClientWorkbenchTabContribution } from "../../lib/clientContributions";
 import { isCodePaneTab } from "../../stores/workbenchLayoutStore";
@@ -25,9 +25,7 @@ export interface WorkbenchPaneBodyProps {
   sideChatEnabled: boolean;
   pluginTabs: readonly ClientWorkbenchTabContribution[];
   paneControls?: ReactNode;
-  draggableHeader?: boolean;
-  onHeaderDragStart?: (event: DragEvent<HTMLElement>) => void;
-  onHeaderDragEnd?: () => void;
+  onHeaderPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
   onRefreshGit: () => Promise<void>;
   onRestoreFiles: (paths?: string[]) => Promise<void>;
   onRequestReview: (scope?: CodeReviewScope) => void;
@@ -45,9 +43,7 @@ export function WorkbenchPaneBody({
   sideChatEnabled,
   pluginTabs,
   paneControls,
-  draggableHeader,
-  onHeaderDragStart,
-  onHeaderDragEnd,
+  onHeaderPointerDown,
   onRefreshGit,
   onRestoreFiles,
   onRequestReview,
@@ -73,9 +69,7 @@ export function WorkbenchPaneBody({
         <BrowserPreviewTab
           cwd={cwd}
           paneControls={paneControls}
-          draggableHeader={draggableHeader}
-          onHeaderDragStart={onHeaderDragStart}
-          onHeaderDragEnd={onHeaderDragEnd}
+          onHeaderPointerDown={onHeaderPointerDown}
         />
       )}
       {paneTab === "terminal" && (
