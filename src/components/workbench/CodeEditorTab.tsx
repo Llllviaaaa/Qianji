@@ -7,6 +7,8 @@ import {
   Eye,
   FileCode2,
   FolderOpen,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   RotateCcw,
   Save,
@@ -32,19 +34,16 @@ const LazyCodeMirrorSurface = lazy(() => import("./CodeMirrorSurface"));
 
 export interface CodeEditorTabProps {
   cwd: string;
+  fileDrawerOpen?: boolean;
+  onToggleFileDrawer?: () => void;
 }
 
 function escapeHtmlAttr(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function injectBaseTag(rawHtml: string, baseUrl: string | null): string {
-  if (!baseUrl) return rawHtml;
-  if (/<base\b/i.test(rawHtml)) return rawHtml;
+  if (!baseUrl || /<base\b/i.test(rawHtml)) return rawHtml;
   const baseTag = `<base href="${escapeHtmlAttr(baseUrl)}" />`;
   if (/<head(\s[^>]*)?>/i.test(rawHtml)) {
     return rawHtml.replace(/<head(\s[^>]*)?>/i, (match) => `${match}\n${baseTag}`);
@@ -57,28 +56,10 @@ function injectBaseTag(rawHtml: string, baseUrl: string | null): string {
 
 function buildSvgStageHtml(svgContent: string, baseUrl: string | null): string {
   const baseTag = baseUrl ? `<base href="${escapeHtmlAttr(baseUrl)}" />` : "";
-  return [
-    "<!DOCTYPE html>",
-    "<html>",
-    "<head>",
-    '<meta charset="utf-8" />',
-    baseTag,
-    "<style>",
-    "  html, body {",
-    "    margin: 0;",
-    "    min-height: 100vh;",
-    "    display: grid;",
-    "    place-items: center;",
-    "    padding: 16px;",
-    "    box-sizing: border-box;",
-    "    background: transparent;",
-    "  }",
-    "  svg { max-width: 100%; height: auto; }",
-    "</style>",
-    "</head>",
-    `<body>${svgContent}</body>`,
-    "</html>",
-  ].join("\n");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" />${baseTag}<style>
+  html, body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; box-sizing: border-box; background: transparent; }
+  svg { max-width: 100%; height: auto; }
+</style></head><body>${svgContent}</body></html>`;
 }
 
 function appendCacheVersion(url: string, token: string): string {
@@ -165,7 +146,7 @@ function DynamicDocumentPreview({
   );
 }
 
-export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
+export function CodeEditorTab({ cwd, fileDrawerOpen, onToggleFileDrawer }: CodeEditorTabProps) {
   const openFiles = useWorkbenchStore((state) => state.openFiles);
   const preferredPath = useWorkbenchStore((state) => resolveWorkspaceActiveFilePath(state, cwd));
   const sessionFile = useAppStore((state) => state.sessionFile);
@@ -280,6 +261,18 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
           }
         }}
       >
+        {onToggleFileDrawer && (
+          <button
+            type="button"
+            className={`pid-wb-icon-btn pid-wb-drawer-toggle${fileDrawerOpen ? " active" : ""}`}
+            title={fileDrawerOpen ? "收起文件树" : "展开文件树"}
+            aria-label={fileDrawerOpen ? "收起文件树" : "展开文件树"}
+            aria-pressed={Boolean(fileDrawerOpen)}
+            onClick={onToggleFileDrawer}
+          >
+            {fileDrawerOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+          </button>
+        )}
         {workspaceFiles.map((file) => {
           const dirty = file.content !== file.savedContent;
           const active = file.path === activeFile.path;

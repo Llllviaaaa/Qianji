@@ -325,7 +325,7 @@ export default function App() {
                 <RightWorkbench
                   cwd={ws.workspaceCwd || cwd} sessionFile={sessionFile} width={workspacePanelWidth} git={reviewGit}
                   onRefreshGit={actions.refreshReviewGit} onRestoreFiles={actions.restoreGitFiles}
-                  onRequestReview={() => void actions.requestReview({ mode: "uncommitted" })}
+                  onRequestReview={(scope) => void actions.requestReview(scope)}
                   onAddToChat={(path) => void actions.addWorkspaceFileToChat(path)}
                   resize={{
                     onPointerDown: workspaceResize.beginResize, onKeyDown: workspaceResize.resizeWithKeyboard,

@@ -188,7 +188,7 @@ export interface WorkbenchState {
 const initialState = {
   rightOpen: false,
   rightMaximized: false,
-  activeTab: "files",
+  activeTab: "summary",
   openFiles: [] as OpenWorkbenchFile[],
   activeFilePath: null as string | null,
   activeFileCwd: null as string | null,
