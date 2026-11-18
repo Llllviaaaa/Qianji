@@ -13,6 +13,7 @@ import { Tools, textOutput } from "@qianji/tools";
 import {
   AgentLoop,
   COMPACTION_REQUEST,
+  DEFAULT_MAX_TURNS,
   EMPTY_TURN_CONTINUATION_PROMPT,
   LENGTH_CONTINUATION_PROMPT,
   buildCompactionWorkingSetAddendum,
@@ -1014,5 +1015,91 @@ describe("agent loop", () => {
       isError: true,
       content: [{ type: "text", text: "Aborted." }],
     });
+  });
+
+  it("defaults DEFAULT_MAX_TURNS to 500 so >100 multi-step tool runs finish cleanly", async () => {
+    expect(DEFAULT_MAX_TURNS).toBe(500);
+    const steps = Array.from({ length: 105 }, (_, i) =>
+      toolReply([{ id: `call-${i + 1}`, name: "echo", args: { text: `step-${i + 1}` } }]),
+    );
+    const harness = await setup([...steps, textReply("Completed 105 tool steps.")]);
+    await run(harness, "Run >100 steps");
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(harness.provider.requests).toHaveLength(106);
+  });
+
+  it("treats closed and unclosed inline <think> text-delta turns as empty, retrying and keeping post-tool continuations on tool-result", async () => {
+    const inlineClosedThink = [
+      { type: "text-delta" as const, index: 0, text: "<think>let me reason silently</think>" },
+      { type: "finish" as const, reason: "stop" as const },
+    ];
+    const inlineUnclosedThink = [
+      { type: "text-delta" as const, index: 0, text: "  <think>\ntruncated thought without closing tag" },
+      { type: "finish" as const, reason: "stop" as const },
+    ];
+
+    // 1. Direct prompt -> closed inline <think> -> unclosed inline <think> -> final visible prose
+    const direct = await setup([
+      inlineClosedThink,
+      inlineUnclosedThink,
+      textReply("<think>done thinking</think>\nVisible final answer."),
+    ]);
+    await run(direct, "Solve");
+    expect(direct.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(direct.provider.requests).toHaveLength(3);
+    expect(direct.provider.requests[1]?.messages).toEqual([
+      { role: "user", content: [...text("Solve"), ...text(`\n\n${EMPTY_TURN_CONTINUATION_PROMPT}`)] },
+    ]);
+    expect(direct.provider.requests[2]?.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          ...text("Solve"),
+          ...text(`\n\n${EMPTY_TURN_CONTINUATION_PROMPT}`),
+          ...text(`\n\n${EMPTY_TURN_CONTINUATION_PROMPT}`),
+        ],
+      },
+    ]);
+
+    // 2. Post-tool turn emits inline <think> only -> continuation attaches to tool-result, keeping lastUserIndex at 0
+    const toolWithThinking = [
+      { type: "thinking-delta" as const, index: 0, text: "Inspecting via echo tool" },
+      ...toolReply([{ id: "call-1", name: "echo", args: { text: "tool-ok" } }]).map((chunk) =>
+        "index" in chunk ? { ...chunk, index: chunk.index + 1 } : chunk,
+      ),
+    ];
+    const postTool = await setup([
+      toolWithThinking,
+      inlineClosedThink,
+      textReply("Summary after tool."),
+    ]);
+    await run(postTool, "Inspect and summarize");
+    expect(postTool.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+    expect(postTool.provider.requests).toHaveLength(3);
+    const thirdReqMessages = postTool.provider.requests[2]?.messages ?? [];
+    expect(thirdReqMessages.map((m) => m.role)).toEqual(["user", "assistant", "tool-result"]);
+    expect(thirdReqMessages.findLastIndex((m) => m.role === "user")).toBe(0);
+    expect(thirdReqMessages[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "thinking", text: "Inspecting via echo tool" },
+        { type: "tool-call", id: "call-1", name: "echo", arguments: { text: "tool-ok" } },
+      ],
+    });
+    expect(thirdReqMessages[2]).toEqual({
+      role: "tool-result",
+      callId: "call-1",
+      content: [
+        { type: "text", text: "tool-ok" },
+        { type: "text", text: `\n\n${EMPTY_TURN_CONTINUATION_PROMPT}` },
+      ],
+      isError: false,
+    });
+
+    // 3. Non-<think> XML/HTML tags (<thinking>, <div>) count as visible text and finish without retry
+    const xmlVisible = await setup([textReply("<thinking>custom xml output</thinking>")]);
+    await run(xmlVisible, "Emit XML");
+    expect(xmlVisible.provider.requests).toHaveLength(1);
+    expect(xmlVisible.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
   });
 });

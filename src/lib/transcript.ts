@@ -4,11 +4,14 @@
  */
 import type { LiveDelta, PersistedEvent } from "@qianji/protocol";
 import type { ExtensionUIRequest, ImageContent, UiMessage, UiToolCall, Usage } from "../types";
+import { INTERRUPTED_TURN, interruptTurn, markAbortedToolUseAssistant, settleStoppedTurn } from "./transcriptSettle";
+
+export { INTERRUPTED_TURN, interruptTurn, settleStoppedTurn };
 
 /** What a running task reports, in the transcript's terms. */
 export type TranscriptEvent =
   | { type: "turn-start" }
-  | { type: "turn-end" }
+  | { type: "turn-end"; outcome?: string }
   | { type: "turn-interrupted" }
   | { type: "user"; message: UiMessage }
   | { type: "notice"; message: UiMessage }
@@ -98,7 +101,9 @@ export function assistantMessageOf(event: PersistedEvent, durationMs?: number): 
     id: `host-${event.seq}`, role: "assistant", content: textOf(blocks) || data.error?.message || "",
     thinking: thinking || undefined, model: data.model?.model, usage: usageOf(data.usage),
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined, isStreaming: false,
-    isError: data.stop === "error", isAborted: data.stop === "aborted", durationMs, timestamp,
+    isError: data.stop === "error", isAborted: data.stop === "aborted",
+    stopReason: typeof data.stop === "string" ? data.stop : undefined,
+    durationMs, timestamp,
   };
 }
 
@@ -140,6 +145,8 @@ export function historyToUi(events: readonly PersistedEvent[]): UiMessage[] {
   let lastAssistant: UiMessage | undefined;
   for (const event of currentBranch(events)) {
     if (event.type === "user") {
+      markAbortedToolUseAssistant(lastAssistant);
+      lastAssistant = undefined;
       const message = userMessageOf(event);
       turnStartedAt = message.timestamp;
       messages.push(message);
@@ -182,6 +189,7 @@ export function historyToUi(events: readonly PersistedEvent[]): UiMessage[] {
       }
     }
   }
+  markAbortedToolUseAssistant(lastAssistant);
   return messages;
 }
 
@@ -237,24 +245,13 @@ export function resetStreamingAssistant(messages: UiMessage[]): UiMessage[] {
   const index = lastStreamingAssistant(messages);
   if (index < 0) return messages;
   const previous = messages[index];
-  if (previous.content === "" && previous.thinking === undefined && previous.toolCalls === undefined) {
-    return messages;
-  }
+  if (previous.content === "" && previous.thinking === undefined && previous.toolCalls === undefined) return messages;
   const next = [...messages];
-  next[index] = {
-    id: previous.id,
-    role: "assistant",
-    content: "",
-    isStreaming: true,
-    timestamp: previous.timestamp,
-  };
+  next[index] = { id: previous.id, role: "assistant", content: "", isStreaming: true, timestamp: previous.timestamp };
   return next;
 }
 
-/**
- * The finished reply replaces the one being streamed, keeping its id and
- * what its tool calls have done so far; without one it is appended.
- */
+/** The finished reply replaces the one being streamed, keeping its id and tool state; otherwise appended. */
 export function completeAssistant(messages: UiMessage[], message: UiMessage): UiMessage[] {
   const index = lastStreamingAssistant(messages);
   if (index < 0) return [...messages, message];
@@ -264,58 +261,6 @@ export function completeAssistant(messages: UiMessage[], message: UiMessage): Ui
   const next = [...messages];
   next[index] = { ...previous, ...message, id: previous.id, thinking: message.thinking || previous.thinking, toolCalls };
   return next;
-}
-
-export const INTERRUPTED_TURN = "这一轮因 Harness 断开而中断";
-
-/** A call still running, or one a log records without its result. */
-const unanswered = (call: UiToolCall): boolean => call.running || call.isError === undefined;
-
-/**
- * End a turn that stopped without finishing: its unanswered tool calls fail,
- * and its reply, the one streaming or a missing last one, is marked as an
- * error. A turn ends on a reply without tool calls; one that did is left as it is.
- */
-export function interruptTurn(messages: UiMessage[], now = Date.now()): UiMessage[] {
-  let last = messages.length - 1;
-  while (last >= 0 && (messages[last].role === "notice" || messages[last].role === "terminal")) last -= 1;
-  const reply = messages[last];
-  if (reply === undefined) return messages;
-  if (reply.role === "assistant" && !reply.isStreaming && (reply.toolCalls ?? []).length === 0) return messages;
-  const turnStart = messages.findLastIndex((message) => message.role === "user");
-  const next = messages.map((message, index) => {
-    if (index < turnStart || !message.toolCalls?.some(unanswered)) return message;
-    return { ...message, toolCalls: message.toolCalls.map((call) => (unanswered(call) ? { ...call, running: false, isError: true, result: INTERRUPTED_TURN, finishedAt: now } : call)) };
-  });
-  if (reply.role === "assistant" && reply.isStreaming) {
-    const partial = next[last].content.trim();
-    next[last] = { ...next[last], isStreaming: false, isError: true, content: partial === "" ? INTERRUPTED_TURN : `${partial}\n\n${INTERRUPTED_TURN}` };
-    return next;
-  }
-  return [...next, { id: `interrupted-${now}`, role: "assistant", content: INTERRUPTED_TURN, isError: true, timestamp: now }];
-}
-
-/** Settle a turn stopped by the user: drop empty streaming placeholders and clear streaming/running flags. */
-export function settleStoppedTurn(messages: UiMessage[], now = Date.now()): UiMessage[] {
-  const last = messages[messages.length - 1];
-  if (last?.role === "assistant" && last.isStreaming && !last.content.trim() && !last.thinking?.trim() && !last.toolCalls?.length) {
-    return settleStoppedTurn(messages.slice(0, -1), now);
-  }
-  const turnStart = Math.max(0, messages.findLastIndex((message) => message.role === "user"));
-  let changed = false;
-  const next = messages.map((message, index) => {
-    if (index < turnStart) return message;
-    const hasRunning = message.toolCalls?.some((call) => call.running) === true;
-    if (!message.isStreaming && !hasRunning) return message;
-    changed = true;
-    return {
-      ...message,
-      isStreaming: false,
-      ...(message.isStreaming && message.isAborted === undefined ? { isAborted: true } : {}),
-      ...(hasRunning ? { toolCalls: message.toolCalls?.map((call) => (call.running ? { ...call, running: false, isError: call.isError ?? true, finishedAt: call.finishedAt ?? now } : call)) } : {}),
-    };
-  });
-  return changed ? next : messages;
 }
 
 /** Change the tool call `callId`, adding it to the last reply when no message has it yet. */
@@ -397,7 +342,7 @@ export class TranscriptTranslator {
       case "agent-start":
         return [{ type: "turn-start" }];
       case "agent-end":
-        return [{ type: "turn-end" }];
+        return [{ type: "turn-end", outcome: typeof delta.outcome === "string" ? delta.outcome : undefined }];
       case "llm-start":
         this.toolCalls.clear();
         return [{ type: "assistant-start" }];

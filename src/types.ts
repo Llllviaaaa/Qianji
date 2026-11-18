@@ -20,8 +20,7 @@ export interface Usage {
 }
 
 export type ModelThinkingLevel =
-  | "off"
-  | "minimal"
+  | "off" | "minimal"
   | "low"
   | "medium"
   | "high"
@@ -488,6 +487,7 @@ export interface UiMessage {
   isError?: boolean;
   /** The user stopped this turn; what it wrote so far is kept, and it is not an error. */
   isAborted?: boolean;
+  stopReason?: string;
   durationMs?: number;
   timestamp: number;
 }

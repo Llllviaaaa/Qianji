@@ -162,6 +162,7 @@ export const Message = memo(function Message({
     hasTurnTelemetry: message.durationMs !== undefined || message.usage !== undefined,
     isError: message.isError,
     isAborted: message.isAborted,
+    stopReason: message.stopReason,
   });
   const effectiveProcessOpen = processOpen ?? emptyTurn.autoOpenProcess;
 

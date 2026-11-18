@@ -152,6 +152,7 @@ export function mergeAssistantTurn(messages: UiMessage[]): UiMessage {
     isStreaming: normalized.some((message) => message.isStreaming),
     isError: normalized.some((message) => message.isError),
     isAborted: normalized.some((message) => message.isAborted),
+    stopReason: last.stopReason,
     durationMs: turnDurationMs(normalized),
     timestamp: last.timestamp || normalized[0].timestamp,
   };

@@ -436,4 +436,339 @@ describe("openai-compat adapter", () => {
 
     expect(messages[3]).toEqual({ role: "tool", tool_call_id: normalizedId, content: "content" });
   });
+
+  it("wires configured model maxOutputTokens into max_tokens and falls back to max_completion_tokens on 400", async () => {
+    const { ctx, server } = await setup({
+      models: [
+        { id: "o3-mini", maxOutputTokens: 32_768 },
+        { id: "deepseek-chat", maxOutputTokens: 8_192 },
+      ],
+    });
+    const reqWithoutMaxTokens: LlmRequest = {
+      provider: "compat",
+      model: "o3-mini",
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+    };
+
+    // First attempt sends max_tokens=32768 -> upstream rejects asking for max_completion_tokens -> retries once cleanly.
+    server.reply(
+      {
+        status: 400,
+        json: {
+          error: {
+            message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+          },
+        },
+      },
+      { sse: fixture("reasoning-text.sse") },
+    );
+    const first = await assemble(ctx.llm.stream(reqWithoutMaxTokens));
+    expect(first.reason).toBe("stop");
+    expect(server.requests).toHaveLength(2);
+    expect(server.requests[0]?.body).toMatchObject({ model: "o3-mini", max_tokens: 32_768 });
+    expect(server.requests[0]?.body).not.toHaveProperty("max_completion_tokens");
+    expect(server.requests[1]?.body).toMatchObject({ model: "o3-mini", max_completion_tokens: 32_768 });
+    expect(server.requests[1]?.body).not.toHaveProperty("max_tokens");
+
+    // Subsequent calls for o3-mini use max_completion_tokens directly; explicit request.maxTokens overrides model default.
+    server.reply({ sse: fixture("reasoning-text.sse") });
+    await assemble(ctx.llm.stream({ ...reqWithoutMaxTokens, maxTokens: 4_096 }));
+    expect(server.requests[2]?.body).toMatchObject({ model: "o3-mini", max_completion_tokens: 4_096 });
+    expect(server.requests[2]?.body).not.toHaveProperty("max_tokens");
+
+    // Other models on the same provider still use max_tokens.
+    server.reply({ sse: fixture("reasoning-text.sse") });
+    await assemble(ctx.llm.stream({ ...reqWithoutMaxTokens, model: "deepseek-chat" }));
+    expect(server.requests[3]?.body).toMatchObject({ model: "deepseek-chat", max_tokens: 8_192 });
+    expect(server.requests[3]?.body).not.toHaveProperty("max_completion_tokens");
+
+    // Non-positive or unconfigured maxTokens omits both fields.
+    const unconfiguredBody = adapter.buildRequestBody(
+      { provider: "compat", model: "unknown-model", messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }], maxTokens: 0 },
+      { id: "compat", baseUrl: "http://localhost/v1" },
+    );
+    expect(unconfiguredBody).not.toHaveProperty("max_tokens");
+    expect(unconfiguredBody).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("extracts streaming inline <think>...</think> across split SSE chunks, consecutive blocks, and thinking-only turns", async () => {
+    const { ctx, server } = await setup();
+
+    // Split <think> and </think> across chunk boundaries with CRLF after <think> and false partial closing tags inside.
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{"content":"  \\n<th"}}]}',
+        'data: {"choices":[{"delta":{"content":"ink>\\r"}}]}',
+        'data: {"choices":[{"delta":{"content":"\\nCheck a < b and </div and </th"}}]}',
+        'data: {"choices":[{"delta":{"content":"</ThIn"}}]}',
+        'data: {"choices":[{"delta":{"content":"k>\\n\\nFinal "}}]}',
+        'data: {"choices":[{"delta":{"content":"answer with <think>literal</think>."},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const splitRes = await assemble(ctx.llm.stream(request));
+    expect(splitRes.reason).toBe("stop");
+    expect(splitRes.message.content).toEqual([
+      { type: "thinking", text: "Check a < b and </div and </th" },
+      { type: "text", text: "Final answer with <think>literal</think>." },
+    ]);
+
+    // Consecutive leading <think> blocks share thinkingIndex; thinking-only turn with trailing whitespace produces no text block.
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{"content":"<THINK>First. </THINK>\\n<think>Second.</think>\\n  "},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const consecutiveThinkOnly = await assemble(ctx.llm.stream(request));
+    expect(consecutiveThinkOnly.reason).toBe("stop");
+    expect(consecutiveThinkOnly.message.content).toEqual([
+      { type: "thinking", text: "First. Second." },
+    ]);
+  });
+
+  it("handles unclosed <think>, empty <think></think>, and immediate flushing of non-<think> tags", async () => {
+    async function collectChunks(payloads: string[]) {
+      async function* gen() {
+        for (const data of payloads) yield { data };
+      }
+      const out = [];
+      for await (const chunk of adapter.translateStream(gen(), "compat")) {
+        out.push(chunk);
+      }
+      return out;
+    }
+
+    // Unclosed <think> with partial closing tag at stream end flushes everything as thinking-delta.
+    const unclosed = await collectChunks([
+      '{"choices":[{"delta":{"content":"<think>\\nTruncated thought</th"},"finish_reason":"length"}]}',
+      "[DONE]",
+    ]);
+    expect(unclosed).toEqual([
+      { type: "thinking-delta", index: 0, text: "Truncated thought" },
+      { type: "thinking-delta", index: 0, text: "</th" },
+      { type: "finish", reason: "length" },
+    ]);
+
+    // Empty <think></think> at EOF finishes cleanly without emitting empty thinking/text blocks or throwing 0-token error.
+    const emptyThinkOnly = await collectChunks([
+      '{"choices":[{"delta":{"content":"<think></think>"},"finish_reason":"stop"}]}',
+      "[DONE]",
+    ]);
+    expect(emptyThinkOnly).toEqual([{ type: "finish", reason: "stop" }]);
+
+    // Empty <think></think> followed by prose emits only text-delta.
+    const emptyThinkWithProse = await collectChunks([
+      '{"choices":[{"delta":{"content":"<think></think>Hello!"},"finish_reason":"stop"}]}',
+      "[DONE]",
+    ]);
+    expect(emptyThinkWithProse).toEqual([
+      { type: "text-delta", index: 0, text: "Hello!" },
+      { type: "finish", reason: "stop" },
+    ]);
+
+    // Non-<think> tags (<div>, <table, <thinking>) flush immediately on the diverging chunk, not buffered until EOF.
+    for (const sample of ["<div>card</div>", "<table border='1'>", "<thinking>not think</thinking>", "  indented", "a < b"]) {
+      const stepLog: string[] = [];
+      async function* trackedEvents() {
+        stepLog.push("yield-1");
+        yield { data: JSON.stringify({ choices: [{ delta: { content: sample } }] }) };
+        stepLog.push("yield-2");
+        yield { data: JSON.stringify({ choices: [{ delta: { content: "!" }, finish_reason: "stop" }] }) };
+        yield { data: "[DONE]" };
+      }
+      for await (const chunk of adapter.translateStream(trackedEvents(), "compat")) {
+        if (chunk.type === "text-delta") stepLog.push(`text:${chunk.text}`);
+      }
+      expect(stepLog).toEqual(["yield-1", `text:${sample}`, "yield-2", "text:!"]);
+    }
+  });
+
+  it("translates structured delta.content arrays and choice.message fallback without duplicating streamed deltas", async () => {
+    const { ctx, server } = await setup();
+
+    // Structured delta.content array with thinking, reasoning, text, output_text, and bare strings.
+    server.reply({
+      sse: [
+        JSON.stringify({
+          choices: [{
+            delta: {
+              content: [
+                { type: "thinking", thinking: "Step A. " },
+                { type: "reasoning", text: "Step B." },
+                { type: "text", text: "Hello " },
+                { type: "output_text", text: "structured " },
+                "world!",
+              ],
+            },
+            finish_reason: "stop",
+          }],
+        }).replace(/^/, "data: "),
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const structured = await assemble(ctx.llm.stream(request));
+    expect(structured.message.content).toEqual([
+      { type: "thinking", text: "Step A. Step B." },
+      { type: "text", text: "Hello structured world!" },
+    ]);
+
+    // Buffered SSE relay returning choice.message with empty/missing choice.delta when nothing was emitted yet.
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{},"message":{"role":"assistant","content":"<think>Buffered plan</think>\\nBuffered answer","tool_calls":[{"id":"call_buf","type":"function","function":{"name":"ls","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const buffered = await assemble(ctx.llm.stream(request));
+    expect(buffered.reason).toBe("tool-use");
+    expect(buffered.message.content).toEqual([
+      { type: "thinking", text: "Buffered plan" },
+      { type: "text", text: "Buffered answer" },
+      { type: "tool-call", id: "call_buf", name: "ls", arguments: {} },
+    ]);
+
+    // Streaming relay that also echoes full choice.message on the final chunk must NOT duplicate content.
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{"content":"Once only."},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{},"message":{"role":"assistant","content":"Once only."},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const nonDuplicated = await assemble(ctx.llm.stream(request));
+    expect(nonDuplicated.message.content).toEqual([{ type: "text", text: "Once only." }]);
+  });
+
+  it("holds tool-call-start across multi-chunk tool_calls when function.name or id arrives after chunk 0", async () => {
+    const { ctx, server } = await setup();
+
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"","arguments":""}},{"index":1,"id":"call_2","type":"function","function":{"name":"","arguments":""}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":""}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"name":"ls","arguments":"{}"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\":\\"a.ts\\"}"}}]},"finish_reason":"tool_calls"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const res = await assemble(ctx.llm.stream(request));
+    expect(res.reason).toBe("tool-use");
+    expect(res.message.content).toEqual([
+      { type: "tool-call", id: "call_1", name: "read", arguments: { path: "a.ts" } },
+      { type: "tool-call", id: "call_2", name: "ls", arguments: {} },
+    ]);
+
+    // Also flushes pending tool-call-start before tool-call-delta or finish even if function.name never arrives.
+    async function* namelessToolEvents() {
+      yield { data: '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_nameless","function":{"name":"","arguments":""}}]}}]}' };
+      yield { data: '{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}' };
+      yield { data: "[DONE]" };
+    }
+    const namelessChunks = [];
+    for await (const chunk of adapter.translateStream(namelessToolEvents(), "compat")) {
+      namelessChunks.push(chunk);
+    }
+    expect(namelessChunks).toEqual([
+      { type: "tool-call-start", index: 0, id: "call_nameless", name: "" },
+      { type: "finish", reason: "tool-use" },
+    ]);
+  });
+
+  it("preserves intra-turn reasoning_content when continuation reminders attach to tool-result without adding a user turn", () => {
+    const body = adapter.buildRequestBody(
+      {
+        ...request,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "analyze repo" }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", text: "inspecting package.json first" },
+              { type: "tool-call", id: "call_read_pkg", name: "read", arguments: { path: "package.json" } },
+            ],
+          },
+          {
+            role: "tool-result",
+            callId: "call_read_pkg",
+            content: [
+              { type: "text", text: "{\"name\":\"demo\"}" },
+              { type: "text", text: "<system-reminder>Please provide your response.</system-reminder>" },
+            ],
+            isError: false,
+          },
+          {
+            role: "assistant",
+            content: [{ type: "thinking", text: "thinking-only empty turn" }],
+          },
+        ],
+      },
+      { id: "compat", baseUrl: "http://localhost/v1" },
+    );
+
+    expect(body.messages).toEqual([
+      { role: "system", content: "Be brief." },
+      { role: "user", content: "analyze repo" },
+      {
+        role: "assistant",
+        content: null,
+        reasoning_content: "inspecting package.json first",
+        tool_calls: [{ id: "call_read_pkg", type: "function", function: { name: "read", arguments: "{\"path\":\"package.json\"}" } }],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call_read_pkg",
+        content: "{\"name\":\"demo\"}\n<system-reminder>Please provide your response.</system-reminder>",
+      },
+    ]);
+  });
+
+  it("caches discovered maxOutputTokens from listModels() as stream() fallback while letting configured maxOutputTokens win", async () => {
+    const { ctx, server } = await setup({
+      models: [
+        { id: "configured-override", maxOutputTokens: 12_000 },
+        { id: "configured-without-limit", contextWindow: 128_000 },
+      ],
+    });
+
+    server.reply({
+      status: 200,
+      json: {
+        object: "list",
+        data: [
+          { id: "discovered-completion", max_completion_tokens: 65_536 },
+          { id: "configured-without-limit", max_output_tokens: 16_384 },
+          { id: "configured-override", top_provider: { max_completion_tokens: 64_000 } },
+        ],
+      },
+    });
+    await ctx.llm.listModels("compat");
+
+    const baseReq = {
+      provider: "compat",
+      messages: [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }] }],
+    };
+
+    // Unconfigured model uses max_completion_tokens discovered from /models.
+    server.reply({ sse: fixture("reasoning-text.sse") });
+    await assemble(ctx.llm.stream({ ...baseReq, model: "discovered-completion" }));
+    expect(server.requests[1]?.body).toMatchObject({ model: "discovered-completion", max_tokens: 65_536 });
+
+    // Configured model omitting maxOutputTokens falls back to discovered max_output_tokens.
+    server.reply({ sse: fixture("reasoning-text.sse") });
+    await assemble(ctx.llm.stream({ ...baseReq, model: "configured-without-limit" }));
+    expect(server.requests[2]?.body).toMatchObject({ model: "configured-without-limit", max_tokens: 16_384 });
+
+    // Explicit provider.models maxOutputTokens still wins over discovered value.
+    server.reply({ sse: fixture("reasoning-text.sse") });
+    await assemble(ctx.llm.stream({ ...baseReq, model: "configured-override" }));
+    expect(server.requests[3]?.body).toMatchObject({ model: "configured-override", max_tokens: 12_000 });
+  });
 });

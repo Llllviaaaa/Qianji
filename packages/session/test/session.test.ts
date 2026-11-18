@@ -14,9 +14,11 @@ import {
   deriveState,
   estimateEventTokens,
   forkEvents,
+  hasVisibleProse,
   sessionMarkdown,
   settledSeq,
   slidingCompactionPoint,
+  stripLeadingInlineThink,
   summarize,
   uuidv7,
   type SessionEvent,
@@ -709,5 +711,91 @@ describe("meta text blocks (slash command separation)", () => {
       ev("user", { content: text("RealSecondTurnMessage") }),
     ]);
     expect(summarize(header, emptyNonMetaThenReal).firstMessage).toBe("RealSecondTurnMessage");
+  });
+});
+
+describe("inline <think> visibility and intra-turn tool-result continuations", () => {
+  it("strips leading closed, consecutive, and unclosed <think> blocks without touching normal tags", () => {
+    expect(stripLeadingInlineThink("<think>plan</think>")).toBe("");
+    expect(stripLeadingInlineThink("  \n<THINK>\nstep 1\n</THINK>\n <think>step 2</think>  ")).toBe("");
+    expect(stripLeadingInlineThink("<think>unclosed reasoning at stream end")).toBe("");
+    expect(stripLeadingInlineThink("<think>step 1</think>\nFinal visible answer.")).toBe("Final visible answer.");
+    expect(stripLeadingInlineThink("<thinking>not an inline think tag</thinking>")).toBe("<thinking>not an inline think tag</thinking>");
+    expect(stripLeadingInlineThink("<div>hello</div>")).toBe("<div>hello</div>");
+
+    expect(hasVisibleProse("<think>only thoughts</think>")).toBe(false);
+    expect(hasVisibleProse("<think>unclosed thoughts")).toBe(false);
+    expect(hasVisibleProse("<think></think>   ")).toBe(false);
+    expect(hasVisibleProse("<think>thought</think>Visible summary")).toBe(true);
+    expect(hasVisibleProse("<thinking>xml</thinking>")).toBe(true);
+    expect(hasVisibleProse("a < b")).toBe(true);
+  });
+
+  it("skips inline <think>-only non-tool turns in deriveState while keeping visible prose and tool calls", () => {
+    const events = log(() => [
+      ev("user", { content: text("explain") }),
+      assistant(text("<think>closed inline thought only</think>")),
+      assistant(text("  <think>first</think>\n<think>unclosed second thought")),
+      assistant([
+        { type: "text", text: "<think>planning tool</think>" },
+        { type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } },
+      ]),
+      ev("tool-result", { callId: "c1", name: "read", content: text("contents"), isError: false }),
+      assistant(text("<think>synthesizing</think>\nHere is the explanation.")),
+    ]);
+
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text("explain") },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "<think>planning tool</think>" },
+          { type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } },
+        ],
+      },
+      { role: "tool-result", callId: "c1", content: text("contents"), isError: false },
+      { role: "assistant", content: text("<think>synthesizing</think>\nHere is the explanation.") },
+    ]);
+  });
+
+  it("attaches CONTINUATION_NAMESPACE nudges after tool-result onto the tool-result message instead of adding a trailing user message", () => {
+    const events = log(() => [
+      ev("user", { content: text("fix issue") }),
+      assistant([
+        { type: "thinking", text: "Need to inspect file first." },
+        { type: "tool-call", id: "c1", name: "read", arguments: { path: "index.ts" } },
+      ]),
+      ev("tool-result", { callId: "c1", name: "read", content: text("export const x = 1;"), isError: false }),
+      // Post-tool turn emits only inline <think> (or native thinking) with no tool call -> AgentLoop appends continuation
+      assistant(text("<think>Hmm, let me think more...</think>")),
+      ev("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "empty", text: "Provide an answer or call the next tool." } }),
+      // Even a second consecutive empty retry stays attached to the tool-result without creating a synthetic user turn
+      assistant([{ type: "thinking", text: "Still thinking..." }]),
+      ev("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "empty", text: "Continue now." } }),
+    ]);
+
+    const { messages } = deriveState(events);
+    expect(messages).toEqual([
+      { role: "user", content: text("fix issue") },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "Need to inspect file first." },
+          { type: "tool-call", id: "c1", name: "read", arguments: { path: "index.ts" } },
+        ],
+      },
+      {
+        role: "tool-result",
+        callId: "c1",
+        content: [
+          { type: "text", text: "export const x = 1;" },
+          { type: "text", text: "\n\nProvide an answer or call the next tool." },
+          { type: "text", text: "\n\nContinue now." },
+        ],
+        isError: false,
+      },
+    ]);
+    // Critical for OpenAI-compat reasoning_content preservation: lastUserIndex remains 0!
+    expect(messages.findLastIndex((m) => m.role === "user")).toBe(0);
   });
 });

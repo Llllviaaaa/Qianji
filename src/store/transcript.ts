@@ -71,7 +71,7 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
             steeringQueue: [],
             followUpQueue: [],
             extensionRequest: null,
-            messages: settleStoppedTurn(state.messages),
+            messages: settleStoppedTurn(state.messages, Date.now(), event.outcome),
           }));
           if ((ctx.managedFollowUpsByRuntime.get(runtimeId) ?? []).length === 0) {
             ctx.raise(completionNotification(runtimeId, {
