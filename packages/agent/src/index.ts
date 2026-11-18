@@ -83,6 +83,8 @@ export interface Agents {
   /** Summarize the older part of the context. Throws AgentBusyError while running. */
   compact(session: Session, signal?: AbortSignal): Promise<EventOf<"compaction"> | undefined>;
   status(sessionId: string): AgentStatus;
+  /** Whether any session currently has an active run in progress. */
+  isBusy?(): boolean;
   /** Resolves when the session has no run. */
   idle(sessionId: string): Promise<void>;
 }

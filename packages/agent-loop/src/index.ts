@@ -163,6 +163,10 @@ export class AgentLoop extends Service implements Agents {
     };
   }
 
+  isBusy(): boolean {
+    return this.runs.size > 0;
+  }
+
   async idle(sessionId: string): Promise<void> {
     await this.runs.get(sessionId)?.done;
   }

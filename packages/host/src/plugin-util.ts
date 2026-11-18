@@ -37,15 +37,37 @@ export function flushImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+const IGNORED_WATCH_DIRS = new Set([".git", "node_modules", ".qianji", ".cache", "logs", "coverage", ".turbo"]);
+const IGNORED_WATCH_SUFFIXES = [
+  "~",
+  ".tmp",
+  ".swp",
+  ".swo",
+  ".bak",
+  ".lock",
+  ".pid",
+  ".log",
+  ".tsbuildinfo",
+  ".sqlite",
+  ".sqlite3",
+  ".sqlite-wal",
+  ".sqlite-shm",
+  ".sqlite-journal",
+  ".db",
+  ".db-wal",
+  ".db-shm",
+  ".db-journal",
+] as const;
+
 export function shouldIgnoreWatchedPath(filename: string | null | undefined): boolean {
   if (filename == null || filename === "") return false;
-  const normalized = filename.replace(/\\/g, "/");
-  return normalized === ".git"
-    || normalized.startsWith(".git/")
-    || normalized.startsWith("node_modules/")
-    || normalized === "node_modules"
-    || normalized.endsWith(".tmp")
-    || normalized.endsWith("~");
+  const normalized = filename.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (normalized === "") return false;
+  const lowerSegments = normalized.split("/").map((segment) => segment.toLowerCase());
+  if (lowerSegments.some((segment) => IGNORED_WATCH_DIRS.has(segment))) return true;
+  const base = lowerSegments[lowerSegments.length - 1] ?? "";
+  if (base === ".ds_store" || base === "thumbs.db") return true;
+  return IGNORED_WATCH_SUFFIXES.some((suffix) => base.endsWith(suffix));
 }
 
 const fiberToPluginId = new WeakMap<object, string>();
