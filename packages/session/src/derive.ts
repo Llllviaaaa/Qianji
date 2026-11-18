@@ -279,7 +279,9 @@ export function summarize(header: SessionHeader, events: readonly SessionEvent[]
   if (reasoningTokens > 0) usage.reasoningTokens = reasoningTokens;
   for (const event of currentBranch(events)) {
     if (event.type === "user" && firstMessage === undefined) {
-      const text = event.data.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(" ").replace(/\s+/g, " ").trim();
+      const nonMeta = event.data.content.flatMap((block) => (block.type === "text" && block.meta !== true ? [block.text] : []));
+      const source = nonMeta.length > 0 ? nonMeta : event.data.content.flatMap((block) => (block.type === "text" ? [block.text] : []));
+      const text = source.join(" ").replace(/\s+/g, " ").trim();
       if (text !== "") firstMessage = text.slice(0, FIRST_MESSAGE_CHARS);
     } else if (event.type === "label") {
       if (event.data.title !== undefined) title = event.data.title;
@@ -484,7 +486,10 @@ export function sessionMarkdown(events: readonly SessionEvent[]): string {
   let output = "# Qianji conversation\n\n";
   for (const event of currentBranch(events)) {
     if (event.type !== "user" && event.type !== "assistant") continue;
-    const text = event.data.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("").trim();
+    const blocks = event.type === "user"
+      ? event.data.content.flatMap((block) => (block.type === "text" && block.meta !== true ? [block.text] : []))
+      : event.data.content.flatMap((block) => (block.type === "text" ? [block.text] : []));
+    const text = blocks.join("").trim();
     if (text !== "") output += `## ${event.type === "user" ? "User" : "Assistant"}\n\n${text}\n\n`;
   }
   return output;

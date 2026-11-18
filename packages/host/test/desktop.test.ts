@@ -8,8 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import { afterEach, describe, expect, it } from "vitest";
-import { Credentials, LlmService } from "@qianji/llm";
-import { Sessions } from "@qianji/session";
+import { Credentials, LlmService, type LlmRequest } from "@qianji/llm";
+import { buildRequestBody as buildAnthropicBody } from "@qianji/llm-anthropic";
+import { buildRequestBody as buildGeminiBody } from "@qianji/llm-gemini";
+import { buildRequestBody as buildOpenAiCompatBody } from "@qianji/llm-openai-compat";
+import { buildRequestBody as buildOpenAiResponsesBody } from "@qianji/llm-openai-responses";
+import { Sessions, sessionMarkdown, type SessionEvent } from "@qianji/session";
+import { extractSessionSearchBody } from "@qianji/session-jsonl";
 import { SystemPrompt } from "@qianji/system-prompt";
 import { Tools, textOutput } from "@qianji/tools";
 import { Ui } from "@qianji/ui";
@@ -21,6 +26,7 @@ import { readPluginsStore, updatePluginsStore } from "../src/plugin-store.ts";
 import { readDefaultModel } from "../src/providers.ts";
 import { ReloadablePlugins } from "../src/reloadable.ts";
 import { fileSecretResolver, readSecretFile, writeSecretFile, type SecretCodec } from "../src/secrets.ts";
+import { formatDroppedEvent, toUserContent } from "../src/sessions-rpc.ts";
 
 let dir = "";
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -251,5 +257,78 @@ describe("scheduled tasks on the harness", () => {
     writeFileSync(join(configDir, "scheduled-tasks.json"), "[]");
     expect(applyDesktopMessage(dataDir, { settings: {}, configDir })).toEqual([]);
     expect(JSON.parse(readFileSync(join(dataDir, "schedules.json"), "utf8"))).toHaveLength(1);
+  });
+});
+
+describe("meta prompt RPC validation, dropped-branch summary, and adapter serialization", () => {
+  it("preserves meta: true in toUserContent while omitting false/missing meta and rejecting invalid blocks", () => {
+    expect(toUserContent("hello")).toEqual([{ type: "text", text: "hello" }]);
+    expect(
+      toUserContent([
+        { type: "text", text: "/goal fix all tests" },
+        { type: "text", text: "Expanded Goal Template", meta: true },
+        { type: "text", text: "Explicit false", meta: false },
+        { type: "image", mimeType: "image/png", data: "YWJj" },
+      ]),
+    ).toEqual([
+      { type: "text", text: "/goal fix all tests" },
+      { type: "text", text: "Expanded Goal Template", meta: true },
+      { type: "text", text: "Explicit false" },
+      { type: "image", mimeType: "image/png", data: "YWJj" },
+    ]);
+    expect(() => toUserContent([])).toThrow("content must be a string or a non-empty list of blocks");
+    expect(() => toUserContent([{ type: "text", text: 123 }])).toThrow("content[0] must be a text or image block");
+  });
+
+  it("excludes meta: true blocks from formatDroppedEvent, session summaries, markdown export, and FTS body while sending them to LLM adapters", async () => {
+    const content = toUserContent([
+      { type: "text", text: "/review src/App.tsx" },
+      { type: "text", text: "HiddenReviewPromptTemplateToken555", meta: true },
+    ]);
+    const userEvent: SessionEvent = {
+      seq: 1,
+      ts: "2026-06-01T00:00:00.000Z",
+      type: "user",
+      data: { content },
+    };
+    expect(formatDroppedEvent(userEvent)).toBe("[user]: /review src/App.tsx");
+
+    const metaOnlyDropped: SessionEvent = {
+      seq: 2,
+      ts: "2026-06-01T00:00:01.000Z",
+      type: "user",
+      data: { content: [{ type: "text", text: "OnlyHiddenMeta", meta: true }] },
+    };
+    expect(formatDroppedEvent(metaOnlyDropped)).toBeUndefined();
+
+    const ctx = new Context();
+    await ctx.plugin(Sessions);
+    const session = ctx.sessions.create({ cwd: "/repo" });
+    session.append("user", { content });
+
+    expect(session.state().messages).toEqual([{ role: "user", content }]);
+    expect(session.summary().firstMessage).toBe("/review src/App.tsx");
+    expect(sessionMarkdown(session.events)).not.toContain("HiddenReviewPromptTemplateToken555");
+    expect(extractSessionSearchBody(session.events)).toBe("/review src/App.tsx");
+    expect(await ctx.sessions.search("HiddenReviewPromptTemplateToken555")).toEqual([]);
+    expect((await ctx.sessions.search("App.tsx")).map((h) => h.session.id)).toEqual([session.id]);
+
+    // Verify all 4 LLM wire adapters include both texts for the model without leaking unknown `meta` wire fields.
+    const req: LlmRequest = {
+      provider: "p",
+      model: "claude-sonnet-4-6",
+      messages: session.state().messages,
+    };
+    for (const serialized of [
+      JSON.stringify(buildAnthropicBody(req)),
+      JSON.stringify(buildGeminiBody({ ...req, model: "gemini-2.5-pro" })),
+      JSON.stringify(buildOpenAiCompatBody({ ...req, model: "gpt-4o" }, { id: "p", baseUrl: "https://api.openai.com/v1" })),
+      JSON.stringify(buildOpenAiResponsesBody({ ...req, model: "gpt-5" })),
+    ]) {
+      expect(serialized).toContain("/review src/App.tsx");
+      expect(serialized).toContain("HiddenReviewPromptTemplateToken555");
+      expect(serialized).not.toContain('"meta"');
+    }
+    await ctx.fiber.dispose();
   });
 });

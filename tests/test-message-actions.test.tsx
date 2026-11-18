@@ -300,22 +300,39 @@ test("message actions", async () => {
   assert.match(verboseLive, /Shown in verbose mode/);
   assert.match(words(verboseLive), /读取 src\/store\.ts/);
 
-  const goalOnly = renderToStaticMarkup(createElement(Message, {
+  const getGoalOnly = renderToStaticMarkup(createElement(Message, {
     message: {
-      id: "goal-only-message",
+      id: "goal-get-only-message",
       timestamp: 0,
       role: "assistant",
       content: "",
       toolCalls: [{
-        id: "goal-call",
-        name: "functions.create_goal",
-        args: { objective: "Keep goal state outside the transcript" },
+        id: "goal-get-call",
+        name: "functions.get_goal",
+        args: {},
         running: false,
       }],
     },
   }));
 
-  assert.equal(goalOnly, "");
+  assert.equal(getGoalOnly, "");
+
+  const createGoalMilestone = renderToStaticMarkup(createElement(Message, {
+    message: {
+      id: "goal-create-message",
+      timestamp: 0,
+      role: "assistant",
+      content: "",
+      toolCalls: [{
+        id: "goal-create-call",
+        name: "functions.create_goal",
+        args: { objective: "Keep goal milestones visible in process" },
+        running: false,
+      }],
+    },
+  }));
+
+  assert.match(createGoalMilestone, /设定长程目标/);
 
   assert.equal(isLiveAssistantWork(true, "", [{ running: false }]), true);
   assert.equal(isLiveAssistantWork(true, "Here is the answer.", [{ running: false }]), false);

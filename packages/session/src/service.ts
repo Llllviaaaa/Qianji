@@ -405,7 +405,11 @@ export class Sessions extends Service {
       const loaded = await this.get(summary.id);
       const bodyParts: string[] = [];
       for (const ev of currentBranch(loaded?.events ?? [])) {
-        if (ev.type === "user" || ev.type === "assistant") {
+        if (ev.type === "user") {
+          for (const b of ev.data.content) {
+            if (b.type === "text" && b.meta !== true && b.text.trim() !== "") bodyParts.push(b.text);
+          }
+        } else if (ev.type === "assistant") {
           for (const b of ev.data.content) {
             if (b.type === "text" && b.text.trim() !== "") bodyParts.push(b.text);
           }

@@ -6,7 +6,7 @@ import { requestOpenSettings } from "../lib/shellBridge";
 import { appendManagedQueue, insertManagedQueueItem, moveManagedQueueItem, removeManagedQueueItem } from "../lib/managedQueue";
 import { completionNotification, isSilentUiRequest, uiRequestNotification } from "../lib/eventNotifications";
 import { agentBrowserFromResult, computerFromResult, isGrokBrowserTool, isGrokComputerTool } from "../lib/toolPanels";
-import { completeAssistant, endToolCall, interruptTurn, progressToolCall, replaceOrAppend, resetStreamingAssistant, settleStoppedTurn, startAssistant, startToolCall } from "../lib/transcript";
+import { appendNotice, completeAssistant, endToolCall, interruptTurn, progressToolCall, replaceOrAppend, resetStreamingAssistant, settleStoppedTurn, startAssistant, startToolCall } from "../lib/transcript";
 import type { ManagedQueuedMessage } from "../types";
 import type { GetState, SetState, StoreContext } from "./context";
 import type { TranscriptSlice } from "./types";
@@ -92,6 +92,11 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
           set((state) => ({ messages: replaceOrAppend(state.messages, optimistic?.userMessageId, event.message) }));
           return;
         }
+        case "notice":
+          ctx.flushAssistantDelta();
+          if (event.message.noticeKind === "continuation") ctx.activeTurnStartedAt = Date.now();
+          set((state) => ({ messages: appendNotice(state.messages, event.message) }));
+          return;
         case "assistant-start": {
           ctx.clearPendingAssistantUpdate(runtimeId);
           // The composer's placeholder reply, if there is one, is the reply being streamed.
@@ -220,7 +225,21 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
               { cwd: get().cwd, sessionFile: get().sessionFile },
             );
             if (handledByClient) return true;
-            const commandResult = await harnessRuntimes.runCommand(runtimeId, slash.name, slash.rawArgs);
+            const needsSession =
+              slash.name === "goal"
+              && slash.rawArgs.trim() !== ""
+              && !["status", "clear", "reset", "done", "complete"].includes(slash.rawArgs.trim().toLowerCase());
+            const commandResult = await harnessRuntimes.runCommand(runtimeId, slash.name, slash.rawArgs, { ensureSession: needsSession });
+            if (needsSession) {
+              ctx.recordStartedSession(runtimeId);
+              const stateInfo = await harnessRuntimes.state(runtimeId).catch(() => null);
+              if (stateInfo?.sessionId && stateInfo.sessionFile) {
+                ctx.updateRuntime(runtimeId, { sessionFile: stateInfo.sessionFile });
+                if (get().runtimeId === runtimeId) {
+                  set({ sessionId: stateInfo.sessionId, sessionFile: stateInfo.sessionFile });
+                }
+              }
+            }
             if (commandResult.handled) {
               if (commandResult.clientAction === "clear") {
                 await get().newSession();
@@ -231,7 +250,7 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
                 return true;
               }
               if (commandResult.prompt !== undefined && commandResult.prompt.trim() !== "") {
-                effectivePayload = { message: commandResult.prompt, images: [] };
+                effectivePayload = { message: payload.message, metaPrompt: commandResult.prompt, images: payload.images };
               } else {
                 const now = Date.now();
                 const nonce = `${now}-${Math.random().toString(36).slice(2, 7)}`;

@@ -145,9 +145,12 @@ export function summarizeProcessGroup(thinking: number, calls: UiToolCall[]): st
       case "browser":
         bucket("web", (count) => `访问网页 ${count} 次`, call.id);
         break;
-      case "plan":
-        bucket("plan", () => "更新计划", call.id);
+      case "plan": {
+        const goalTitle = presented.title;
+        if (goalTitle !== undefined) bucket(`goal:${goalTitle}`, () => goalTitle, call.id);
+        else bucket("plan", () => "更新计划", call.id);
         break;
+      }
       default:
         bucket("other", (count) => `调用 ${count} 次工具`, call.id);
     }

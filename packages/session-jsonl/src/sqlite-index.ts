@@ -58,7 +58,7 @@ export function extractSessionSearchBody(events: readonly SessionEvent[]): strin
   for (const event of currentBranch(events)) {
     if (event.type === "user") {
       for (const block of event.data.content) {
-        if (block.type === "text" && block.text.trim() !== "") parts.push(block.text);
+        if (block.type === "text" && block.meta !== true && block.text.trim() !== "") parts.push(block.text);
       }
     } else if (event.type === "assistant") {
       for (const block of event.data.content) {

@@ -357,8 +357,9 @@ export class HarnessRuntimes {
   }
 
   /** Run a leading `/command` on the Host before deciding whether to call the model. */
-  async runCommand(runtimeId: string, name: string, args: string): Promise<CommandRunResult> {
+  async runCommand(runtimeId: string, name: string, args: string, options?: { ensureSession?: boolean }): Promise<CommandRunResult> {
     const runtime = this.runtime(runtimeId);
+    if (options?.ensureSession === true) await this.ensureSession(runtime);
     return this.call<CommandRunResult>("command.run", {
       name,
       args,
@@ -375,7 +376,8 @@ export class HarnessRuntimes {
   async tree(runtimeId: string): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
     const runtime = this.runtime(runtimeId);
     if (runtime.sessionId === undefined) return { tree: [], leafId: null };
-    return sessionTreeOf(await this.readEvents(runtime.sessionId));
+    const events = (await this.readEvents(runtime.sessionId)).map((ev) => (ev.type === "user" && Array.isArray((ev.data as { content?: unknown }).content) ? { ...ev, data: { ...(ev.data as object), content: ((ev.data as { content: Array<{ meta?: boolean }> }).content).filter((b) => b?.meta !== true) } } : ev));
+    return sessionTreeOf(events);
   }
 
   /**

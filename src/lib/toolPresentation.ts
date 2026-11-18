@@ -32,6 +32,8 @@ export interface ToolSearchHit {
 export interface ToolPresentation {
   kind: ToolKind;
   heading: string;
+  title?: string;
+  detail?: string;
   path?: string;
   command?: string;
   inputKind?: "command" | "script";
@@ -309,9 +311,19 @@ export function classifyToolKind(name: string): ToolKind {
     || normalized === "ctx_search"
   ) return "search";
   if (normalized.includes("web_search") || normalized.includes("search_web")) return "web-search";
-  if (normalized === "update_plan") return "plan";
+  if (normalized === "update_plan" || normalized === "create_goal" || normalized === "update_goal") return "plan";
   if (normalized === "render_ui" || normalized === "update_ui") return "ui";
   return "other";
+}
+
+function goalMilestoneCopy(normalized: string, args: Record<string, unknown>): { title: string; detail?: string } | null {
+  if (normalized === "create_goal") return { title: "设定长程目标", detail: stringArg(args, ["objective", "goal"]) };
+  if (normalized !== "update_goal") return null;
+  const status = stringArg(args, ["status"])?.toLowerCase();
+  const notes = stringArg(args, ["notes"]);
+  if (status === "complete") return { title: "目标已达成", detail: notes };
+  if (status === "blocked") return { title: "目标受阻", detail: notes };
+  return { title: "更新目标进展", detail: notes ?? stringArg(args, ["status"]) };
 }
 
 function browserHeading(name: string, url?: string): string {
@@ -411,6 +423,7 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
             : resultText;
   const preview = previewSource ? truncatePreview(previewSource) : undefined;
   const plan = kind === "plan" ? planFromToolCall(call) ?? undefined : undefined;
+  const goalCopy = goalMilestoneCopy(normalizedToolName(call.name), call.args);
   const uiTitle = kind === "ui" ? stringArg(call.args, ["title", "id"]) : undefined;
 
   let heading: string;
@@ -434,7 +447,9 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
   } else if (kind === "computer") {
     heading = computerHeading(call.name);
   } else if (kind === "plan") {
-    heading = plan ? `计划 ${plan.completed}/${plan.steps.length}` : "更新计划";
+    heading = goalCopy !== null
+      ? (goalCopy.detail ? `${goalCopy.title} · ${clipHeading(goalCopy.detail)}` : goalCopy.title)
+      : (plan ? `计划 ${plan.completed}/${plan.steps.length}` : "更新计划");
   } else if (kind === "ui") {
     const base = normalizedToolName(call.name) === "update_ui" ? "更新交互组件" : "渲染交互组件";
     heading = uiTitle ? `${base} · ${clipHeading(uiTitle, 48)}` : base;
@@ -465,6 +480,7 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
   return {
     kind,
     heading,
+    ...(goalCopy !== null ? { title: goalCopy.title, ...(goalCopy.detail !== undefined ? { detail: goalCopy.detail } : {}) } : {}),
     path,
     command,
     inputKind: kind === "shell" ? shellInputKind(command, call.args) : undefined,

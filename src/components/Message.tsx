@@ -1,5 +1,5 @@
 import { memo, useState, type ReactNode } from "react";
-import { isGoalToolCall } from "../lib/activeGoal";
+import { goalToolKind } from "../lib/activeGoal";
 import type { TaskPlanSummary } from "../lib/envSources";
 import type { IntelligentUiVersionGroup, TurnWidgetRef } from "../lib/intelligentUi";
 import { extractInlineThinking, foldThinking } from "../lib/thinkingDisplay";
@@ -125,10 +125,10 @@ export const Message = memo(function Message({
   const working = message.role === "assistant" && (message.isStreaming || (isLastAssistant && globalStreaming));
   const normalizedAssistant = extractInlineThinking(message.content, message.thinking);
   const assistantContent = normalizedAssistant.content;
-  const toolCalls = (message.toolCalls ?? []).filter((call) => !isGoalToolCall(call));
+  const toolCalls = (message.toolCalls ?? []).filter((call) => goalToolKind(call.name) !== "get");
   const thinkingText = showThinking ? foldThinking(normalizedAssistant.thinking, assistantContent) : "";
   const steps: WorkStep[] = message.workSteps
-    ? message.workSteps.filter((step) => (step.kind === "tool" ? !isGoalToolCall(step.call) : step.kind !== "thinking" || showThinking))
+    ? message.workSteps.filter((step) => (step.kind === "tool" ? goalToolKind(step.call.name) !== "get" : step.kind !== "thinking" || showThinking))
     : [
       ...(thinkingText ? [{ kind: "thinking" as const, text: thinkingText }] : []),
       ...toolCalls.map((call) => ({ kind: "tool" as const, call })),

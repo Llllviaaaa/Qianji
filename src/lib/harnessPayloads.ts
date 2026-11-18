@@ -6,9 +6,10 @@
 import type { UiRequestNotification } from "@qianji/protocol";
 import type { AttachmentPayload, ExtensionUIRequest } from "../types";
 
-/** A prompt as the composer builds it: its text and attached images. */
+/** A prompt as the composer builds it: its visible text, optional hidden meta prompt, and attached images. */
 export interface PromptInput {
   message: string;
+  metaPrompt?: string;
   images: Array<{ type?: "image"; data: string; mimeType: string }>;
 }
 
@@ -25,10 +26,14 @@ export function buildPromptPayload(text: string, attachments: AttachmentPayload[
   return { message, images };
 }
 
-/** A prompt as Host prompt content. */
-export function promptContent(input: PromptInput): Array<{ type: "text"; text: string } | { type: "image"; mimeType: string; data: string }> {
-  const content: Array<{ type: "text"; text: string } | { type: "image"; mimeType: string; data: string }> = [];
+/** A prompt as Host prompt content (`meta: true` blocks reach the LLM without appearing in user UI bubbles). */
+export function promptContent(
+  input: PromptInput,
+): Array<{ type: "text"; text: string; meta?: boolean } | { type: "image"; mimeType: string; data: string }> {
+  const content: Array<{ type: "text"; text: string; meta?: boolean } | { type: "image"; mimeType: string; data: string }> = [];
   if (input.message !== "") content.push({ type: "text", text: input.message });
+  const meta = input.metaPrompt?.trim();
+  if (meta !== undefined && meta !== "") content.push({ type: "text", text: meta, meta: true });
   for (const image of input.images) content.push({ type: "image", mimeType: image.mimeType, data: image.data });
   return content;
 }
