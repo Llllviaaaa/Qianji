@@ -41,6 +41,14 @@ This product includes software developed at Vetta (https://www.openvetta.com).
 - Copyright: 2026 DeepSeek
 - Used for: the transcript's structure and geometry — the user bubble, message icon actions and clocks, the turn-process divider, process groups, reasoning and tool disclosure rows, text shimmer, result cards and Markdown rhythm in `src/components/Message.tsx`, `src/components/ToolCall.tsx`, `src/components/TranscriptPrimitives.tsx`, `src/styles/skin-messages.css`, and the outline icon artwork in `src/components/DshIcons.tsx`.
 
+## picomatch
+
+- Package: `picomatch` (`vendor/picomatch`)
+- Upstream: https://github.com/micromatch/picomatch
+- License: MIT
+- Copyright: 2017-present Jon Schlinkert
+- Used for: build/test/lint glob matching via `vite`, `vitest`, `fdir`, and `tinyglobby` (vendored locally with the `CVE-2026-112366` / `GHSA-fc5q-39xc-vjpf` single-branch repeated extglob ReDoS fix while upstream `picomatch <= 4.0.7` remains unpatched on npm).
+
 ## Fonts
 
 - Inter (`@fontsource-variable/inter`) — SIL Open Font License 1.1, Copyright The Inter Project Authors

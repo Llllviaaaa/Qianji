@@ -20,6 +20,7 @@ import { activeSessionTitle } from "./lib/sessionTitle";
 import { nextTranscriptDensity, normalizeTranscriptDensity } from "./lib/transcriptDensity";
 import { useAppStore } from "./store";
 import { useSlices } from "./store/selectors";
+import { useWorkbenchLayoutStore } from "./stores/workbenchLayoutStore";
 import { useWorkbenchStore } from "./stores/workbenchStore";
 import { RegionErrorBoundary } from "./components/common/ErrorBoundary";
 import { WorkspaceFileOpenContext } from "./components/Markdown";
@@ -144,9 +145,8 @@ export default function App() {
 
   const showErrorToast = useCallback((msg: string) => useAppStore.getState().showToast(msg, "error"), []);
   const notify = useCallback((msg: string, tone: "info" | "error") => useAppStore.getState().showToast(msg, tone), []);
-  const toggleWorkspaceSidebar = useCallback(() => { setHubView(null); useWorkbenchStore.getState().toggleRight(); }, []);
-  const toggleBottomPanel = useCallback(() => useWorkbenchStore.getState().toggleBottom(), []);
-  const openBottomTerminal = useCallback(() => useWorkbenchStore.getState().openBottomTerminal(), []);
+  const toggleWorkspaceSidebar = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().toggleInspector(); }, []);
+  const toggleBottomPanel = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().toggleTerminalShortcutPanel(); }, []);
   const openSummary = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openSummary("overview"); }, []);
   const openDiagnostics = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openSummary("diagnostics"); }, []);
   const openReview = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openReview(); }, []);
@@ -255,7 +255,7 @@ export default function App() {
         exportConversationMarkdown={nav.exportConversationMarkdown} transcriptDensity={transcriptDensity}
         setTranscriptDensity={setTranscriptDensity} toggleWorkspaceSidebar={toggleWorkspaceSidebar}
         openBrowserAt={openBrowserAt} toggleBottomPanel={toggleBottomPanel} openSettingsPage={openSettingsPage}
-        openDiagnostics={openDiagnostics}
+        openDiagnostics={openDiagnostics} onBeforeWorkbenchOpen={() => setHubView(null)}
       />
       <div
         className="workspace-shell"
@@ -297,11 +297,8 @@ export default function App() {
                   archiveConversations={nav.archiveConversations} setSettingsOpen={setSettingsOpen} disconnect={store.disconnect}
                   reviewFileCount={reviewGit?.files.length ?? 0} gitDiffStats={gitDiffStats} openReview={openReview}
                   canOpenWorkspace={ws.canOpenWorkspace} gitPushing={actions.gitPushing} openCommitDialog={actions.openCommitDialog}
-                  pushCurrentBranch={actions.pushCurrentBranch} workspaceEditors={ws.workspaceEditors}
-                  preferredWorkspaceEditor={ws.preferredWorkspaceEditor} terminalApps={ws.terminalApps}
-                  openWorkspaceInPreferredApp={ws.openWorkspaceInPreferredApp} chooseWorkspaceEditor={ws.chooseWorkspaceEditor}
-                  openWorkspaceTerminalApp={ws.openWorkspaceTerminalApp} revealWorkspaceInExplorer={ws.revealWorkspaceInExplorer}
-                  openBottomTerminal={openBottomTerminal}
+                  pushCurrentBranch={actions.pushCurrentBranch} preferredWorkspaceEditor={ws.preferredWorkspaceEditor}
+                  openWorkspaceInPreferredApp={ws.openWorkspaceInPreferredApp}
                 />
                 <MainConversationStage
                   workspaceCwd={ws.workspaceCwd} cwd={cwd} draftWorkspace={draftWorkspace}
@@ -325,7 +322,7 @@ export default function App() {
                 <RightWorkbench
                   cwd={ws.workspaceCwd || cwd} sessionFile={sessionFile} width={workspacePanelWidth} git={reviewGit}
                   onRefreshGit={actions.refreshReviewGit} onRestoreFiles={actions.restoreGitFiles}
-                  onRequestReview={() => void actions.requestReview({ mode: "uncommitted" })}
+                  onRequestReview={(scope) => void actions.requestReview(scope)}
                   onAddToChat={(path) => void actions.addWorkspaceFileToChat(path)}
                   resize={{
                     onPointerDown: workspaceResize.beginResize, onKeyDown: workspaceResize.resizeWithKeyboard,

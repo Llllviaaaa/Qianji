@@ -1,28 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
-  Activity,
-  Bot,
   CheckCircle2,
   Circle,
   Clock,
-  Download,
-  FolderOpen,
-  ListChecks,
-  Plug,
-  RefreshCw,
-  TerminalSquare,
+  FileCode2,
+  FileText,
+  Folder,
+  Globe,
+  MessageSquare,
+  Monitor,
+  Puzzle,
 } from "lucide-react";
-import type { HostInfoResult, PlanGetResult } from "@qianji/protocol";
+import type { PlanGetResult } from "@qianji/protocol";
 import { agent } from "../../lib/agent";
+import { useClientContributions } from "../../lib/clientContributions";
 import {
   deriveSubagentActivities,
   deriveTaskOutputs,
   deriveTaskPlan,
-  summarizeSubagents,
 } from "../../lib/envSources";
-import { describeError } from "../../lib/errors";
 import {
   HARNESS_SESSION_PREFIX,
   harnessRuntimes,
@@ -30,36 +26,42 @@ import {
   isRpcMethodNotFound,
 } from "../../lib/harnessRuntime";
 import { useAppStore } from "../../store";
-import { useWorkbenchStore } from "../../stores/workbenchStore";
+import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchLayoutStore } from "../../stores/workbenchLayoutStore";
+import { previewKindForPath, useWorkbenchStore } from "../../stores/workbenchStore";
+import { WorkbenchContextCard } from "./WorkbenchContextCard";
 
 export interface TaskSummaryTabProps {
   cwd: string;
   sessionFile: string | null;
 }
 
-interface DiagnosticsLogsResult {
-  dir: string;
+function splitWorkspaceDisplay(cwd: string): { name: string; parent: string } {
+  const cleaned = cwd.replace(/[\\/]+$/, "");
+  if (!cleaned) return { name: "未选择工作区", parent: "" };
+  const parts = cleaned.split(/[\\/]/).filter(Boolean);
+  const name = parts.pop() ?? cleaned;
+  const sep = cleaned.includes("\\") ? "\\" : "/";
+  const parent = parts.length > 0 ? parts.join(sep) : "";
+  return { name, parent };
 }
 
-interface DiagnosticsExportResult {
-  path: string;
-  files: string[];
+function renderOutputGlyph(filePath: string) {
+  const kind = previewKindForPath(filePath);
+  if (kind === "html" || kind === "svg") return <Globe size={13} className="pid-wb-output-icon" />;
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  if (["ts", "tsx", "js", "jsx", "py", "rs", "css", "json", "vue"].includes(ext)) {
+    return <FileCode2 size={13} className="pid-wb-output-icon" />;
+  }
+  return <FileText size={13} className="pid-wb-output-icon" />;
 }
 
 export function TaskSummaryTab({ cwd, sessionFile }: TaskSummaryTabProps) {
   const messages = useAppStore((state) => state.messages);
-  const stats = useAppStore((state) => state.stats);
-  const logs = useAppStore((state) => state.hostLog);
-  const summaryFocus = useWorkbenchStore((state) => state.summaryFocus);
-  const diagnosticsRef = useRef<HTMLElement>(null);
-  const [logFilter, setLogFilter] = useState<"all" | "warn" | "error">("all");
-  const [exporting, setExporting] = useState(false);
-
-  useEffect(() => {
-    if (summaryFocus === "diagnostics") {
-      diagnosticsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [summaryFocus]);
+  const git = useAppStore((state) => state.git);
+  const sideChatEnabled = useBuiltinPluginGatesStore((state) => state.sideChatEnabled);
+  const openPanes = useWorkbenchLayoutStore((state) => state.openPanes);
+  const contributions = useClientContributions();
 
   const hostSessionId = sessionFile && isHarnessSessionFile(sessionFile)
     ? sessionFile.slice(HARNESS_SESSION_PREFIX.length)
@@ -79,334 +81,168 @@ export function TaskSummaryTab({ cwd, sessionFile }: TaskSummaryTabProps) {
     staleTime: 4_000,
   });
 
-  const usageQuery = useQuery({
-    queryKey: ["workbench-usage", messages.length],
-    queryFn: () => agent.usageSummary(),
-    staleTime: 10_000,
-  });
-
-  const mcpQuery = useQuery({
-    queryKey: ["workbench-mcp"],
-    queryFn: () => agent.mcpStatus(),
-    staleTime: 10_000,
-  });
-
-  const hostInfoQuery = useQuery({
-    queryKey: ["workbench-host-info"],
-    queryFn: () => harnessRuntimes.call<HostInfoResult>("host.info"),
-    staleTime: 30_000,
-  });
-
-  const diagLogsQuery = useQuery({
-    queryKey: ["workbench-diag-dir"],
-    queryFn: async (): Promise<DiagnosticsLogsResult> => {
-      try {
-        return await harnessRuntimes.call<DiagnosticsLogsResult>("diagnostics.logs");
-      } catch (error) {
-        if (isRpcMethodNotFound(error)) return { dir: "" };
-        throw error;
-      }
-    },
-    staleTime: 60_000,
-  });
-
   const derivedPlan = deriveTaskPlan(messages);
   const rpcPlan = planQuery.data?.plan;
   const planSteps = (rpcPlan && rpcPlan.items.length > 0)
     ? rpcPlan.items
     : (derivedPlan?.steps ?? []);
-  const planExplanation = rpcPlan?.explanation || derivedPlan?.explanation || "";
+  const completedSteps = planSteps.filter((step) => step.status === "completed").length;
 
   const subagents = deriveSubagentActivities(messages);
-  const subagentSummary = summarizeSubagents(subagents);
   const outputs = deriveTaskOutputs(messages, 20);
-
-  const filteredLogs = logs.filter((line) => {
-    if (logFilter === "all") return true;
-    const lower = line.toLowerCase();
-    if (logFilter === "error") return lower.includes("error") || lower.includes("失败") || lower.includes("异常");
-    return lower.includes("warn") || lower.includes("error") || lower.includes("失败");
-  });
-
-  const handleExportDiagnostics = useCallback(async () => {
-    const destination = await saveDialog({
-      defaultPath: `pi-desktop-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`,
-      filters: [{ name: "ZIP 归档", extensions: ["zip"] }],
-    });
-    if (!destination) return;
-    setExporting(true);
-    try {
-      const result = await harnessRuntimes.call<DiagnosticsExportResult>("diagnostics.export", {
-        path: destination,
-        desktop: { cwd, sessionFile, recentLogs: logs.slice(-200) },
-      });
-      useAppStore.getState().showToast(`已导出诊断包（含 ${result.files.length} 个文件）`, "info");
-    } catch (error) {
-      useAppStore.getState().showToast(`导出诊断包失败：${describeError(error)}`, "error");
-    } finally {
-      setExporting(false);
-    }
-  }, [cwd, logs, sessionFile]);
-
-  const handleReconnectMcp = useCallback(async (serverId?: string) => {
-    try {
-      await agent.mcpReconnect(serverId);
-      await mcpQuery.refetch();
-      useAppStore.getState().showToast("已重新连接 MCP 服务", "info");
-    } catch (error) {
-      useAppStore.getState().showToast(`重连 MCP 失败：${describeError(error)}`, "error");
-    }
-  }, [mcpQuery]);
+  const ws = splitWorkspaceDisplay(cwd);
+  const uncommittedCount = git?.files.length ?? 0;
 
   return (
-    <div className="pid-wb-pane">
-      <div className="pid-wb-scroll pid-wb-summary-scroll">
-        {/* 1. Task Plan */}
-        <section className="pid-wb-card">
-          <header className="pid-wb-card-header">
-            <div className="pid-wb-card-title">
-              <ListChecks size={14} />
-              <span>任务计划</span>
-            </div>
-            {planSteps.length > 0 && (
-              <span className="pid-wb-badge">
-                {planSteps.filter((step) => step.status === "completed").length}/{planSteps.length}
-              </span>
-            )}
+    <div className="pid-wb-pane pid-wb-inspector-pane">
+      <div className="pid-wb-scroll pid-wb-inspector-scroll">
+        {/* 1. Environment */}
+        <section className="pid-wb-inspector-section">
+          <header className="pid-wb-inspector-head">
+            <span>运行环境</span>
           </header>
-          {planExplanation && <p className="pid-wb-card-desc">{planExplanation}</p>}
-          {planSteps.length === 0 ? (
-            <div className="pid-wb-card-empty">当前会话尚未创建结构化计划。</div>
-          ) : (
-            <ul className="pid-wb-plan-list">
-              {planSteps.map((step) => (
-                <li key={step.id} className={`pid-wb-plan-item status-${step.status}`}>
-                  {step.status === "completed" ? (
-                    <CheckCircle2 size={14} className="pid-wb-plan-icon done" />
-                  ) : step.status === "in_progress" ? (
-                    <Clock size={14} className="pid-wb-plan-icon active" />
-                  ) : (
-                    <Circle size={14} className="pid-wb-plan-icon" />
-                  )}
-                  <span>{step.text}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {/* 2. Subagent Status Cards */}
-        <section className="pid-wb-card">
-          <header className="pid-wb-card-header">
-            <div className="pid-wb-card-title">
-              <Bot size={14} />
-              <span>子代理协作</span>
-            </div>
-            {subagentSummary.total > 0 && (
-              <span className="pid-wb-badge">
-                运行 {subagentSummary.running} · 完成 {subagentSummary.completed}
-                {subagentSummary.failed > 0 ? ` · 失败 ${subagentSummary.failed}` : ""}
-              </span>
-            )}
-          </header>
-          {subagents.length === 0 ? (
-            <div className="pid-wb-card-empty">当前任务未派发子代理。</div>
-          ) : (
-            <div className="pid-wb-subagent-list">
-              {subagents.map((item) => (
-                <div key={item.id} className={`pid-wb-subagent-card status-${item.status}`}>
-                  <div className="pid-wb-subagent-top">
-                    <strong>{item.label}</strong>
-                    <span className="pid-wb-badge">{item.role}</span>
-                    <span className={`pid-wb-status-pill ${item.status}`}>
-                      {item.status === "running"
-                        ? "运行中"
-                        : item.status === "completed"
-                          ? "已完成"
-                          : item.status === "failed"
-                            ? "失败"
-                            : "排队中"}
-                    </span>
-                  </div>
-                  <p className="pid-wb-subagent-task">{item.task}</p>
-                  {item.error && <p className="pid-wb-subagent-error">{item.error}</p>}
-                  {item.output && !item.error && (
-                    <p className="pid-wb-subagent-output">{item.output.slice(0, 220)}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* 3. Written Files */}
-        {outputs.length > 0 && (
-          <section className="pid-wb-card">
-            <header className="pid-wb-card-header">
-              <div className="pid-wb-card-title">
-                <Activity size={14} />
-                <span>本轮产出文件 ({outputs.length})</span>
-              </div>
-            </header>
-            <ul className="pid-wb-output-list">
-              {outputs.map((output) => (
-                <li key={output.id}>
-                  <button
-                    type="button"
-                    className="pid-wb-output-btn"
-                    onClick={() => {
-                      if (cwd) void useWorkbenchStore.getState().openFile(cwd, output.path);
-                    }}
-                  >
-                    <span>{output.path}</span>
-                    <span className="pid-wb-muted">{output.activity === "written" ? "写入" : "修改"} ×{output.count}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {/* 4. Token Usage & Cost */}
-        <section className="pid-wb-card">
-          <header className="pid-wb-card-header">
-            <div className="pid-wb-card-title">
-              <Activity size={14} />
-              <span>用量统计</span>
+          <div className="pid-wb-env-rows">
+            <div className="pid-wb-env-row">
+              <Monitor size={13} className="pid-wb-env-icon" />
+              <span>本机环境</span>
+              {git?.branch && <span className="pid-wb-env-branch">{git.branch}</span>}
             </div>
             <button
               type="button"
-              className="pid-wb-icon-btn"
-              title="刷新用量"
-              onClick={() => void usageQuery.refetch()}
+              className="pid-wb-env-row is-folder"
+              disabled={!cwd}
+              title={cwd || "未选择工作区"}
+              onClick={() => {
+                if (cwd) void agent.openWorkspaceInFileManager(cwd);
+              }}
             >
-              <RefreshCw size={12} />
+              <Folder size={13} className="pid-wb-env-icon" />
+              <span className="pid-wb-env-name">{ws.name}</span>
+              {ws.parent && <span className="pid-wb-env-parent">{ws.parent}</span>}
             </button>
-          </header>
-          <div className="pid-wb-kv-grid">
-            <div>
-              <span className="pid-wb-kv-label">当前会话 Token</span>
-              <strong>{(stats?.tokens.total ?? 0).toLocaleString()}</strong>
-            </div>
-            <div>
-              <span className="pid-wb-kv-label">当前会话估算费用</span>
-              <strong>${(stats?.cost ?? 0).toFixed(4)}</strong>
-            </div>
-            <div>
-              <span className="pid-wb-kv-label">累计总会话 / Token</span>
-              <strong>
-                {usageQuery.data?.sessions ?? 0} / {(usageQuery.data?.totalTokens ?? 0).toLocaleString()}
-              </strong>
-            </div>
-            <div>
-              <span className="pid-wb-kv-label">累计估算费用</span>
-              <strong>${(usageQuery.data?.totalCost ?? 0).toFixed(4)}</strong>
-            </div>
           </div>
         </section>
 
-        {/* 5. MCP Servers */}
-        <section className="pid-wb-card">
-          <header className="pid-wb-card-header">
-            <div className="pid-wb-card-title">
-              <Plug size={14} />
-              <span>MCP 服务</span>
-            </div>
-            <button
-              type="button"
-              className="pid-wb-icon-btn"
-              title="重连全部 MCP 服务"
-              onClick={() => void handleReconnectMcp()}
-            >
-              <RefreshCw size={12} />
-            </button>
-          </header>
-          {(mcpQuery.data?.length ?? 0) === 0 ? (
-            <div className="pid-wb-card-empty">暂未配置启用的 MCP 服务。</div>
-          ) : (
-            <ul className="pid-wb-mcp-list">
-              {(mcpQuery.data ?? []).map((server) => (
-                <li key={server.id} className="pid-wb-mcp-row">
-                  <div>
-                    <strong>{server.name}</strong>
-                    <span className="pid-wb-muted"> ({server.transport} · {server.toolCount} 工具)</span>
-                    {server.error && <div className="pid-wb-subagent-error">{server.error}</div>}
-                  </div>
-                  <span className={`pid-wb-status-pill ${server.connected ? "completed" : "failed"}`}>
-                    {server.connected ? "已连接" : "断开"}
+        {/* 2. Context, Connectors, Outputs, and quiet Diagnostics Footer */}
+        <WorkbenchContextCard cwd={cwd} sessionFile={sessionFile}>
+          {(planSteps.length > 0 || subagents.length > 0) && (
+            <section className="pid-wb-inspector-section">
+              <header className="pid-wb-inspector-head">
+                <span>任务进度</span>
+                {planSteps.length > 0 && (
+                  <span className="pid-wb-muted">
+                    {completedSteps}/{planSteps.length}
                   </span>
-                </li>
-              ))}
-            </ul>
+                )}
+              </header>
+              {planSteps.length > 0 && (
+                <ul className="pid-wb-plan-list">
+                  {planSteps.map((step) => (
+                    <li key={step.id} className={`pid-wb-plan-item status-${step.status}`}>
+                      {step.status === "completed" ? (
+                        <CheckCircle2 size={13} className="pid-wb-plan-icon done" />
+                      ) : step.status === "in_progress" ? (
+                        <Clock size={13} className="pid-wb-plan-icon active" />
+                      ) : (
+                        <Circle size={13} className="pid-wb-plan-icon" />
+                      )}
+                      <span>{step.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {subagents.length > 0 && (
+                <ul className="pid-wb-inspector-list">
+                  {subagents.map((item) => (
+                    <li key={item.id} className="pid-wb-connector-row">
+                      <span className={`pid-wb-status-dot ${item.status === "completed" ? "online" : item.status === "failed" ? "offline" : "running"}`} />
+                      <span className="pid-wb-connector-name">{item.label}</span>
+                      <span className="pid-wb-muted">{item.role}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           )}
-        </section>
 
-        {/* 6. Host Diagnostics & Logs */}
-        <section ref={diagnosticsRef} className="pid-wb-card" data-diagnostics-section>
-          <header className="pid-wb-card-header">
-            <div className="pid-wb-card-title">
-              <TerminalSquare size={14} />
-              <span>宿主诊断与日志</span>
-            </div>
-            <div className="pid-wb-subbar-actions">
-              {diagLogsQuery.data?.dir && (
+          {/* 3. Outputs */}
+          <section className="pid-wb-inspector-section">
+            <header className="pid-wb-inspector-head">
+              <span>产出文件</span>
+              {uncommittedCount > 0 && (
                 <button
                   type="button"
-                  className="pid-wb-icon-btn"
-                  title={`打开日志目录：${diagLogsQuery.data.dir}`}
-                  onClick={() => void agent.openWorkspaceInFileManager(diagLogsQuery.data?.dir ?? "")}
+                  className="pid-wb-inspector-action"
+                  onClick={() => useWorkbenchStore.getState().openReview()}
                 >
-                  <FolderOpen size={12} />
+                  审查 ({uncommittedCount})
                 </button>
               )}
-              <button
-                type="button"
-                className="pid-wb-btn small"
-                disabled={exporting}
-                onClick={() => void handleExportDiagnostics()}
-              >
-                <Download size={12} />
-                <span>{exporting ? "导出中…" : "导出诊断包"}</span>
-              </button>
-            </div>
-          </header>
-          {hostInfoQuery.data && (
-            <div className="pid-wb-meta-strip">
-              <span>Host v{hostInfoQuery.data.version}</span>
-              <span className="pid-wb-muted">协议 v{hostInfoQuery.data.protocolVersion}</span>
-            </div>
+            </header>
+            {outputs.length > 0 ? (
+              <ul className="pid-wb-output-list">
+                {outputs.map((output) => {
+                  const fileName = output.path.split(/[\\/]/).pop() ?? output.path;
+                  return (
+                    <li key={output.id} className="pid-wb-output-row">
+                      <button
+                        type="button"
+                        className="pid-wb-output-btn"
+                        title={output.path}
+                        onClick={() => {
+                          if (cwd) void useWorkbenchStore.getState().openFile(cwd, output.path);
+                        }}
+                      >
+                        {renderOutputGlyph(output.path)}
+                        <span className="pid-wb-output-name">{fileName}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="pid-wb-inspector-empty">本轮尚未写入或修改工作区文件。</p>
+            )}
+          </section>
+
+          {/* 4. Extension & Side Chat Panels */}
+          {(sideChatEnabled || contributions.rightWorkbenchTabs.length > 0) && (
+            <section className="pid-wb-inspector-section">
+              <header className="pid-wb-inspector-head">
+                <span>扩展视图</span>
+              </header>
+              <div className="pid-wb-ext-tabs" role="tablist" aria-label="扩展面板">
+                {sideChatEnabled && (
+                  <button
+                    type="button"
+                    role="tab"
+                    data-wb-tab="side-chat"
+                    aria-selected={openPanes.includes("side-chat")}
+                    className={`pid-wb-ext-tab-btn${openPanes.includes("side-chat") ? " active" : ""}`}
+                    onClick={() => useWorkbenchLayoutStore.getState().activateExtensionPane("side-chat")}
+                  >
+                    <MessageSquare size={12} />
+                    <span>侧边对话</span>
+                  </button>
+                )}
+                {contributions.rightWorkbenchTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    data-wb-tab={tab.id}
+                    aria-selected={openPanes.includes(tab.id)}
+                    className={`pid-wb-ext-tab-btn${openPanes.includes(tab.id) ? " active" : ""}`}
+                    onClick={() => useWorkbenchLayoutStore.getState().activateExtensionPane(tab.id)}
+                  >
+                    {tab.icon ?? <Puzzle size={12} />}
+                    <span>{tab.label}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
           )}
-          <div className="pid-wb-filter-pills">
-            <button
-              type="button"
-              className={`pid-wb-pill${logFilter === "all" ? " active" : ""}`}
-              onClick={() => setLogFilter("all")}
-            >
-              全部 ({logs.length})
-            </button>
-            <button
-              type="button"
-              className={`pid-wb-pill${logFilter === "warn" ? " active" : ""}`}
-              onClick={() => setLogFilter("warn")}
-            >
-              警告/错误
-            </button>
-            <button
-              type="button"
-              className={`pid-wb-pill${logFilter === "error" ? " active" : ""}`}
-              onClick={() => setLogFilter("error")}
-            >
-              仅错误
-            </button>
-          </div>
-          {filteredLogs.length === 0 ? (
-            <div className="pid-wb-card-empty">暂无匹配的运行日志记录。</div>
-          ) : (
-            <pre className="pid-wb-log-box">
-              {filteredLogs.slice(-120).join("\n")}
-            </pre>
-          )}
-        </section>
+        </WorkbenchContextCard>
       </div>
     </div>
   );

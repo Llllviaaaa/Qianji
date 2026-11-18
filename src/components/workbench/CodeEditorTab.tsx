@@ -35,16 +35,11 @@ export interface CodeEditorTabProps {
 }
 
 function escapeHtmlAttr(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function injectBaseTag(rawHtml: string, baseUrl: string | null): string {
-  if (!baseUrl) return rawHtml;
-  if (/<base\b/i.test(rawHtml)) return rawHtml;
+  if (!baseUrl || /<base\b/i.test(rawHtml)) return rawHtml;
   const baseTag = `<base href="${escapeHtmlAttr(baseUrl)}" />`;
   if (/<head(\s[^>]*)?>/i.test(rawHtml)) {
     return rawHtml.replace(/<head(\s[^>]*)?>/i, (match) => `${match}\n${baseTag}`);
@@ -57,28 +52,10 @@ function injectBaseTag(rawHtml: string, baseUrl: string | null): string {
 
 function buildSvgStageHtml(svgContent: string, baseUrl: string | null): string {
   const baseTag = baseUrl ? `<base href="${escapeHtmlAttr(baseUrl)}" />` : "";
-  return [
-    "<!DOCTYPE html>",
-    "<html>",
-    "<head>",
-    '<meta charset="utf-8" />',
-    baseTag,
-    "<style>",
-    "  html, body {",
-    "    margin: 0;",
-    "    min-height: 100vh;",
-    "    display: grid;",
-    "    place-items: center;",
-    "    padding: 16px;",
-    "    box-sizing: border-box;",
-    "    background: transparent;",
-    "  }",
-    "  svg { max-width: 100%; height: auto; }",
-    "</style>",
-    "</head>",
-    `<body>${svgContent}</body>`,
-    "</html>",
-  ].join("\n");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" />${baseTag}<style>
+  html, body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; box-sizing: border-box; background: transparent; }
+  svg { max-width: 100%; height: auto; }
+</style></head><body>${svgContent}</body></html>`;
 }
 
 function appendCacheVersion(url: string, token: string): string {

@@ -15,13 +15,13 @@ export interface SizeBounds {
 }
 
 export const SIDEBAR_BOUNDS: SizeBounds = { min: 200, max: 380, fallback: 240 };
-export const WORKSPACE_PANEL_BOUNDS: SizeBounds = { min: 320, max: 900, fallback: 460 };
+export const WORKSPACE_PANEL_BOUNDS: SizeBounds = { min: 260, max: 1260, fallback: 480 };
 export const BOTTOM_PANEL_BOUNDS: SizeBounds = { min: 180, max: 520, fallback: 280 };
 
 export const SIDEBAR_WIDTH_KEY = "qianji:sidebar-width:v2";
 export const SIDEBAR_PINNED_KEY = "qianji:sidebar-pinned:v1";
 export const SIDEBAR_NARROW_BREAKPOINT = 760;
-export const WORKSPACE_PANEL_WIDTH_KEY = "qianji:workspace-panel-width:v5";
+export const WORKSPACE_PANEL_WIDTH_KEY = "qianji:workspace-panel-width:v8";
 export const BOTTOM_PANEL_HEIGHT_KEY = "qianji:bottom-panel-height:v1";
 
 export function readStoredSidebarPinned(

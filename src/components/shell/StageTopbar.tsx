@@ -1,10 +1,10 @@
-import { Folder, Menu, MoreHorizontal } from "lucide-react";
-import type { GitSnapshot, SessionInfo, TerminalAppInfo, WorkspaceEditorInfo } from "../../types";
+import { ChevronDown, Menu } from "lucide-react";
+import type { GitSnapshot, SessionInfo, WorkspaceEditorInfo } from "../../types";
+import { useClientContributions } from "../../lib/clientContributions";
 import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { SlotEntryHost } from "../common/ErrorBoundary";
 import { PluginMenuItems } from "../common/PluginMenuItems";
 import { GitActionButton } from "../GitActionButton";
-import { OpenInMenu } from "../WorkspaceOpeners";
-import { WorkbenchTopbarControls } from "../workbench/RightWorkbench";
 import type { HubView, NavigationTarget } from "./shellTypes";
 
 export interface StageTopbarProps {
@@ -51,14 +51,8 @@ export interface StageTopbarProps {
   gitPushing: boolean;
   openCommitDialog: (push: boolean) => void;
   pushCurrentBranch: () => Promise<void>;
-  workspaceEditors: WorkspaceEditorInfo[];
   preferredWorkspaceEditor: WorkspaceEditorInfo | null;
-  terminalApps: TerminalAppInfo[];
   openWorkspaceInPreferredApp: () => void;
-  chooseWorkspaceEditor: (editor: WorkspaceEditorInfo) => void;
-  openWorkspaceTerminalApp: (app: TerminalAppInfo) => void;
-  revealWorkspaceInExplorer: (workspace: string) => void;
-  openBottomTerminal: () => void;
 }
 
 export function StageTopbar({
@@ -101,19 +95,18 @@ export function StageTopbar({
   gitPushing,
   openCommitDialog,
   pushCurrentBranch,
-  workspaceEditors,
   preferredWorkspaceEditor,
-  terminalApps,
   openWorkspaceInPreferredApp,
-  chooseWorkspaceEditor,
-  openWorkspaceTerminalApp,
-  revealWorkspaceInExplorer,
-  openBottomTerminal,
 }: StageTopbarProps) {
   const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
+  const contributions = useClientContributions();
   const sidebarToggleLabel = isNarrowViewport
     ? (sidebarRendered ? "隐藏侧栏" : "显示侧栏")
     : "固定侧栏";
+  const hasHomeChrome = !sidebarVisible || contributions.topbarActions.length > 0;
+  if (newTask && !hubView && !hasHomeChrome) {
+    return null;
+  }
   return (
     <header className={`topbar ${newTask && !hubView ? "topbar-home" : ""}`} data-tauri-drag-region>
       <div className="topbar-left" data-tauri-drag-region>
@@ -152,8 +145,7 @@ export function StageTopbar({
                 }}
               />
             ) : (
-              <button className="chat-title" onClick={() => connected && setEditingTitle(true)} title="重命名线程">
-                <Folder size={14} strokeWidth={1.75} className="title-doc-icon" />
+              <button className="chat-title" onClick={() => connected && setEditingTitle(true)} title={titleDraft || "新对话"}>
                 <span>{titleDraft || "新对话"}</span>
               </button>
             )}
@@ -162,9 +154,10 @@ export function StageTopbar({
                 type="button"
                 className="icon-button title-more"
                 title="线程操作"
+                aria-label="线程操作"
                 onClick={() => setMoreOpen((value) => !value)}
               >
-                <MoreHorizontal size={16} strokeWidth={1.75} />
+                <ChevronDown size={14} strokeWidth={1.75} />
               </button>
               {moreOpen && (
                 <div className="topbar-menu title-menu">
@@ -175,6 +168,17 @@ export function StageTopbar({
                     }}
                   >
                     新对话
+                  </button>
+                  <button
+                    disabled={!canOpenWorkspace}
+                    onClick={() => {
+                      setMoreOpen(false);
+                      openWorkspaceInPreferredApp();
+                    }}
+                  >
+                    {preferredWorkspaceEditor
+                      ? `在 ${preferredWorkspaceEditor.name} 中打开`
+                      : "在文件资源管理器中打开"}
                   </button>
                   <button
                     disabled={!connected || !git?.isRepository}
@@ -264,48 +268,40 @@ export function StageTopbar({
       <div className="topbar-right" data-tauri-drag-region>
         {!hubView && (
           <div className="panel-toggles codex-layout-chrome">
-            <div className="main-pane-controls">
-              {codeReviewEnabled && reviewFileCount > 0 && (
-                <button
-                  type="button"
-                  className="title-diff-chip topbar-diff-chip"
-                  title={`${reviewFileCount} 个文件有未提交的变更`}
-                  aria-label={`审查 ${reviewFileCount} 个文件的变更`}
-                  onClick={openReview}
-                >
-                  {gitDiffStats.additions > 0 && <em>+{gitDiffStats.additions.toLocaleString()}</em>}
-                  {gitDiffStats.deletions > 0 && <b>−{gitDiffStats.deletions.toLocaleString()}</b>}
-                  {gitDiffStats.additions === 0 && gitDiffStats.deletions === 0 && <span>{reviewFileCount} 个文件</span>}
-                </button>
-              )}
-              {canOpenWorkspace && (
-                <GitActionButton
-                  git={reviewGit}
-                  pushing={gitPushing}
-                  onCommit={openCommitDialog}
-                  onPush={() => void pushCurrentBranch()}
-                />
-              )}
-              {canOpenWorkspace && (
-                <OpenInMenu
-                  workspace={workspaceCwd}
-                  editors={workspaceEditors}
-                  preferredEditor={preferredWorkspaceEditor}
-                  terminalApps={terminalApps}
-                  onOpenPreferred={openWorkspaceInPreferredApp}
-                  onChooseEditor={chooseWorkspaceEditor}
-                  onOpenTerminalApp={openWorkspaceTerminalApp}
-                  onReveal={() => revealWorkspaceInExplorer(workspaceCwd)}
-                  onOpenIntegratedTerminal={openBottomTerminal}
-                />
-              )}
-            </div>
-            <div className="workspace-pane-controls">
-              <WorkbenchTopbarControls
-                cwd={workspaceCwd || cwd}
-                sessionFile={sessionFile}
-              />
-            </div>
+            {!newTask && (
+              <div className="main-pane-controls">
+                {codeReviewEnabled && reviewFileCount > 0 && (
+                  <button
+                    type="button"
+                    className="title-diff-chip topbar-diff-chip"
+                    title={`${reviewFileCount} 个文件有未提交的变更`}
+                    aria-label={`审查 ${reviewFileCount} 个文件的变更`}
+                    onClick={openReview}
+                  >
+                    {gitDiffStats.additions > 0 && <em>+{gitDiffStats.additions.toLocaleString()}</em>}
+                    {gitDiffStats.deletions > 0 && <b>−{gitDiffStats.deletions.toLocaleString()}</b>}
+                    {gitDiffStats.additions === 0 && gitDiffStats.deletions === 0 && <span>{reviewFileCount} 个文件</span>}
+                  </button>
+                )}
+                {canOpenWorkspace && (
+                  <GitActionButton
+                    git={reviewGit}
+                    pushing={gitPushing}
+                    onCommit={openCommitDialog}
+                    onPush={() => void pushCurrentBranch()}
+                  />
+                )}
+              </div>
+            )}
+            {contributions.topbarActions.length > 0 && (
+              <div className="workspace-pane-controls">
+                {contributions.topbarActions.map((action) => (
+                  <span key={action.id} className="pid-wb-plugin-action">
+                    <SlotEntryHost entry={action} context={{ cwd: workspaceCwd || cwd, sessionFile }} slotName="topbarActions" compact />
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

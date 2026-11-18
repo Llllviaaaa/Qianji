@@ -3,11 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
   ChevronRight,
+  FileCode2,
   FileText,
   Folder,
   FolderOpen,
+  Globe,
   MessageSquarePlus,
-  RefreshCw,
   Search,
   X,
 } from "lucide-react";
@@ -21,6 +22,22 @@ import { useFileActions } from "../WorkspaceOpeners";
 export interface WorkspaceFilesTabProps {
   cwd: string;
   onAddToChat?: (path: string) => void;
+}
+
+const CODE_FILE_EXTS = new Set([
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "go", "java", "c", "cpp", "h", "hpp",
+  "css", "scss", "less", "json", "toml", "yaml", "yml", "sh", "ps1", "vue", "svelte", "sql",
+]);
+
+function renderFileGlyph(fileName: string) {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "html" || ext === "htm" || ext === "svg") {
+    return <Globe size={14} className="pid-wb-icon-file is-web" />;
+  }
+  if (CODE_FILE_EXTS.has(ext)) {
+    return <FileCode2 size={14} className="pid-wb-icon-file is-code" />;
+  }
+  return <FileText size={14} className="pid-wb-icon-file" />;
 }
 
 function sortEntries(entries: readonly WorkspaceDirEntry[]): WorkspaceDirEntry[] {
@@ -98,13 +115,6 @@ export function WorkspaceFilesTab({ cwd, onAddToChat }: WorkspaceFilesTabProps) 
     staleTime: 5_000,
   });
 
-  const refreshAll = useCallback(() => {
-    setChildEntries({});
-    setExpanded({});
-    setDirErrors({});
-    void rootQuery.refetch();
-  }, [rootQuery]);
-
   const toggleDirectory = useCallback(async (dirPath: string) => {
     const nextOpen = !expanded[dirPath];
     setExpanded((prev) => ({ ...prev, [dirPath]: nextOpen }));
@@ -170,7 +180,7 @@ export function WorkspaceFilesTab({ cwd, onAddToChat }: WorkspaceFilesTabProps) 
                 ) : (
                   <>
                     <span className="pid-wb-tree-chevron" />
-                    <FileText size={14} className="pid-wb-icon-file" />
+                    {renderFileGlyph(entry.name)}
                   </>
                 )}
                 <span className="pid-wb-tree-name">{entry.name}</span>
@@ -214,13 +224,13 @@ export function WorkspaceFilesTab({ cwd, onAddToChat }: WorkspaceFilesTabProps) 
 
   return (
     <div className="pid-wb-pane">
-      <div className="pid-wb-subbar">
-        <div className="pid-wb-search-box">
+      <div className="pid-wb-subbar pid-wb-tree-filterbar">
+        <div className="pid-wb-search-box is-flat">
           <Search size={13} className="pid-wb-search-icon" />
           <input
             type="text"
             className="pid-wb-search-input"
-            placeholder="搜索工作区文件…"
+            placeholder="筛选文件，或输入 / 搜索…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -230,9 +240,6 @@ export function WorkspaceFilesTab({ cwd, onAddToChat }: WorkspaceFilesTabProps) 
             </button>
           )}
         </div>
-        <button type="button" className="pid-wb-icon-btn" title="刷新文件树" onClick={refreshAll}>
-          <RefreshCw size={13} />
-        </button>
       </div>
 
       <div className="pid-wb-scroll">
@@ -257,7 +264,7 @@ export function WorkspaceFilesTab({ cwd, onAddToChat }: WorkspaceFilesTabProps) 
                       onClick={() => handleOpenFile(entry.path)}
                       title={entry.path}
                     >
-                      <FileText size={14} className="pid-wb-icon-file" />
+                      {renderFileGlyph(entry.path)}
                       <span className="pid-wb-tree-name">{entry.path}</span>
                     </button>
                     {onAddToChat && (

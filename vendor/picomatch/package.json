@@ -1,0 +1,20 @@
+{
+  "name": "picomatch",
+  "private": true,
+  "description": "Blazing fast and accurate glob matcher written in JavaScript (vendored with CVE-2026-112366 / GHSA-fc5q-39xc-vjpf ReDoS fix).",
+  "version": "4.0.8",
+  "homepage": "https://github.com/micromatch/picomatch",
+  "author": "Jon Schlinkert (https://github.com/jonschlinkert)",
+  "repository": "micromatch/picomatch",
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "posix.js",
+    "lib"
+  ],
+  "sideEffects": false,
+  "main": "index.js",
+  "engines": {
+    "node": ">=12"
+  }
+}

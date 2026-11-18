@@ -2,6 +2,7 @@ import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowLeft, ArrowRight, Minus, Square, X } from "lucide-react";
 import { DockLeftIcon } from "../common/ChromeIcons";
+import { WorkbenchTopbarControls } from "../workbench/WorkbenchTopbarControls";
 import { useClientContributions } from "../../lib/clientContributions";
 import { requestAppQuit } from "../../lib/quitGuard";
 import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
@@ -50,6 +51,7 @@ export interface WindowMenubarProps {
   toggleBottomPanel: () => void;
   openSettingsPage: (page: SettingsPage) => void;
   openDiagnostics: () => void;
+  onBeforeWorkbenchOpen?: () => void;
 }
 
 export function WindowMenubar({
@@ -84,6 +86,7 @@ export function WindowMenubar({
   toggleBottomPanel,
   openSettingsPage,
   openDiagnostics,
+  onBeforeWorkbenchOpen,
 }: WindowMenubarProps) {
   const sidebarToggleLabel = sidebarVisible || sidebarRendered
     ? "隐藏侧栏"
@@ -328,31 +331,34 @@ export function WindowMenubar({
           </div>
         )}
       </div>
-      <div className="window-controls">
-        <button
-          className="window-control"
-          onClick={() => void appWindow?.minimize()}
-          title="最小化"
-          aria-label="最小化窗口"
-        >
-          <Minus size={15} strokeWidth={1.6} />
-        </button>
-        <button
-          className="window-control"
-          onClick={() => void appWindow?.toggleMaximize()}
-          title="最大化或还原"
-          aria-label="最大化或还原窗口"
-        >
-          <Square size={12} strokeWidth={1.5} />
-        </button>
-        <button
-          className="window-control close"
-          onClick={() => void appWindow?.close()}
-          title="关闭"
-          aria-label="关闭窗口"
-        >
-          <X size={16} strokeWidth={1.6} />
-        </button>
+      <div className="window-menubar-right" data-tauri-drag-region>
+        <WorkbenchTopbarControls onBeforeOpen={onBeforeWorkbenchOpen} />
+        <div className="window-controls">
+          <button
+            className="window-control"
+            onClick={() => void appWindow?.minimize()}
+            title="最小化"
+            aria-label="最小化窗口"
+          >
+            <Minus size={15} strokeWidth={1.6} />
+          </button>
+          <button
+            className="window-control"
+            onClick={() => void appWindow?.toggleMaximize()}
+            title="最大化或还原"
+            aria-label="最大化或还原窗口"
+          >
+            <Square size={12} strokeWidth={1.5} />
+          </button>
+          <button
+            className="window-control close"
+            onClick={() => void appWindow?.close()}
+            title="关闭"
+            aria-label="关闭窗口"
+          >
+            <X size={16} strokeWidth={1.6} />
+          </button>
+        </div>
       </div>
     </div>
   );
