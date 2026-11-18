@@ -7,8 +7,6 @@ import {
   Eye,
   FileCode2,
   FolderOpen,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
   RotateCcw,
   Save,
@@ -34,8 +32,6 @@ const LazyCodeMirrorSurface = lazy(() => import("./CodeMirrorSurface"));
 
 export interface CodeEditorTabProps {
   cwd: string;
-  fileDrawerOpen?: boolean;
-  onToggleFileDrawer?: () => void;
 }
 
 function escapeHtmlAttr(value: string): string {
@@ -146,7 +142,7 @@ function DynamicDocumentPreview({
   );
 }
 
-export function CodeEditorTab({ cwd, fileDrawerOpen, onToggleFileDrawer }: CodeEditorTabProps) {
+export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
   const openFiles = useWorkbenchStore((state) => state.openFiles);
   const preferredPath = useWorkbenchStore((state) => resolveWorkspaceActiveFilePath(state, cwd));
   const sessionFile = useAppStore((state) => state.sessionFile);
@@ -261,18 +257,6 @@ export function CodeEditorTab({ cwd, fileDrawerOpen, onToggleFileDrawer }: CodeE
           }
         }}
       >
-        {onToggleFileDrawer && (
-          <button
-            type="button"
-            className={`pid-wb-icon-btn pid-wb-drawer-toggle${fileDrawerOpen ? " active" : ""}`}
-            title={fileDrawerOpen ? "收起文件树" : "展开文件树"}
-            aria-label={fileDrawerOpen ? "收起文件树" : "展开文件树"}
-            aria-pressed={Boolean(fileDrawerOpen)}
-            onClick={onToggleFileDrawer}
-          >
-            {fileDrawerOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-          </button>
-        )}
         {workspaceFiles.map((file) => {
           const dirty = file.content !== file.savedContent;
           const active = file.path === activeFile.path;

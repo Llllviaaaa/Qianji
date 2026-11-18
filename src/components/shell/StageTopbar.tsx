@@ -1,10 +1,11 @@
 import { Folder, Menu, MoreHorizontal } from "lucide-react";
 import type { GitSnapshot, SessionInfo, TerminalAppInfo, WorkspaceEditorInfo } from "../../types";
+import { useClientContributions } from "../../lib/clientContributions";
 import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { SlotEntryHost } from "../common/ErrorBoundary";
 import { PluginMenuItems } from "../common/PluginMenuItems";
 import { GitActionButton } from "../GitActionButton";
 import { OpenInMenu } from "../WorkspaceOpeners";
-import { WorkbenchTopbarControls } from "../workbench/RightWorkbench";
 import type { HubView, NavigationTarget } from "./shellTypes";
 
 export interface StageTopbarProps {
@@ -111,6 +112,7 @@ export function StageTopbar({
   openBottomTerminal,
 }: StageTopbarProps) {
   const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
+  const contributions = useClientContributions();
   const sidebarToggleLabel = isNarrowViewport
     ? (sidebarRendered ? "隐藏侧栏" : "显示侧栏")
     : "固定侧栏";
@@ -300,12 +302,15 @@ export function StageTopbar({
                 />
               )}
             </div>
-            <div className="workspace-pane-controls">
-              <WorkbenchTopbarControls
-                cwd={workspaceCwd || cwd}
-                sessionFile={sessionFile}
-              />
-            </div>
+            {contributions.topbarActions.length > 0 && (
+              <div className="workspace-pane-controls">
+                {contributions.topbarActions.map((action) => (
+                  <span key={action.id} className="pid-wb-plugin-action">
+                    <SlotEntryHost entry={action} context={{ cwd: workspaceCwd || cwd, sessionFile }} slotName="topbarActions" compact />
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

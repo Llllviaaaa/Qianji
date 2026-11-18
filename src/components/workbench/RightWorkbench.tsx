@@ -1,66 +1,21 @@
 import {
-  useCallback, useEffect, useMemo, useRef, useState,
-  type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent,
+  useCallback, useEffect, useRef, useState,
+  type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
 } from "react";
-import { LayoutGroup, motion } from "motion/react";
-import {
-  Activity, Columns2, FileCode2, GitCompare, Globe, Maximize2, MessageSquare, Minimize2, Rows2, X,
-} from "lucide-react";
-import { DockBottomIcon, DockRightIcon } from "../common/ChromeIcons";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import type { CodeReviewScope } from "../../lib/codeReview";
 import { useClientContributions } from "../../lib/clientContributions";
 import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
 import {
-  isCodePaneTab,
-  pickSecondaryTab,
+  computeGridColumns,
+  filterAllowedPanes,
   useWorkbenchLayoutStore,
 } from "../../stores/workbenchLayoutStore";
-import { matchesWorkbenchFileCwd, useWorkbenchStore } from "../../stores/workbenchStore";
+import { useWorkbenchStore } from "../../stores/workbenchStore";
 import type { GitSnapshot } from "../../types";
-import { SlotEntryHost } from "../common/ErrorBoundary";
-import { WorkbenchPaneBody } from "./WorkbenchPaneBody";
-
-export interface WorkbenchTopbarControlsProps {
-  cwd: string;
-  sessionFile: string | null;
-}
-
-export function WorkbenchTopbarControls({ cwd, sessionFile }: WorkbenchTopbarControlsProps) {
-  const rightOpen = useWorkbenchStore((state) => state.rightOpen);
-  const bottomOpen = useWorkbenchStore((state) => state.bottomOpen);
-  const toggleRight = useWorkbenchStore((state) => state.toggleRight);
-  const toggleBottom = useWorkbenchStore((state) => state.toggleBottom);
-  const contributions = useClientContributions();
-
-  return (
-    <div className="pid-wb-topbar-controls">
-      {contributions.topbarActions.map((action) => (
-        <span key={action.id} className="pid-wb-plugin-action">
-          <SlotEntryHost entry={action} context={{ cwd, sessionFile }} slotName="topbarActions" compact />
-        </span>
-      ))}
-      <button
-        type="button"
-        className={`icon-button${bottomOpen ? " active" : ""}`}
-        title="切换底部终端面板 (Ctrl+J)"
-        aria-pressed={bottomOpen}
-        onClick={toggleBottom}
-      >
-        <DockBottomIcon open={bottomOpen} size={15} />
-      </button>
-      <button
-        type="button"
-        className={`icon-button${rightOpen ? " active" : ""}`}
-        title="切换右侧工作台 (Ctrl+Alt+B)"
-        aria-pressed={rightOpen}
-        onClick={toggleRight}
-      >
-        <DockRightIcon open={rightOpen} size={15} />
-      </button>
-    </div>
-  );
-}
+import { TaskSummaryTab } from "./TaskSummaryTab";
+import { WorkbenchPaneFrame } from "./WorkbenchPaneFrame";
+export { WorkbenchTopbarControls, type WorkbenchTopbarControlsProps } from "./WorkbenchTopbarControls";
 
 export interface RightWorkbenchProps {
   cwd: string;
@@ -92,92 +47,76 @@ export function RightWorkbench({
 }: RightWorkbenchProps) {
   const rightOpen = useWorkbenchStore((state) => state.rightOpen);
   const rightMaximized = useWorkbenchStore((state) => state.rightMaximized);
-  const activeTab = useWorkbenchStore((state) => state.activeTab);
-  const openFiles = useWorkbenchStore((state) => state.openFiles);
-  const openFilesCount = useMemo(
-    () => openFiles.filter((file) => matchesWorkbenchFileCwd(file.cwd, cwd)).length,
-    [cwd, openFiles],
-  );
-  const openTab = useWorkbenchStore((state) => state.openTab);
-  const setRightOpen = useWorkbenchStore((state) => state.setRightOpen);
-  const toggleRightMaximized = useWorkbenchStore((state) => state.toggleRightMaximized);
 
-  const splitOpen = useWorkbenchLayoutStore((state) => state.splitOpen);
-  const splitDirection = useWorkbenchLayoutStore((state) => state.splitDirection);
-  const secondaryTab = useWorkbenchLayoutStore((state) => state.secondaryTab);
-  const splitRatio = useWorkbenchLayoutStore((state) => state.splitRatio);
-  const toggleSplit = useWorkbenchLayoutStore((state) => state.toggleSplit);
-  const setSplitDirection = useWorkbenchLayoutStore((state) => state.setSplitDirection);
-  const setSecondaryTab = useWorkbenchLayoutStore((state) => state.setSecondaryTab);
-  const setSplitRatio = useWorkbenchLayoutStore((state) => state.setSplitRatio);
-  const closeSplit = useWorkbenchLayoutStore((state) => state.closeSplit);
+  const openPanes = useWorkbenchLayoutStore((state) => state.openPanes);
+  const inspectorOpen = useWorkbenchLayoutStore((state) => state.inspectorOpen);
+  const maximizedPaneId = useWorkbenchLayoutStore((state) => state.maximizedPaneId);
+  const twoPaneDirection = useWorkbenchLayoutStore((state) => state.twoPaneDirection);
+  const leftColumnCount = useWorkbenchLayoutStore((state) => state.leftColumnCount);
+  const colRatio = useWorkbenchLayoutStore((state) => state.colRatio);
+  const leftRowRatio = useWorkbenchLayoutStore((state) => state.leftRowRatio);
+  const setColRatio = useWorkbenchLayoutStore((state) => state.setColRatio);
+  const setLeftRowRatio = useWorkbenchLayoutStore((state) => state.setLeftRowRatio);
+  const swapOrDockPanes = useWorkbenchLayoutStore((state) => state.swapOrDockPanes);
 
   const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
-  const webPreviewEnabled = useBuiltinPluginGatesStore((state) => state.webPreviewEnabled);
   const sideChatEnabled = useBuiltinPluginGatesStore((state) => state.sideChatEnabled);
+  const webPreviewEnabled = useBuiltinPluginGatesStore((state) => state.webPreviewEnabled);
   const contributions = useClientContributions();
 
   const [sideChatVisited, setSideChatVisited] = useState(false);
-  const [scrollState, setScrollState] = useState({ left: false, right: false });
-  const tabsRef = useRef<HTMLDivElement>(null);
-  const splitGridRef = useRef<HTMLDivElement>(null);
+  const [terminalVisited, setTerminalVisited] = useState(false);
+  const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
-  useSyncOnChange([activeTab], () => {
-    if (activeTab === "side-chat") setSideChatVisited(true);
+  const activePanes = filterAllowedPanes(openPanes);
+  const activePanesKey = activePanes.join("|");
+  const isPaneMaximizedNow = maximizedPaneId !== null && activePanes.includes(maximizedPaneId);
+  const columnsNow = computeGridColumns(activePanes, twoPaneDirection, leftColumnCount);
+  const isFloatingInspector = !rightMaximized && !isPaneMaximizedNow && inspectorOpen && columnsNow.hasCol2;
+
+  useEffect(() => {
+    if (!isFloatingInspector) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('.pid-wb-inspector-popover, [data-wb-tab="summary"]')) return;
+      useWorkbenchLayoutStore.getState().setInspectorOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      useWorkbenchLayoutStore.getState().setInspectorOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isFloatingInspector]);
+
+  useSyncOnChange([activePanesKey], () => {
+    if (activePanes.includes("side-chat")) setSideChatVisited(true);
+    if (activePanes.includes("terminal")) setTerminalVisited(true);
   });
 
   useSyncOnChange([sessionFile], () => {
-    if (activeTab !== "side-chat") setSideChatVisited(false);
+    if (!activePanes.includes("side-chat")) setSideChatVisited(false);
   });
 
-  const updateScrollEdges = useCallback(() => {
-    const el = tabsRef.current;
+  const beginGridSplitDrag = useCallback((axis: "col" | "row", event: ReactPointerEvent<HTMLDivElement>) => {
+    const el = gridRef.current;
     if (!el) return;
-    const left = el.scrollLeft > 2;
-    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
-    setScrollState((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
-  }, []);
-
-  useEffect(() => {
-    if (!rightOpen) return;
-    const el = tabsRef.current;
-    if (!el) return;
-    const frame = window.requestAnimationFrame(() => {
-      el.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.scrollIntoView({
-        block: "nearest",
-        inline: "nearest",
-      });
-      updateScrollEdges();
-    });
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => updateScrollEdges()) : null;
-    observer?.observe(el);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      observer?.disconnect();
-    };
-  }, [activeTab, contributions.rightWorkbenchTabs.length, openFilesCount, rightMaximized, rightOpen, updateScrollEdges, width]);
-
-  const handleTabsWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
-    const el = tabsRef.current;
-    if (!el || el.scrollWidth <= el.clientWidth) return;
-    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
-      el.scrollLeft += event.deltaY;
-      updateScrollEdges();
-    }
-  }, [updateScrollEdges]);
-
-  const handleSplitterPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const gridEl = splitGridRef.current;
-    if (!gridEl) return;
     event.preventDefault();
-    const rect = gridEl.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
     document.body.classList.add("workspace-is-resizing");
 
     const onMove = (moveEvent: PointerEvent) => {
-      const next = splitDirection === "horizontal"
-        ? (rect.width > 0 ? (moveEvent.clientX - rect.left) / rect.width : 0.5)
-        : (rect.height > 0 ? (moveEvent.clientY - rect.top) / rect.height : 0.5);
-      setSplitRatio(next);
+      if (axis === "col") {
+        setColRatio(rect.width > 0 ? (moveEvent.clientX - rect.left) / rect.width : 0.5);
+      } else {
+        setLeftRowRatio(rect.height > 0 ? (moveEvent.clientY - rect.top) / rect.height : 0.5);
+      }
     };
     const cleanup = () => {
       document.body.classList.remove("workspace-is-resizing");
@@ -188,69 +127,82 @@ export function RightWorkbench({
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", cleanup);
     window.addEventListener("pointercancel", cleanup);
-  }, [setSplitRatio, splitDirection]);
+  }, [setColRatio, setLeftRowRatio]);
 
-  const effectiveSecondaryTab = useMemo(() => {
-    const conflict = secondaryTab === activeTab
-      || (isCodePaneTab(secondaryTab) && isCodePaneTab(activeTab))
-      || (secondaryTab === "review" && !codeReviewEnabled)
-      || (secondaryTab === "preview" && !webPreviewEnabled)
-      || (secondaryTab === "side-chat" && (!sideChatEnabled || activeTab === "side-chat"));
-    return conflict ? pickSecondaryTab(activeTab) : secondaryTab;
-  }, [activeTab, codeReviewEnabled, secondaryTab, sideChatEnabled, webPreviewEnabled]);
+  if (!rightOpen || (!inspectorOpen && activePanes.length === 0)) return null;
 
-  if (!rightOpen) return null;
+  const isPaneMaximized = maximizedPaneId !== null && activePanes.includes(maximizedPaneId);
+  const fullMaximized = rightMaximized || isPaneMaximized;
+  const visibleMaximizedId = isPaneMaximized
+    ? maximizedPaneId
+    : fullMaximized && activePanes.length > 0
+      ? (activePanes[0] ?? null)
+      : null;
 
-  const reviewCount = git?.files.length ?? 0;
-  const isCodeActive = isCodePaneTab(activeTab);
-  const mountSideChat = sideChatVisited || activeTab === "side-chat";
-  const tabsClassName = [
-    "pid-wb-tabs",
-    "pid-wb-capsule-track",
-    scrollState.left ? "has-overflow-left" : "",
-    scrollState.right ? "has-overflow-right" : "",
-  ].filter(Boolean).join(" ");
+  const columns = computeGridColumns(activePanes, twoPaneDirection, leftColumnCount);
+  const inspectorMode = fullMaximized
+    ? "closed"
+    : !inspectorOpen
+      ? "closed"
+      : activePanes.length === 0
+        ? "sole"
+        : columns.hasCol2
+          ? "floating"
+          : "docked";
 
-  const primaryTabs: Array<{
-    id: string;
-    dataTab: string;
-    label: string;
-    icon: ReactNode;
-    title: string;
-    active: boolean;
-    count?: number;
-  }> = [
-    { id: "summary", dataTab: "summary", label: "概览", icon: <Activity size={13} />, title: "任务进度、工作目录与上下文探针", active: activeTab === "summary" },
-    { id: "files", dataTab: "files", label: "代码", icon: <FileCode2 size={13} />, title: "工作区文件树与代码编辑器", active: isCodeActive, count: openFilesCount },
-    ...(codeReviewEnabled ? [{ id: "review", dataTab: "review", label: "审查", icon: <GitCompare size={13} />, title: "代码变更与行内审查", active: activeTab === "review", count: reviewCount }] : []),
-    ...(webPreviewEnabled ? [{ id: "preview", dataTab: "preview", label: "预览", icon: <Globe size={13} />, title: "Web 与浏览器预览 (Ctrl+T)", active: activeTab === "preview" }] : []),
-    ...(sideChatEnabled ? [{ id: "side-chat", dataTab: "side-chat", label: "侧问", icon: <MessageSquare size={13} />, title: "基于当前会话分叉的独立侧边对话", active: activeTab === "side-chat" }] : []),
-    ...contributions.rightWorkbenchTabs.map((tab) => ({ id: tab.id, dataTab: tab.id, label: tab.label, icon: tab.icon, title: tab.label, active: activeTab === tab.id })),
-  ];
+  const effectiveWidth = inspectorMode === "sole"
+    ? Math.min(width, 272)
+    : columns.hasCol2
+      ? Math.max(width, Math.min(resize.max, 980))
+      : inspectorMode === "docked"
+        ? Math.max(width, Math.min(resize.max, 840))
+        : width;
 
-  const secondaryOptions = [
-    { id: "summary", label: "概览" },
-    { id: "editor", label: "代码" },
-    ...(codeReviewEnabled ? [{ id: "review", label: "审查" }] : []),
-    ...(webPreviewEnabled ? [{ id: "preview", label: "预览" }] : []),
-    ...(sideChatEnabled && activeTab !== "side-chat" ? [{ id: "side-chat", label: "侧问" }] : []),
-    ...contributions.rightWorkbenchTabs.map((tab) => ({ id: tab.id, label: tab.label })),
-  ].filter((opt) => opt.id !== activeTab && !(isCodePaneTab(opt.id) && isCodeActive));
+  // Keep Terminal & SideChat mounted silently in `.pid-wb-panes-grid` once visited so Shells / Side Chat never reset.
+  const persistentPaneIds = [...activePanes];
+  if (terminalVisited && !persistentPaneIds.includes("terminal")) persistentPaneIds.push("terminal");
+  if (sideChatVisited && sideChatEnabled && !persistentPaneIds.includes("side-chat")) persistentPaneIds.push("side-chat");
 
-  const gridStyle = splitOpen
-    ? (splitDirection === "horizontal"
-      ? { gridTemplateColumns: `minmax(0, ${splitRatio}fr) 5px minmax(0, ${1 - splitRatio}fr)` }
-      : { gridTemplateRows: `minmax(0, ${splitRatio}fr) 5px minmax(0, ${1 - splitRatio}fr)` })
-    : undefined;
+  const maxRows = visibleMaximizedId
+    ? 1
+    : Math.max(1, columns.col1.length, columns.col2.length);
 
-  const paneProps = {
-    cwd, sessionFile, git, codeReviewEnabled, webPreviewEnabled, sideChatEnabled,
-    pluginTabs: contributions.rightWorkbenchTabs, onRefreshGit, onRestoreFiles, onRequestReview, onAddToChat,
+  const gridTemplateColumns = !visibleMaximizedId && columns.hasCol2
+    ? `minmax(0, ${colRatio}fr) 1px minmax(0, ${1 - colRatio}fr)`
+    : "minmax(0, 1fr)";
+
+  const gridTemplateRows = visibleMaximizedId || maxRows === 1
+    ? "minmax(0, 1fr)"
+    : maxRows === 2
+      ? `minmax(0, ${leftRowRatio}fr) 1px minmax(0, ${1 - leftRowRatio}fr)`
+      : Array.from({ length: maxRows }, () => "minmax(0, 1fr)").join(" 1px ");
+
+  const placementForPane = (paneId: string): CSSProperties | undefined => {
+    if (visibleMaximizedId) {
+      return paneId === visibleMaximizedId ? { gridColumn: "1", gridRow: "1" } : undefined;
+    }
+    const c1Idx = columns.col1.indexOf(paneId);
+    if (c1Idx >= 0) {
+      const spanAllRows = columns.col1.length === 1 && maxRows > 1;
+      return {
+        gridColumn: "1",
+        gridRow: spanAllRows ? `1 / ${maxRows * 2}` : String(c1Idx * 2 + 1),
+      };
+    }
+    const c2Idx = columns.col2.indexOf(paneId);
+    if (c2Idx >= 0) {
+      const spanAllRows = columns.col2.length === 1 && maxRows > 1;
+      return {
+        gridColumn: "3",
+        gridRow: spanAllRows ? `1 / ${maxRows * 2}` : String(c2Idx * 2 + 1),
+      };
+    }
+    return undefined;
   };
 
   return (
     <>
-      {!rightMaximized && (
+      {!fullMaximized && (
         <div
           className="pid-right-resizer"
           role="separator"
@@ -258,141 +210,101 @@ export function RightWorkbench({
           aria-label="调整右侧工作台宽度"
           aria-valuemin={Math.round(resize.min)}
           aria-valuemax={Math.round(resize.max)}
-          aria-valuenow={Math.round(width)}
+          aria-valuenow={Math.round(effectiveWidth)}
           tabIndex={0}
           onPointerDown={resize.onPointerDown}
           onKeyDown={resize.onKeyDown}
         />
       )}
       <aside
-        className={`pid-right-workbench${rightMaximized ? " maximized" : ""}${splitOpen ? " is-split" : ""}`}
+        className={`pid-right-workbench is-mode-${inspectorMode}${fullMaximized ? " maximized" : ""}`}
         data-rightbar-col=""
-        style={rightMaximized ? undefined : { width: `${Math.round(width)}px` }}
+        style={fullMaximized ? undefined : { width: `${Math.round(effectiveWidth)}px` }}
         aria-label="右侧工作台"
       >
-        <header className="pid-wb-header pid-wb-claude-header">
-          <LayoutGroup id="pid-wb-header-tabs">
-            <div ref={tabsRef} className={tabsClassName} role="tablist" aria-label="工作台视图" onScroll={updateScrollEdges} onWheel={handleTabsWheel}>
-              {primaryTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  data-wb-tab={tab.dataTab}
-                  aria-selected={tab.active}
-                  className={`pid-wb-tab-btn${tab.active ? " active" : ""}`}
-                  title={tab.title}
-                  onClick={() => {
-                    if (tab.id === "files") {
-                      const layout = useWorkbenchLayoutStore.getState();
-                      if (isCodeActive && openFilesCount > 0 && (layout.fileDrawerOpen || activeTab === "files")) {
-                        layout.setFileDrawerOpen(false);
-                        openTab("editor");
-                        return;
-                      }
-                      layout.setFileDrawerOpen(true);
-                    }
-                    openTab(tab.id);
-                  }}
-                >
-                  {tab.active && <motion.span layoutId="pid-wb-active-pill" className="pid-wb-tab-pill" transition={{ type: "spring", stiffness: 520, damping: 38 }} />}
-                  {tab.icon}
-                  <span>{tab.label}</span>
-                  {typeof tab.count === "number" && tab.count > 0 && <em className="pid-wb-tab-count">{tab.count}</em>}
-                </button>
-              ))}
+        <div className="pid-wb-stage">
+          {inspectorMode === "sole" && (
+            <div className="pid-wb-inspector-sole">
+              <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />
             </div>
-          </LayoutGroup>
+          )}
+          {inspectorMode === "docked" && (
+            <div className="pid-wb-inspector-docked" aria-label="环境与上下文检查器">
+              <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />
+            </div>
+          )}
+          {inspectorMode === "floating" && (
+            <div className="pid-wb-inspector-popover" role="region" aria-label="环境与上下文检查器">
+              <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />
+            </div>
+          )}
 
-          <div className="pid-wb-window-btns">
-            <button
-              type="button"
-              className={`pid-wb-icon-btn${splitOpen ? " active" : ""}`}
-              title={splitOpen ? "关闭分屏" : "分屏并排查看"}
-              aria-label={splitOpen ? "关闭分屏" : "分屏并排查看"}
-              aria-pressed={splitOpen}
-              onClick={() => toggleSplit(activeTab, width, rightMaximized)}
+          {(activePanes.length > 0 || persistentPaneIds.length > 0) && (
+            <div
+              ref={gridRef}
+              className="pid-wb-panes-grid"
+              hidden={activePanes.length === 0}
+              data-pane-count={activePanes.length}
+              style={{ gridTemplateColumns, gridTemplateRows }}
             >
-              {splitOpen && splitDirection === "vertical" ? <Rows2 size={13} /> : <Columns2 size={13} />}
-            </button>
-            <button
-              type="button"
-              className="pid-wb-icon-btn"
-              title={rightMaximized ? "还原宽度" : "最大化工作台"}
-              onClick={toggleRightMaximized}
-            >
-              {rightMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-            </button>
-            <button
-              type="button"
-              className="pid-wb-icon-btn"
-              title="隐藏工作台 (Ctrl+Alt+B)"
-              onClick={() => setRightOpen(false)}
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </header>
-
-        <div className="pid-wb-body">
-          {!splitOpen ? (
-            <WorkbenchPaneBody paneTab={activeTab} mountSideChat={mountSideChat} {...paneProps} />
-          ) : (
-            <div ref={splitGridRef} className="pid-wb-dual-grid" data-split-dir={splitDirection} style={gridStyle}>
-              <div className="pid-wb-split-pane-slot is-primary">
-                <WorkbenchPaneBody paneTab={activeTab} mountSideChat={mountSideChat} {...paneProps} />
-              </div>
-              <div
-                className="pid-wb-pane-splitter"
-                role="separator"
-                aria-orientation={splitDirection === "horizontal" ? "vertical" : "horizontal"}
-                aria-label="调整分屏比例"
-                tabIndex={0}
-                onPointerDown={handleSplitterPointerDown}
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-                    event.preventDefault();
-                    setSplitRatio(splitRatio - 0.05);
-                  } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-                    event.preventDefault();
-                    setSplitRatio(splitRatio + 0.05);
-                  }
-                }}
-              />
-              <div className="pid-wb-split-pane-slot is-secondary" aria-label="分屏副面板">
-                <div className="pid-wb-secondary-header">
-                  <div className="pid-wb-secondary-pills" role="tablist" aria-label="副面板视图">
-                    {secondaryOptions.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={effectiveSecondaryTab === opt.id}
-                        className={`pid-wb-pill${effectiveSecondaryTab === opt.id ? " active" : ""}`}
-                        onClick={() => setSecondaryTab(opt.id)}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="pid-wb-subbar-actions">
-                    <button
-                      type="button"
-                      className="pid-wb-icon-btn"
-                      title={splitDirection === "horizontal" ? "切换为上下分屏" : "切换为左右分屏"}
-                      onClick={() => setSplitDirection(splitDirection === "horizontal" ? "vertical" : "horizontal")}
-                    >
-                      {splitDirection === "horizontal" ? <Rows2 size={12} /> : <Columns2 size={12} />}
-                    </button>
-                    <button type="button" className="pid-wb-icon-btn" title="关闭副面板" onClick={closeSplit}>
-                      <X size={12} />
-                    </button>
-                  </div>
-                </div>
-                <div className="pid-wb-secondary-body">
-                  <WorkbenchPaneBody paneTab={effectiveSecondaryTab} isSecondary mountSideChat={false} {...paneProps} />
-                </div>
-              </div>
+              {!visibleMaximizedId && columns.hasCol2 && (
+                <div
+                  className="pid-wb-grid-splitter is-col"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="调整左右面板宽度比例"
+                  style={{ gridColumn: "2", gridRow: maxRows > 1 ? `1 / ${maxRows * 2}` : "1" }}
+                  onPointerDown={(event) => beginGridSplitDrag("col", event)}
+                />
+              )}
+              {!visibleMaximizedId && maxRows === 2 && (
+                <div
+                  className="pid-wb-grid-splitter is-row"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="调整上下面板高度比例"
+                  style={{
+                    gridColumn: columns.col1.length === 2 && columns.col2.length === 2
+                      ? "1 / 4"
+                      : columns.col1.length === 2
+                        ? "1"
+                        : "3",
+                    gridRow: "2",
+                  }}
+                  onPointerDown={(event) => beginGridSplitDrag("row", event)}
+                />
+              )}
+              {persistentPaneIds.map((paneId) => {
+                const isOpen = activePanes.includes(paneId);
+                const visible = visibleMaximizedId ? paneId === visibleMaximizedId : isOpen;
+                return (
+                  <WorkbenchPaneFrame
+                    key={paneId}
+                    paneId={paneId}
+                    visible={visible}
+                    maximized={visibleMaximizedId === paneId && fullMaximized}
+                    soleDismissiblePane={!inspectorOpen && activePanes.length === 1}
+                    canFlipTwoPane={activePanes.length === 2}
+                    twoPaneDirection={twoPaneDirection}
+                    gridStyle={placementForPane(paneId)}
+                    cwd={cwd}
+                    sessionFile={sessionFile}
+                    git={git}
+                    codeReviewEnabled={codeReviewEnabled}
+                    webPreviewEnabled={webPreviewEnabled}
+                    sideChatEnabled={sideChatEnabled}
+                    pluginTabs={contributions.rightWorkbenchTabs}
+                    draggingPaneId={draggingPaneId}
+                    onDragStartPane={setDraggingPaneId}
+                    onDragEndPane={() => setDraggingPaneId(null)}
+                    onDropOnPane={swapOrDockPanes}
+                    onRefreshGit={onRefreshGit}
+                    onRestoreFiles={onRestoreFiles}
+                    onRequestReview={onRequestReview}
+                    onAddToChat={onAddToChat}
+                  />
+                );
+              })}
             </div>
           )}
         </div>

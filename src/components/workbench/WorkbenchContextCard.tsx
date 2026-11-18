@@ -1,21 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   ChevronDown,
   ChevronRight,
-  Cpu,
   Download,
   FileText,
   FolderOpen,
-  Plug,
   RefreshCw,
-  TerminalSquare,
 } from "lucide-react";
 import type { HostInfoResult } from "@qianji/protocol";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import { agent } from "../../lib/agent";
-import { deriveEnvSources } from "../../lib/envSources";
 import { describeError } from "../../lib/errors";
 import { harnessRuntimes, isRpcMethodNotFound } from "../../lib/harnessRuntime";
 import { useAppStore } from "../../store";
@@ -24,6 +20,7 @@ import { useWorkbenchStore } from "../../stores/workbenchStore";
 export interface WorkbenchContextCardProps {
   cwd: string;
   sessionFile: string | null;
+  children?: ReactNode;
 }
 
 interface DiagnosticsLogsResult {
@@ -37,7 +34,7 @@ interface DiagnosticsExportResult {
 
 const RULE_FILE_NAMES = new Set(["agents.md", "claude.md", ".cursorrules"]);
 
-export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardProps) {
+export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchContextCardProps) {
   const messages = useAppStore((state) => state.messages);
   const stats = useAppStore((state) => state.stats);
   const model = useAppStore((state) => state.model);
@@ -57,12 +54,6 @@ export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardP
       diagnosticsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [summaryFocus]);
-
-  const usageQuery = useQuery({
-    queryKey: ["workbench-usage", messages.length],
-    queryFn: () => agent.usageSummary(),
-    staleTime: 10_000,
-  });
 
   const mcpQuery = useQuery({
     queryKey: ["workbench-mcp"],
@@ -100,6 +91,7 @@ export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardP
   const hostInfoQuery = useQuery({
     queryKey: ["workbench-host-info"],
     queryFn: () => harnessRuntimes.call<HostInfoResult>("host.info"),
+    enabled: diagExpanded,
     staleTime: 30_000,
   });
 
@@ -113,6 +105,7 @@ export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardP
         throw error;
       }
     },
+    enabled: diagExpanded,
     staleTime: 60_000,
   });
 
@@ -128,7 +121,7 @@ export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardP
 
   const handleExportDiagnostics = useCallback(async () => {
     const destination = await saveDialog({
-      defaultPath: `pi-desktop-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`,
+      defaultPath: `qianji-diagnostics-${new Date().toISOString().slice(0, 10)}.zip`,
       filters: [{ name: "ZIP 归档", extensions: ["zip"] }],
     });
     if (!destination) return;
@@ -165,8 +158,13 @@ export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardP
   const skillCount = resources.filter((item) => item.kind === "skill").length;
   const extCount = resources.filter((item) => item.kind === "extension").length;
   const ruleFiles = rulesQuery.data ?? [];
-  const sources = deriveEnvSources(messages, 6);
   const mcpServers = mcpQuery.data ?? [];
+
+  const hasContextActivity = messages.length > 0
+    || contextTokens > 0
+    || ruleFiles.length > 0
+    || skillCount > 0
+    || extCount > 0;
 
   const filteredLogs = logs.filter((line) => {
     if (logFilter === "all") return true;
@@ -177,158 +175,126 @@ export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardP
 
   return (
     <>
-      <section className="pid-wb-cowork-card">
-        <header className="pid-wb-card-header">
-          <div className="pid-wb-card-title">
-            <Cpu size={14} />
-            <span>上下文探针</span>
-          </div>
-          <div className="pid-wb-subbar-actions">
-            {contextPct !== null && (
-              <span className={`pid-wb-badge${meterTone !== "normal" ? ` ${meterTone}` : ""}`}>
-                {contextPct}%
-              </span>
-            )}
-            <button
-              type="button"
-              className="pid-wb-icon-btn"
-              title="刷新上下文与用量"
-              onClick={() => void usageQuery.refetch()}
-            >
-              <RefreshCw size={12} />
-            </button>
-          </div>
+      <section className="pid-wb-inspector-section">
+        <header className="pid-wb-inspector-head">
+          <span>上下文</span>
+          {contextPct !== null && (
+            <span className={`pid-wb-inspector-metric${meterTone !== "normal" ? ` ${meterTone}` : ""}`}>
+              {contextPct}%
+            </span>
+          )}
         </header>
 
-        <div className="pid-wb-context-meter">
-          <div className="pid-wb-context-meter-row">
-            <span>{(stats?.tokens.total ?? 0).toLocaleString()} tokens</span>
-            <span className="pid-wb-muted">
-              {contextWindow > 0 ? `/ ${contextWindow.toLocaleString()} 窗口` : ""} · ${(stats?.cost ?? 0).toFixed(4)}
-            </span>
-          </div>
-          {contextPct !== null && (
-            <div className="pid-wb-progress-track" aria-hidden="true">
-              <div className={`pid-wb-progress-fill tone-${meterTone}`} style={{ width: `${contextPct}%` }} />
+        {!hasContextActivity ? (
+          <p className="pid-wb-inspector-empty">发送消息后查看上下文用量。</p>
+        ) : (
+          <div className="pid-wb-inspector-context">
+            {contextPct !== null && (
+              <div className="pid-wb-progress-track" aria-hidden="true">
+                <div className={`pid-wb-progress-fill tone-${meterTone}`} style={{ width: `${contextPct}%` }} />
+              </div>
+            )}
+            <div className="pid-wb-inspector-token-row">
+              <span>{contextTokens.toLocaleString()} tokens</span>
+              {contextWindow > 0 && (
+                <span className="pid-wb-muted">/ {contextWindow.toLocaleString()}</span>
+              )}
             </div>
-          )}
-          {usageQuery.data && (
-            <div className="pid-wb-muted" style={{ fontSize: "11px" }}>
-              累计 {usageQuery.data.sessions} 会话 · {usageQuery.data.totalTokens.toLocaleString()} tokens · ${usageQuery.data.totalCost.toFixed(4)}
-            </div>
-          )}
-        </div>
-
-        {(ruleFiles.length > 0 || skillCount > 0 || extCount > 0) && (
-          <div className="pid-wb-context-chips">
-            {ruleFiles.map((entry) => (
-              <button
-                key={entry.path}
-                type="button"
-                className="pid-wb-context-chip is-clickable"
-                title={`打开规则文件 ${entry.path}`}
-                onClick={() => void useWorkbenchStore.getState().openFile(cwd, entry.path)}
-              >
-                <FileText size={11} />
-                <span>{entry.name}</span>
-              </button>
-            ))}
-            {skillCount > 0 && <span className="pid-wb-context-chip">{skillCount} Skills</span>}
-            {extCount > 0 && <span className="pid-wb-context-chip">{extCount} Extensions</span>}
-          </div>
-        )}
-
-        <div className="pid-wb-context-subsection">
-          <div className="pid-wb-context-subhead">
-            <span className="pid-wb-card-sublabel">
-              <Plug size={12} />
-              <span>MCP 服务</span>
-            </span>
-            <button
-              type="button"
-              className="pid-wb-icon-btn"
-              title="重连全部 MCP 服务"
-              onClick={() => void handleReconnectMcp()}
-            >
-              <RefreshCw size={11} />
-            </button>
-          </div>
-          {mcpServers.length === 0 ? (
-            <div className="pid-wb-card-empty">暂未配置启用的 MCP 服务。</div>
-          ) : (
-            <ul className="pid-wb-mcp-list">
-              {mcpServers.map((server) => (
-                <li key={server.id} className="pid-wb-mcp-row">
-                  <div>
-                    <strong>{server.name}</strong>
-                    <span className="pid-wb-muted"> ({server.transport} · {server.toolCount} 工具)</span>
-                    {server.error && <div className="pid-wb-subagent-error">{server.error}</div>}
-                  </div>
-                  <span className={`pid-wb-status-pill ${server.connected ? "completed" : "failed"}`}>
-                    {server.connected ? "已连接" : "断开"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {sources.length > 0 && (
-          <div className="pid-wb-context-subsection">
-            <span className="pid-wb-card-sublabel">近期读取与工具来源</span>
-            <ul className="pid-wb-output-list">
-              {sources.map((src) => (
-                <li key={src.id} className="pid-wb-source-row">
-                  <span className="pid-wb-source-label" title={src.detail || src.label}>{src.label}</span>
-                  <span className="pid-wb-muted">{src.activity} ×{src.count}</span>
-                </li>
-              ))}
-            </ul>
+            {(ruleFiles.length > 0 || skillCount > 0 || extCount > 0) && (
+              <div className="pid-wb-inspector-chips">
+                {ruleFiles.map((entry) => (
+                  <button
+                    key={entry.path}
+                    type="button"
+                    className="pid-wb-inspector-chip is-clickable"
+                    title={`打开规则文件 ${entry.path}`}
+                    onClick={() => void useWorkbenchStore.getState().openFile(cwd, entry.path)}
+                  >
+                    <FileText size={11} />
+                    <span>{entry.name}</span>
+                  </button>
+                ))}
+                {skillCount > 0 && <span className="pid-wb-inspector-chip">{skillCount} Skills</span>}
+                {extCount > 0 && <span className="pid-wb-inspector-chip">{extCount} Extensions</span>}
+              </div>
+            )}
           </div>
         )}
       </section>
 
-      <section ref={diagnosticsRef} className="pid-wb-cowork-card" data-diagnostics-section>
-        <header className="pid-wb-card-header">
+      <section className="pid-wb-inspector-section">
+        <header className="pid-wb-inspector-head">
+          <span>连接器</span>
           <button
             type="button"
-            className="pid-wb-card-collapse-btn"
+            className="pid-wb-icon-btn small"
+            title="重连 MCP 服务"
+            aria-label="重连 MCP 服务"
+            onClick={() => void handleReconnectMcp()}
+          >
+            <RefreshCw size={11} />
+          </button>
+        </header>
+
+        {mcpServers.length === 0 ? (
+          <p className="pid-wb-inspector-empty">暂未连接外部扩展服务。</p>
+        ) : (
+          <ul className="pid-wb-inspector-list">
+            {mcpServers.map((server) => (
+              <li key={server.id} className="pid-wb-connector-row">
+                <span className={`pid-wb-status-dot${server.connected ? " online" : " offline"}`} />
+                <span className="pid-wb-connector-name">{server.name}</span>
+                <span className="pid-wb-muted">{server.toolCount} 工具</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {children}
+
+      <section ref={diagnosticsRef} className="pid-wb-inspector-section is-footer" data-diagnostics-section>
+        <div className="pid-wb-inspector-head">
+          <button
+            type="button"
+            className="pid-wb-diag-toggle"
             aria-expanded={diagExpanded}
             onClick={() => setDiagExpanded((open) => !open)}
           >
-            {diagExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            <TerminalSquare size={14} />
-            <span>宿主诊断与日志</span>
-            {logs.length > 0 && <span className="pid-wb-badge">{logs.length}</span>}
+            {diagExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>诊断日志</span>
+            {logs.length > 0 && <span className="pid-wb-muted">({logs.length})</span>}
           </button>
-          <div className="pid-wb-subbar-actions">
-            {diagLogsQuery.data?.dir && (
+          {diagExpanded && (
+            <div className="pid-wb-subbar-actions">
+              {diagLogsQuery.data?.dir && (
+                <button
+                  type="button"
+                  className="pid-wb-icon-btn small"
+                  title={`打开日志目录：${diagLogsQuery.data.dir}`}
+                  onClick={() => void agent.openWorkspaceInFileManager(diagLogsQuery.data?.dir ?? "")}
+                >
+                  <FolderOpen size={11} />
+                </button>
+              )}
               <button
                 type="button"
-                className="pid-wb-icon-btn"
-                title={`打开日志目录：${diagLogsQuery.data.dir}`}
-                onClick={() => void agent.openWorkspaceInFileManager(diagLogsQuery.data?.dir ?? "")}
+                className="pid-wb-icon-btn small"
+                disabled={exporting}
+                title="导出诊断包"
+                onClick={() => void handleExportDiagnostics()}
               >
-                <FolderOpen size={12} />
+                <Download size={11} />
               </button>
-            )}
-            <button
-              type="button"
-              className="pid-wb-btn small"
-              disabled={exporting}
-              onClick={() => void handleExportDiagnostics()}
-            >
-              <Download size={12} />
-              <span>{exporting ? "导出中…" : "导出诊断包"}</span>
-            </button>
-          </div>
-        </header>
+            </div>
+          )}
+        </div>
+
         {diagExpanded && (
-          <>
+          <div className="pid-wb-diag-body">
             {hostInfoQuery.data && (
-              <div className="pid-wb-meta-strip">
-                <span>Host v{hostInfoQuery.data.version}</span>
-                <span className="pid-wb-muted">协议 v{hostInfoQuery.data.protocolVersion}</span>
+              <div className="pid-wb-diag-meta">
+                Host v{hostInfoQuery.data.version} · 协议 v{hostInfoQuery.data.protocolVersion}
               </div>
             )}
             <div className="pid-wb-filter-pills">
@@ -344,24 +310,22 @@ export function WorkbenchContextCard({ cwd, sessionFile }: WorkbenchContextCardP
                 className={`pid-wb-pill${logFilter === "warn" ? " active" : ""}`}
                 onClick={() => setLogFilter("warn")}
               >
-                警告/错误
+                警告
               </button>
               <button
                 type="button"
                 className={`pid-wb-pill${logFilter === "error" ? " active" : ""}`}
                 onClick={() => setLogFilter("error")}
               >
-                仅错误
+                错误
               </button>
             </div>
             {filteredLogs.length === 0 ? (
-              <div className="pid-wb-card-empty">暂无匹配的运行日志记录。</div>
+              <p className="pid-wb-inspector-empty">暂无运行日志。</p>
             ) : (
-              <pre className="pid-wb-log-box">
-                {filteredLogs.slice(-120).join("\n")}
-              </pre>
+              <pre className="pid-wb-log-box">{filteredLogs.slice(-120).join("\n")}</pre>
             )}
-          </>
+          </div>
         )}
       </section>
     </>

@@ -20,6 +20,7 @@ import { activeSessionTitle } from "./lib/sessionTitle";
 import { nextTranscriptDensity, normalizeTranscriptDensity } from "./lib/transcriptDensity";
 import { useAppStore } from "./store";
 import { useSlices } from "./store/selectors";
+import { useWorkbenchLayoutStore } from "./stores/workbenchLayoutStore";
 import { useWorkbenchStore } from "./stores/workbenchStore";
 import { RegionErrorBoundary } from "./components/common/ErrorBoundary";
 import { WorkspaceFileOpenContext } from "./components/Markdown";
@@ -144,9 +145,9 @@ export default function App() {
 
   const showErrorToast = useCallback((msg: string) => useAppStore.getState().showToast(msg, "error"), []);
   const notify = useCallback((msg: string, tone: "info" | "error") => useAppStore.getState().showToast(msg, tone), []);
-  const toggleWorkspaceSidebar = useCallback(() => { setHubView(null); useWorkbenchStore.getState().toggleRight(); }, []);
-  const toggleBottomPanel = useCallback(() => useWorkbenchStore.getState().toggleBottom(), []);
-  const openBottomTerminal = useCallback(() => useWorkbenchStore.getState().openBottomTerminal(), []);
+  const toggleWorkspaceSidebar = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().toggleInspector(); }, []);
+  const toggleBottomPanel = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().toggleTerminalShortcutPanel(); }, []);
+  const openBottomTerminal = useCallback(() => { setHubView(null); useWorkbenchLayoutStore.getState().openPane("terminal"); }, []);
   const openSummary = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openSummary("overview"); }, []);
   const openDiagnostics = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openSummary("diagnostics"); }, []);
   const openReview = useCallback(() => { setHubView(null); useWorkbenchStore.getState().openReview(); }, []);
@@ -255,7 +256,7 @@ export default function App() {
         exportConversationMarkdown={nav.exportConversationMarkdown} transcriptDensity={transcriptDensity}
         setTranscriptDensity={setTranscriptDensity} toggleWorkspaceSidebar={toggleWorkspaceSidebar}
         openBrowserAt={openBrowserAt} toggleBottomPanel={toggleBottomPanel} openSettingsPage={openSettingsPage}
-        openDiagnostics={openDiagnostics}
+        openDiagnostics={openDiagnostics} onBeforeWorkbenchOpen={() => setHubView(null)}
       />
       <div
         className="workspace-shell"

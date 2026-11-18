@@ -74,14 +74,20 @@ function readTerminalTheme() {
     };
   }
   const styles = getComputedStyle(document.documentElement);
-  const bg = styles.getPropertyValue("--panel").trim() || "#18181b";
-  const fg = styles.getPropertyValue("--text").trim() || "#e4e4e7";
-  const accent = styles.getPropertyValue("--accent").trim() || "#4b93ff";
+  const bg = styles.getPropertyValue("--qj-bg-surface").trim()
+    || styles.getPropertyValue("--app").trim()
+    || "#ffffff";
+  const fg = styles.getPropertyValue("--qj-text-primary").trim()
+    || styles.getPropertyValue("--text").trim()
+    || "#111214";
+  const accent = styles.getPropertyValue("--qj-brand-primary").trim()
+    || styles.getPropertyValue("--accent").trim()
+    || "#006ee4";
   return {
     background: bg,
     foreground: fg,
     cursor: accent,
-    selectionBackground: "rgba(75, 147, 255, 0.26)",
+    selectionBackground: "rgba(75, 147, 255, 0.24)",
   };
 }
 
@@ -246,9 +252,10 @@ function TerminalViewport({ session, selected, visible, onExited }: TerminalView
 export interface TerminalPanelProps {
   cwd: string;
   visible?: boolean;
+  compactHeader?: boolean;
 }
 
-export function TerminalPanel({ cwd, visible = true }: TerminalPanelProps) {
+export function TerminalPanel({ cwd, visible = true, compactHeader = false }: TerminalPanelProps) {
   const preferredShell = useAppStore((state) => state.settings?.terminalShell ?? "");
   const terminalCreateNonce = useWorkbenchStore((state) => state.terminalCreateNonce);
 
@@ -353,50 +360,54 @@ export function TerminalPanel({ cwd, visible = true }: TerminalPanelProps) {
     }
   }
 
+  const showTabStrip = !compactHeader || workspaceSessions.length > 1;
+
   return (
     <div className="pid-wb-terminal-wrap">
-      <div className="pid-wb-terminal-tabs">
-        <div className="pid-wb-terminal-tab-list" role="tablist" aria-label="终端会话">
-          {workspaceSessions.map((item) => {
-            const active = item.id === resolvedActiveId;
-            return (
-              <div
-                key={item.id}
-                role="tab"
-                aria-selected={active}
-                className={`pid-wb-editor-tab${active ? " active" : ""}`}
-              >
-                <button
-                  type="button"
-                  className="pid-wb-editor-tab-label"
-                  onClick={() => handleSelectSession(item.id)}
-                  title={`${item.title} — ${item.cwd}`}
+      {showTabStrip && (
+        <div className="pid-wb-terminal-tabs">
+          <div className="pid-wb-terminal-tab-list" role="tablist" aria-label="终端会话">
+            {workspaceSessions.map((item) => {
+              const active = item.id === resolvedActiveId;
+              return (
+                <div
+                  key={item.id}
+                  role="tab"
+                  aria-selected={active}
+                  className={`pid-wb-editor-tab${active ? " active" : ""}`}
                 >
-                  <TerminalSquare size={12} />
-                  <span>{item.title}</span>
-                </button>
-                <button
-                  type="button"
-                  className="pid-wb-editor-tab-close"
-                  title="关闭此终端"
-                  onClick={() => handleClose(item.id)}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            );
-          })}
+                  <button
+                    type="button"
+                    className="pid-wb-editor-tab-label"
+                    onClick={() => handleSelectSession(item.id)}
+                    title={`${item.title} — ${item.cwd}`}
+                  >
+                    <TerminalSquare size={12} />
+                    <span>{item.title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="pid-wb-editor-tab-close"
+                    title="关闭此终端"
+                    onClick={() => handleClose(item.id)}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            className="pid-wb-icon-btn"
+            title="新建终端标签页"
+            disabled={!cwd || !defaultShell}
+            onClick={() => createSession()}
+          >
+            <Plus size={13} />
+          </button>
         </div>
-        <button
-          type="button"
-          className="pid-wb-icon-btn"
-          title="新建终端标签页"
-          disabled={!cwd || !defaultShell}
-          onClick={() => createSession()}
-        >
-          <Plus size={13} />
-        </button>
-      </div>
+      )}
 
       <div className="pid-wb-terminal-stage">
         {workspaceSessions.length === 0 && (

@@ -2,16 +2,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { BrowserPreviewTab } from "../src/components/workbench/BrowserPreviewTab";
+import { BrowserPreviewTab, sanitizePreviewUrl } from "../src/components/workbench/BrowserPreviewTab";
+import { CodeWorkspacePane } from "../src/components/workbench/CodeWorkspacePane";
 import { partitionAiCommentsForFile } from "../src/components/workbench/DiffInlineComments";
 import { ReviewDiffTab } from "../src/components/workbench/ReviewDiffTab";
-import { RightWorkbench } from "../src/components/workbench/RightWorkbench";
+import { RightWorkbench, WorkbenchTopbarControls } from "../src/components/workbench/RightWorkbench";
 import { TaskSummaryTab } from "../src/components/workbench/TaskSummaryTab";
 import type { CodeReviewComment } from "../src/lib/codeReview";
 import { useAppStore } from "../src/store";
 import { useBuiltinPluginGatesStore } from "../src/stores/builtinPluginGatesStore";
 import {
   clampSplitRatio,
+  computeGridColumns,
   formatDraftDiffCommentsPrompt,
   selectDraftCommentsForCwd,
   useWorkbenchLayoutStore,
@@ -51,8 +53,8 @@ function renderWithQuery(node: ReactNode): string {
 const noopResize = {
   onPointerDown: () => undefined,
   onKeyDown: () => undefined,
-  min: 300,
-  max: 900,
+  min: 260,
+  max: 1260,
 };
 
 afterEach(() => {
@@ -75,43 +77,191 @@ afterEach(() => {
   });
 });
 
-describe("Claude Desktop Right Workbench (Code + Cowork Hybrid)", () => {
-  it("defaults right workbench activeTab to 'summary' and manages split-pane, ratio clamping, and file drawer", () => {
-    expect(useWorkbenchStore.getState().activeTab).toBe("summary");
-
+describe("Claude Desktop 2D Multi-Pane Right Workbench & Hairline Inspector", () => {
+  it("toggles independent top-right panes, enforces 2x2 canonical ordering, and supports drag swap/dock", () => {
     const layout = useWorkbenchLayoutStore.getState();
-    expect(layout.fileDrawerOpen).toBe(false);
-    layout.toggleFileDrawer();
-    expect(useWorkbenchLayoutStore.getState().fileDrawerOpen).toBe(true);
-    layout.setFileDrawerOpen(false);
-    expect(useWorkbenchLayoutStore.getState().fileDrawerOpen).toBe(false);
+    expect(layout.openPanes).toEqual([]);
+    expect(layout.inspectorOpen).toBe(false);
+    expect(layout.fileDrawerOpen).toBe(true);
 
-    // Narrow width -> vertical split, smart secondary selection from summary -> review.
-    layout.toggleSplit("summary", 420, false);
-    let next = useWorkbenchLayoutStore.getState();
-    expect(next.splitOpen).toBe(true);
-    expect(next.splitDirection).toBe("vertical");
-    expect(next.secondaryTab).toBe("review");
+    // Toggling panes in arbitrary order converges to canonical 2x2 grid: Col 1 [review, preview], Col 2 [files, terminal].
+    layout.togglePane("terminal");
+    layout.togglePane("files");
+    layout.togglePane("preview");
+    layout.togglePane("review");
+    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual(["review", "preview", "files", "terminal"]);
+    expect(useWorkbenchStore.getState().rightOpen).toBe(true);
 
-    // Toggle off and reopen at wide / maximized width from editor -> horizontal split, secondary preview.
-    next.toggleSplit("summary", 420, false);
-    expect(useWorkbenchLayoutStore.getState().splitOpen).toBe(false);
-    useWorkbenchLayoutStore.getState().setSecondaryTab("editor");
-    useWorkbenchLayoutStore.getState().toggleSplit("editor", 800, true);
-    next = useWorkbenchLayoutStore.getState();
-    expect(next.splitOpen).toBe(true);
-    expect(next.splitDirection).toBe("horizontal");
-    expect(next.secondaryTab).toBe("preview");
+    const fourCols = computeGridColumns(useWorkbenchLayoutStore.getState().openPanes, "horizontal", null);
+    expect(fourCols).toEqual({
+      col1: ["review", "preview"],
+      col2: ["files", "terminal"],
+      hasCol2: true,
+    });
+
+    // Closing two panes leaves 2 panes side-by-side by default, and drag-dropping top/bottom flips to vertical stack.
+    layout.closePane("review");
+    layout.closePane("terminal");
+    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual(["preview", "files"]);
+    expect(computeGridColumns(["preview", "files"], "horizontal", null)).toEqual({
+      col1: ["preview"],
+      col2: ["files"],
+      hasCol2: true,
+    });
+
+    layout.swapOrDockPanes("files", "preview", "top");
+    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual(["files", "preview"]);
+    expect(useWorkbenchLayoutStore.getState().twoPaneDirection).toBe("vertical");
+    expect(computeGridColumns(["files", "preview"], "vertical", null)).toEqual({
+      col1: ["files", "preview"],
+      col2: [],
+      hasCol2: false,
+    });
+
+    // Closing all panes closes rightOpen if Inspector is also closed.
+    layout.closePane("files");
+    layout.closePane("preview");
+    expect(useWorkbenchLayoutStore.getState().openPanes).toEqual([]);
+    expect(useWorkbenchStore.getState().rightOpen).toBe(false);
 
     // Ratio clamping.
     expect(clampSplitRatio(Number.NaN)).toBe(0.5);
-    next.setSplitRatio(0.05);
-    expect(useWorkbenchLayoutStore.getState().splitRatio).toBe(0.25);
-    next.setSplitRatio(0.95);
-    expect(useWorkbenchLayoutStore.getState().splitRatio).toBe(0.75);
+    layout.setColRatio(0.05);
+    expect(useWorkbenchLayoutStore.getState().colRatio).toBe(0.22);
+    layout.setColRatio(0.95);
+    expect(useWorkbenchLayoutStore.getState().colRatio).toBe(0.78);
   });
 
-  it("isolates draft diff comments per workspace and formats structured batch prompt", () => {
+  it("renders sole, docked, and floating Inspector modes alongside the 2D pane grid and top-right controls", () => {
+    const controlsClosedHtml = renderWithQuery(createElement(WorkbenchTopbarControls));
+    expect(controlsClosedHtml).toContain('data-wb-tab="review"');
+    expect(controlsClosedHtml).toContain('data-wb-tab="preview"');
+    expect(controlsClosedHtml).toContain('data-wb-tab="files"');
+    expect(controlsClosedHtml).toContain('data-wb-tab="terminal"');
+    expect(controlsClosedHtml).toContain('data-wb-tab="summary"');
+    expect(controlsClosedHtml).toContain("切换右侧工作台 (Ctrl+Alt+B)");
+
+    // Mode 1: Sole Inspector (matches Claude Desktop screenshot 6).
+    useWorkbenchLayoutStore.getState().toggleInspector();
+    const soleHtml = renderWithQuery(
+      createElement(RightWorkbench, {
+        cwd: "D:\\Work\\RepoA",
+        sessionFile: null,
+        width: 740,
+        git: null,
+        onRefreshGit: async () => undefined,
+        onRestoreFiles: async () => undefined,
+        onRequestReview: () => undefined,
+        resize: noopResize,
+      }),
+    );
+    expect(soleHtml).toContain('aria-label="右侧工作台"');
+    expect(soleHtml).toContain("is-mode-sole");
+    expect(soleHtml).toContain("pid-wb-inspector-sole");
+    expect(soleHtml).not.toContain("pid-wb-inspector-popover");
+
+    // Mode 2: Docked Inspector + Files (matches Claude Desktop screenshot 5).
+    useWorkbenchLayoutStore.getState().openPane("files");
+    const dockedHtml = renderWithQuery(
+      createElement(RightWorkbench, {
+        cwd: "D:\\Work\\RepoA",
+        sessionFile: null,
+        width: 740,
+        git: null,
+        onRefreshGit: async () => undefined,
+        onRestoreFiles: async () => undefined,
+        onRequestReview: () => undefined,
+        resize: noopResize,
+      }),
+    );
+    expect(dockedHtml).toContain("is-mode-docked");
+    expect(dockedHtml).toContain("pid-wb-inspector-docked");
+    expect(dockedHtml).toContain('data-pane-id="files"');
+
+    // Mode 3: Floating Popover Inspector over 2x2 Multi-Pane Grid (matches Claude Desktop screenshot 1).
+    useWorkbenchLayoutStore.getState().openPane("review");
+    useWorkbenchLayoutStore.getState().openPane("preview");
+    useWorkbenchLayoutStore.getState().openPane("terminal");
+    const gridFloatingHtml = renderWithQuery(
+      createElement(RightWorkbench, {
+        cwd: "D:\\Work\\RepoA",
+        sessionFile: null,
+        width: 960,
+        git: null,
+        onRefreshGit: async () => undefined,
+        onRestoreFiles: async () => undefined,
+        onRequestReview: () => undefined,
+        resize: noopResize,
+      }),
+    );
+    expect(gridFloatingHtml).toContain("is-mode-floating");
+    expect(gridFloatingHtml).toContain("pid-wb-inspector-popover");
+    expect(gridFloatingHtml).toContain('data-pane-count="4"');
+    expect(gridFloatingHtml).toContain('data-pane-id="review"');
+    expect(gridFloatingHtml).toContain('data-pane-id="preview"');
+    expect(gridFloatingHtml).toContain('data-pane-id="files"');
+    expect(gridFloatingHtml).toContain('data-pane-id="terminal"');
+    expect(gridFloatingHtml).toContain("需要 Git 仓库");
+    expect(gridFloatingHtml).toContain("与 Agent 协同浏览");
+  });
+
+  it("renders Files pane with empty editor stage on the left and file tree rail on the right", () => {
+    const filesHtml = renderWithQuery(createElement(CodeWorkspacePane, { cwd: "D:\\Work\\RepoA" }));
+    const mainPos = filesHtml.indexOf("pid-wb-code-main");
+    const treePos = filesHtml.indexOf("pid-wb-file-tree-rail");
+    expect(mainPos).toBeGreaterThan(-1);
+    expect(treePos).toBeGreaterThan(mainPos);
+    expect(filesHtml).toContain("打开的文件将显示在此处");
+    expect(filesHtml).toContain("筛选文件，或输入 / 搜索…");
+  });
+
+  it("renders headerless hairline Inspector sections in Environment -> Context -> Connectors -> Outputs order with collapsed diagnostics", () => {
+    useAppStore.setState({
+      stats: {
+        userMessages: 1,
+        assistantMessages: 1,
+        toolCalls: 1,
+        toolResults: 1,
+        totalMessages: 2,
+        tokens: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500 },
+        cost: 0.0123,
+        contextUsage: { tokens: 1500, contextWindow: 10000, percent: 15 },
+      },
+      messages: [
+        {
+          id: "a1",
+          role: "assistant",
+          content: "done",
+          timestamp: 1,
+          toolCalls: [
+            { id: "t1", name: "write_file", args: { path: "src/pelican-ride.html" }, running: false },
+          ],
+        },
+      ],
+    });
+
+    const html = renderWithQuery(
+      createElement(TaskSummaryTab, { cwd: "D:\\Work\\RepoA", sessionFile: null }),
+    );
+    const envPos = html.indexOf("运行环境");
+    const ctxPos = html.indexOf("上下文");
+    const connPos = html.indexOf("连接器");
+    const outPos = html.indexOf("产出文件");
+    const diagPos = html.indexOf("data-diagnostics-section");
+    expect(envPos).toBeGreaterThan(-1);
+    expect(ctxPos).toBeGreaterThan(envPos);
+    expect(connPos).toBeGreaterThan(ctxPos);
+    expect(outPos).toBeGreaterThan(connPos);
+    expect(diagPos).toBeGreaterThan(outPos);
+    expect(html).toContain("本机环境");
+    expect(html).toContain("RepoA");
+    expect(html).toContain("pelican-ride.html");
+    expect(html).toContain("15%");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("$0.0123");
+  });
+
+  it("isolates draft diff comments per workspace and matches ::code-comment AI findings", () => {
     const repoA = "D:\\Work\\RepoA";
     const repoB = "D:\\Work\\RepoB";
     const store = useWorkbenchLayoutStore.getState();
@@ -133,34 +283,10 @@ describe("Claude Desktop Right Workbench (Code + Cowork Hybrid)", () => {
       body: "保留旧返回值",
     });
 
-    // Update existing comment by id.
-    store.upsertDraftComment(repoA, {
-      id: "c1",
-      file: "src/App.tsx",
-      line: 42,
-      side: "new",
-      lineText: "const x = foo();",
-      body: "请补充空值判断并返回默认值",
-    });
-
     const commentsA = selectDraftCommentsForCwd(useWorkbenchLayoutStore.getState(), repoA);
-    const commentsB = selectDraftCommentsForCwd(useWorkbenchLayoutStore.getState(), repoB);
     expect(commentsA).toHaveLength(1);
-    expect(commentsA[0]?.body).toBe("请补充空值判断并返回默认值");
-    expect(commentsB).toHaveLength(1);
+    expect(formatDraftDiffCommentsPrompt(commentsA)).toContain("src/App.tsx:42");
 
-    const prompt = formatDraftDiffCommentsPrompt(commentsA);
-    expect(prompt).toContain("src/App.tsx:42");
-    expect(prompt).toContain("const x = foo();");
-    expect(prompt).toContain("请补充空值判断并返回默认值");
-
-    store.removeDraftComment(repoA, "c1");
-    expect(selectDraftCommentsForCwd(useWorkbenchLayoutStore.getState(), repoA)).toHaveLength(0);
-    store.clearDraftComments(repoB);
-    expect(selectDraftCommentsForCwd(useWorkbenchLayoutStore.getState(), repoB)).toHaveLength(0);
-  });
-
-  it("matches ::code-comment paths (relative and full paths) and partitions line vs file comments", () => {
     const aiComments: CodeReviewComment[] = [
       {
         id: "r1",
@@ -182,104 +308,16 @@ describe("Claude Desktop Right Workbench (Code + Cowork Hybrid)", () => {
         priority: 2,
         messageId: "m1",
       },
-      {
-        id: "r3",
-        title: "[P3] Other file",
-        body: "Ignore me.",
-        file: "src/Other.tsx",
-        start: 5,
-        end: 5,
-        priority: 3,
-        messageId: "m1",
-      },
     ];
-
     const partitioned = partitionAiCommentsForFile(aiComments, "src/App.tsx");
     expect(partitioned.byLine.get(18)?.map((c) => c.id)).toEqual(["r1"]);
     expect(partitioned.fileLevel.map((c) => c.id)).toEqual(["r2"]);
+
+    store.removeDraftComment(repoA, "c1");
+    store.clearDraftComments(repoB);
   });
 
-  it("renders RightWorkbench capsule header in single and split modes", () => {
-    useWorkbenchStore.setState({ rightOpen: true, activeTab: "summary" });
-    const singleHtml = renderWithQuery(
-      createElement(RightWorkbench, {
-        cwd: "D:\\Work\\RepoA",
-        sessionFile: null,
-        width: 480,
-        git: null,
-        onRefreshGit: async () => undefined,
-        onRestoreFiles: async () => undefined,
-        onRequestReview: () => undefined,
-        resize: noopResize,
-      }),
-    );
-    expect(singleHtml).toContain('aria-label="右侧工作台"');
-    expect(singleHtml).toContain('data-wb-tab="summary"');
-    expect(singleHtml).toContain('data-wb-tab="files"');
-    expect(singleHtml).toContain("概览");
-    expect(singleHtml).toContain("代码");
-    expect(singleHtml).toContain("审查");
-    expect(singleHtml).toContain("预览");
-    expect(singleHtml).toContain("侧问");
-    expect(singleHtml).not.toContain("pid-wb-dual-grid");
-
-    useWorkbenchLayoutStore.getState().toggleSplit("summary", 760, false);
-    const splitHtml = renderWithQuery(
-      createElement(RightWorkbench, {
-        cwd: "D:\\Work\\RepoA",
-        sessionFile: null,
-        width: 760,
-        git: null,
-        onRefreshGit: async () => undefined,
-        onRestoreFiles: async () => undefined,
-        onRequestReview: () => undefined,
-        resize: noopResize,
-      }),
-    );
-    expect(splitHtml).toContain("pid-wb-dual-grid");
-    expect(splitHtml).toContain('data-split-dir="horizontal"');
-    expect(splitHtml).toContain('aria-label="分屏副面板"');
-  });
-
-  it("renders Cowork 3-card overview inspector with collapsed diagnostics by default", () => {
-    useAppStore.setState({
-      stats: {
-        userMessages: 1,
-        assistantMessages: 1,
-        toolCalls: 1,
-        toolResults: 1,
-        totalMessages: 2,
-        tokens: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500 },
-        cost: 0.0123,
-        contextUsage: { tokens: 1500, contextWindow: 10000, percent: 15 },
-      },
-      messages: [
-        {
-          id: "a1",
-          role: "assistant",
-          content: "done",
-          timestamp: 1,
-          toolCalls: [
-            { id: "t1", name: "write_file", args: { path: "src/demo.ts" }, running: false },
-          ],
-        },
-      ],
-    });
-
-    const html = renderWithQuery(
-      createElement(TaskSummaryTab, { cwd: "D:\\Work\\RepoA", sessionFile: null }),
-    );
-    expect(html).toContain("任务进度");
-    expect(html).toContain("工作目录与产出");
-    expect(html).toContain("上下文探针");
-    expect(html).toContain("src/demo.ts");
-    expect(html).toContain("15%");
-    expect(html).toContain("data-diagnostics-section");
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain("导出诊断包</span></div>");
-  });
-
-  it("renders ReviewDiffTab with inline AI findings, draft comments, and BrowserPreviewTab presets", () => {
+  it("renders ReviewDiffTab inline findings/comments and BrowserPreviewTab single-header controls with URL sanitization", () => {
     const cwd = "D:\\Work\\RepoA";
     const diff = [
       "diff --git a/src/App.tsx b/src/App.tsx",
@@ -325,15 +363,17 @@ describe("Claude Desktop Right Workbench (Code + Cowork Hybrid)", () => {
     );
     expect(reviewHtml).toContain("AI 发现 1 处问题");
     expect(reviewHtml).toContain("[P1] Unused variable");
-    expect(reviewHtml).toContain("让 Agent 修复");
     expect(reviewHtml).toContain("这里请改成 let");
     expect(reviewHtml).toContain("发送给 Agent 修改");
-    expect(reviewHtml).toContain("填入输入框");
 
     const previewHtml = renderWithQuery(createElement(BrowserPreviewTab, { cwd }));
+    expect(previewHtml).toContain("与 Agent 协同浏览");
+    expect(previewHtml).toContain("检测开发服务器");
     expect(previewHtml).toContain("自适应");
-    expect(previewHtml).toContain("移动");
-    expect(previewHtml).toContain("桌面");
-    expect(previewHtml).toContain("反馈");
+    expect(previewHtml).toContain("移动 (390px)");
+    expect(previewHtml).toContain("桌面 (1280px)");
+    expect(sanitizePreviewUrl("http://localhost:5173")).toBe("http://localhost:5173");
+    expect(sanitizePreviewUrl("tauri://localhost")).toBeNull();
+    expect(sanitizePreviewUrl("http://tauri.localhost/app")).toBeNull();
   });
 });

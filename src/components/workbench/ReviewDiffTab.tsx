@@ -183,14 +183,32 @@ export function ReviewDiffTab({
   }, [cwd, handleRefresh]);
 
   if (!cwd) {
-    return <div className="pid-wb-empty">选择工作区后即可查看代码变更。</div>;
+    return (
+      <div className="pid-wb-empty pid-wb-claude-empty">
+        <strong>选择工作区后查看变更</strong>
+        <p>在左侧选择项目目录后，将自动跟踪代码改动。</p>
+      </div>
+    );
   }
 
   if (!git?.isRepository) {
-    return <div className="pid-wb-empty">当前目录不是 Git 仓库。</div>;
+    return (
+      <div className="pid-wb-empty pid-wb-claude-empty">
+        <strong>需要 Git 仓库</strong>
+        <p>未在当前会话目录检测到 Git 版本库。</p>
+      </div>
+    );
   }
 
   const allFiles = git.files;
+  if (allFiles.length === 0 && !baseBranch) {
+    return (
+      <div className="pid-wb-empty pid-wb-claude-empty">
+        <strong>当前无代码变更</strong>
+        <p>工作区暂无未提交改动，文件修改后将显示在这里。</p>
+      </div>
+    );
+  }
   const stagedCount = allFiles.filter((file) => file.staged).length;
   const unstagedCount = allFiles.filter((file) => file.unstaged || file.untracked).length;
   const filteredFiles = effectiveFilter === "staged"

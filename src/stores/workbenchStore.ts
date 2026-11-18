@@ -181,6 +181,7 @@ export interface WorkbenchState {
   setBottomOpen: (open: boolean) => void;
   openBottomTerminal: () => void;
   requestNewTerminal: () => void;
+  bumpTerminalCreateNonce: () => void;
   setActiveBottomTab: (tab: string) => void;
   resetForTest: () => void;
 }
@@ -478,37 +479,16 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   }),
 
   openReview: () => set({ rightOpen: true, activeTab: "review" }),
-
-  openPreview: (url) => set((state) => ({
-    rightOpen: true,
-    activeTab: "preview",
-    previewUrl: url !== undefined ? url : state.previewUrl,
-  })),
-
+  openPreview: (url) => set((state) => ({ rightOpen: true, activeTab: "preview", previewUrl: url !== undefined ? url : state.previewUrl })),
   setPreviewUrl: (url) => set({ previewUrl: url }),
-
-  openSummary: (focus = "overview") => set({
-    rightOpen: true,
-    activeTab: "summary",
-    summaryFocus: focus,
-  }),
-
+  openSummary: (focus = "overview") => set({ rightOpen: true, activeTab: "summary", summaryFocus: focus }),
   openSideChat: () => set({ rightOpen: true, activeTab: "side-chat" }),
-
   toggleBottom: () => set((state) => ({ bottomOpen: !state.bottomOpen })),
-
   setBottomOpen: (open) => set({ bottomOpen: open }),
-
   openBottomTerminal: () => set({ bottomOpen: true, activeBottomTab: "terminal" }),
-
-  requestNewTerminal: () => set((state) => ({
-    bottomOpen: true,
-    activeBottomTab: "terminal",
-    terminalCreateNonce: state.terminalCreateNonce + 1,
-  })),
-
+  requestNewTerminal: () => set((state) => ({ bottomOpen: true, activeBottomTab: "terminal", terminalCreateNonce: state.terminalCreateNonce + 1 })),
+  bumpTerminalCreateNonce: () => set((state) => ({ terminalCreateNonce: state.terminalCreateNonce + 1 })),
   setActiveBottomTab: (tab) => set({ bottomOpen: true, activeBottomTab: tab }),
-
   resetForTest: () => set({ ...initialState }),
 }));
 

@@ -1,3 +1,4 @@
+import { Suspense, lazy, type DragEvent, type ReactNode } from "react";
 import type { CodeReviewScope } from "../../lib/codeReview";
 import type { ClientWorkbenchTabContribution } from "../../lib/clientContributions";
 import { isCodePaneTab } from "../../stores/workbenchLayoutStore";
@@ -9,17 +10,24 @@ import { CodeWorkspacePane } from "./CodeWorkspacePane";
 import { ReviewDiffTab } from "./ReviewDiffTab";
 import { TaskSummaryTab } from "./TaskSummaryTab";
 
+const LazyTerminalPanel = lazy(() =>
+  import("./TerminalPanel").then((mod) => ({ default: mod.TerminalPanel })),
+);
+
 export interface WorkbenchPaneBodyProps {
   paneTab: string;
-  isSecondary?: boolean;
+  isVisible?: boolean;
   cwd: string;
   sessionFile: string | null;
   git: GitSnapshot | null;
   codeReviewEnabled: boolean;
   webPreviewEnabled: boolean;
   sideChatEnabled: boolean;
-  mountSideChat: boolean;
   pluginTabs: readonly ClientWorkbenchTabContribution[];
+  paneControls?: ReactNode;
+  draggableHeader?: boolean;
+  onHeaderDragStart?: (event: DragEvent<HTMLElement>) => void;
+  onHeaderDragEnd?: () => void;
   onRefreshGit: () => Promise<void>;
   onRestoreFiles: (paths?: string[]) => Promise<void>;
   onRequestReview: (scope?: CodeReviewScope) => void;
@@ -28,15 +36,18 @@ export interface WorkbenchPaneBodyProps {
 
 export function WorkbenchPaneBody({
   paneTab,
-  isSecondary = false,
+  isVisible = true,
   cwd,
   sessionFile,
   git,
   codeReviewEnabled,
   webPreviewEnabled,
   sideChatEnabled,
-  mountSideChat,
   pluginTabs,
+  paneControls,
+  draggableHeader,
+  onHeaderDragStart,
+  onHeaderDragEnd,
   onRefreshGit,
   onRestoreFiles,
   onRequestReview,
@@ -48,9 +59,7 @@ export function WorkbenchPaneBody({
   return (
     <>
       {paneTab === "summary" && <TaskSummaryTab cwd={cwd} sessionFile={sessionFile} />}
-      {renderCode && (
-        <CodeWorkspacePane cwd={cwd} paneTab={paneTab} isSecondary={isSecondary} onAddToChat={onAddToChat} />
-      )}
+      {renderCode && <CodeWorkspacePane cwd={cwd} onAddToChat={onAddToChat} />}
       {codeReviewEnabled && paneTab === "review" && (
         <ReviewDiffTab
           cwd={cwd}
@@ -60,26 +69,28 @@ export function WorkbenchPaneBody({
           onRequestReview={onRequestReview}
         />
       )}
-      {webPreviewEnabled && paneTab === "preview" && <BrowserPreviewTab cwd={cwd} />}
-      {sideChatEnabled && !isSecondary && mountSideChat && (
-        <div className="pid-wb-sidechat-host" hidden={paneTab !== "side-chat"}>
+      {webPreviewEnabled && paneTab === "preview" && (
+        <BrowserPreviewTab
+          cwd={cwd}
+          paneControls={paneControls}
+          draggableHeader={draggableHeader}
+          onHeaderDragStart={onHeaderDragStart}
+          onHeaderDragEnd={onHeaderDragEnd}
+        />
+      )}
+      {paneTab === "terminal" && (
+        <Suspense fallback={<div className="pid-wb-empty">正在加载集成终端…</div>}>
+          <LazyTerminalPanel cwd={cwd} visible={isVisible} compactHeader />
+        </Suspense>
+      )}
+      {sideChatEnabled && paneTab === "side-chat" && (
+        <div className="pid-wb-sidechat-host" hidden={!isVisible}>
           <SideChatTab
             key={sessionFile ?? "draft"}
             sessionFile={sessionFile ?? ""}
             fallbackCwd={cwd}
             tabId={`side-${sessionFile ?? "draft"}`}
-            visible={paneTab === "side-chat"}
-          />
-        </div>
-      )}
-      {sideChatEnabled && isSecondary && paneTab === "side-chat" && (
-        <div className="pid-wb-sidechat-host">
-          <SideChatTab
-            key={`split-${sessionFile ?? "draft"}`}
-            sessionFile={sessionFile ?? ""}
-            fallbackCwd={cwd}
-            tabId={`side-split-${sessionFile ?? "draft"}`}
-            visible
+            visible={isVisible}
           />
         </div>
       )}
