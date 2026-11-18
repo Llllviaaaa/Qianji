@@ -78,6 +78,14 @@ export function TerminalOrNoticeMessageRow({
     );
   }
 
+  if (message.noticeKind === "continuation") {
+    return (
+      <div className="dshc-flow compaction-divider is-continuation" role="separator" id={`message-${message.id}`}>
+        <span>↻ {message.content}</span>
+      </div>
+    );
+  }
+
   if (message.noticeKind === "compaction" || message.noticeKind === "branch") {
     const label = message.noticeKind === "compaction" ? "上下文已压缩" : "会话已分叉";
     const detail = message.content.replace(/^(Context compacted|Branch summary)\s*/i, "").trim();

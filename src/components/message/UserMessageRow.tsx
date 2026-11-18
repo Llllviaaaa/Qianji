@@ -19,6 +19,29 @@ import {
   USER_MESSAGE_ENTRY_WINDOW_MS,
 } from "./messageHelpers";
 
+const LEADING_SLASH_CMD_RE = /^\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?:\s+([\s\S]*))?$/;
+
+function renderUserMessageBody(content: string) {
+  const match = LEADING_SLASH_CMD_RE.exec(content.trim());
+  if (match?.[1] === undefined) return content;
+  const cmdName = match[1];
+  const cmdArgs = (match[2] ?? "").trim();
+  if (cmdName === "goal" && cmdArgs !== "") {
+    return (
+      <>
+        <span className="qj-cmd-pill is-goal">🎯 /goal</span>{" "}
+        <span className="qj-cmd-objective">{cmdArgs}</span>
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="qj-cmd-pill">/{cmdName}</span>
+      {cmdArgs !== "" ? <>{" "}<span className="qj-cmd-args">{cmdArgs}</span></> : null}
+    </>
+  );
+}
+
 export interface UserMessageRowProps {
   message: UiMessage;
   editing: boolean;
@@ -254,7 +277,7 @@ export function UserMessageRow({
               aria-hidden={userMessageCollapsed || undefined}
               inert={userMessageCollapsed || undefined}
             >
-              {message.content}
+              {renderUserMessageBody(message.content)}
             </div>
             {userMessageCollapsed && (
               <span id={summaryId} className="dshc-visually-hidden">

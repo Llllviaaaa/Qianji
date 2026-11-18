@@ -78,6 +78,9 @@ export function toolRowCopy(presented: ToolPresentation, call: UiToolCall): { ti
         summary: presented.query ? clipLine(presented.query) : detail ?? "",
       };
     case "plan":
+      if (presented.title !== undefined) {
+        return { title: presented.title, summary: presented.detail ? clipLine(presented.detail) : "" };
+      }
       return {
         title: "更新计划",
         summary: presented.plan ? `${presented.plan.completed}/${presented.plan.steps.length} 已完成` : "",
@@ -106,6 +109,9 @@ export function runningToolTitle(title: string): string {
       return "正在调用工具";
     case "MCP":
       return "正在调用 MCP";
+    case "目标已达成":
+    case "目标受阻":
+      return "正在更新目标状态";
     default:
       return `正在${title}`;
   }

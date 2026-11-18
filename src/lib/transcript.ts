@@ -1,12 +1,6 @@
 /**
- * The conversation as the Harness Host records and streams it, in the
- * `UiMessage`s the transcript renders (P6d-2, docs/adr/0014).
- *
- * A session's log (`PersistedEvent`s, ADR 0004) becomes the transcript with
- * `historyToUi`; while a task runs, `TranscriptTranslator` turns the Host's
- * notifications into `TranscriptEvent`s and the reducers below apply them.
- * Everything here is pure or a small per-runtime translator, so it is tested
- * against the agent loop's golden logs.
+ * Session logs (`PersistedEvent`s, ADR 0004) and live Host notifications as
+ * `UiMessage`s and `TranscriptEvent`s (P6d-2, docs/adr/0014).
  */
 import type { LiveDelta, PersistedEvent } from "@qianji/protocol";
 import type { ExtensionUIRequest, ImageContent, UiMessage, UiToolCall, Usage } from "../types";
@@ -15,9 +9,9 @@ import type { ExtensionUIRequest, ImageContent, UiMessage, UiToolCall, Usage } f
 export type TranscriptEvent =
   | { type: "turn-start" }
   | { type: "turn-end" }
-  /** The Host stopped running the turn while disconnected (src/lib/harnessRuntime.ts). */
   | { type: "turn-interrupted" }
   | { type: "user"; message: UiMessage }
+  | { type: "notice"; message: UiMessage }
   | { type: "assistant-start" }
   | { type: "assistant-delta"; text: string; thinking: string }
   | { type: "assistant-tool-calls"; calls: UiToolCall[] }
@@ -34,24 +28,33 @@ export type TranscriptEvent =
   | { type: "ui-cancel"; requestId: string };
 
 /** A finished tool call: its text, any images, and whether it failed. */
-export interface ToolResult {
-  text?: string;
-  images?: ImageContent[];
-  isError: boolean;
-  finishedAt: number;
-}
+export interface ToolResult { text?: string; images?: ImageContent[]; isError: boolean; finishedAt: number; }
 
 type Block = { type: string; [key: string]: unknown };
-
 const timestampOf = (event: PersistedEvent): number => {
   const parsed = Date.parse(event.ts);
   return Number.isFinite(parsed) ? parsed : 0;
 };
-
 const blocksOf = (content: unknown): Block[] => (Array.isArray(content) ? (content as Block[]) : []);
+const textOf = (blocks: Block[]): string =>
+  blocks.flatMap((block) => (block.type === "text" && block.meta !== true && typeof block.text === "string" ? [block.text] : [])).join("");
 
-function textOf(blocks: Block[]): string {
-  return blocks.flatMap((block) => (block.type === "text" && typeof block.text === "string" ? [block.text] : [])).join("");
+/** Friendly separator notice for `agent/before-stop` auto-verification continuations; ignores `length`/`empty`. */
+export function continuationNoticeOf(event: PersistedEvent): UiMessage | null {
+  if (event.type !== "custom") return null;
+  const outer = event.data as { ns?: unknown; data?: unknown } | undefined;
+  if (outer?.ns !== "qianji-continuation") return null;
+  const inner = outer.data as { reason?: unknown; text?: unknown } | undefined;
+  if (inner?.reason !== "before-stop") return null;
+  const text = typeof inner.text === "string" ? inner.text : "";
+  let content = "自动续跑核查";
+  if (text.includes("[Goal Tracker 核查")) {
+    const round = /\[Goal Tracker 核查\s*\((\d+\/\d+)\)\]/.exec(text)?.[1];
+    content = round !== undefined ? `目标自动验收核查（第 ${round} 轮）` : "目标自动验收核查";
+  } else if (text.includes("update_plan") || text.includes("unfinished steps")) {
+    content = "计划完成度自动核查";
+  }
+  return { id: `host-${event.seq}`, role: "notice", noticeKind: "continuation", content, timestamp: timestampOf(event) };
 }
 
 function imagesOf(blocks: Block[]): ImageContent[] | undefined {
@@ -77,14 +80,7 @@ function usageOf(value: unknown): Usage {
 /** A user message; its `entryId` is the event's seq, which rewind and fork take. */
 export function userMessageOf(event: PersistedEvent): UiMessage {
   const blocks = blocksOf((event.data as { content?: unknown }).content);
-  return {
-    id: `host-${event.seq}`,
-    entryId: String(event.seq),
-    role: "user",
-    content: textOf(blocks),
-    images: imagesOf(blocks),
-    timestamp: timestampOf(event),
-  };
+  return { id: `host-${event.seq}`, entryId: String(event.seq), role: "user", content: textOf(blocks), images: imagesOf(blocks), timestamp: timestampOf(event) };
 }
 
 /** A finished model reply, with the tool calls it asked for (not run yet). */
@@ -99,18 +95,10 @@ export function assistantMessageOf(event: PersistedEvent, durationMs?: number): 
       : []
   ));
   return {
-    id: `host-${event.seq}`,
-    role: "assistant",
-    content: textOf(blocks) || data.error?.message || "",
-    thinking: thinking || undefined,
-    model: data.model?.model,
-    usage: usageOf(data.usage),
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    isStreaming: false,
-    isError: data.stop === "error",
-    isAborted: data.stop === "aborted",
-    durationMs,
-    timestamp,
+    id: `host-${event.seq}`, role: "assistant", content: textOf(blocks) || data.error?.message || "",
+    thinking: thinking || undefined, model: data.model?.model, usage: usageOf(data.usage),
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined, isStreaming: false,
+    isError: data.stop === "error", isAborted: data.stop === "aborted", durationMs, timestamp,
   };
 }
 
@@ -186,9 +174,22 @@ export function historyToUi(events: readonly PersistedEvent[]): UiMessage[] {
     } else if (event.type === "compaction") {
       const summary = (event.data as { summary?: string }).summary ?? "";
       messages.push({ id: `host-${event.seq}`, role: "notice", noticeKind: "compaction", content: `Context compacted\n\n${summary}`, timestamp: timestampOf(event) });
+    } else if (event.type === "custom") {
+      const notice = continuationNoticeOf(event);
+      if (notice !== null) {
+        turnStartedAt = notice.timestamp || turnStartedAt;
+        messages.push(notice);
+      }
     }
   }
   return messages;
+}
+
+/** Append a mid-turn notice, settling any prior streaming assistant so subsequent rounds do not overwrite it. */
+export function appendNotice(messages: UiMessage[], notice: UiMessage): UiMessage[] {
+  if (messages.some((item) => item.id === notice.id)) return replaceOrAppend(messages, notice.id, notice);
+  const settled = messages.map((item) => (item.role === "assistant" && item.isStreaming ? { ...item, isStreaming: false } : item));
+  return [...settled, notice];
 }
 
 /** Replace the message with id `id` by `incoming` (keeping the id), or append it. */
@@ -382,6 +383,10 @@ export class TranscriptTranslator {
       }
       case "tool-result":
         return [{ type: "tool-end", ...toolResultOf(event) }];
+      case "custom": {
+        const notice = continuationNoticeOf(event);
+        return notice === null ? [] : [{ type: "notice", message: notice }];
+      }
       default:
         return [];
     }

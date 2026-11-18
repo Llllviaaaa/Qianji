@@ -168,6 +168,16 @@ export const Composer = memo(function Composer({
         />
       )}
 
+      {!disabled && scope === "main" && contributions.composerBanners.length > 0 && (
+        <div className="composer-dock-banners">
+          {contributions.composerBanners.map((banner) => (
+            <div key={banner.id} className="composer-plugin-banner">
+              <SlotEntryHost entry={banner} context={{ cwd: workspace, sessionFile, variant }} slotName="composerBanners" />
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
         ref={cardRef}
         className={`composer-card unified ${showWorkspaceChips ? "with-chips" : "follow-up"}`}
@@ -201,12 +211,6 @@ export const Composer = memo(function Composer({
           suggestionsId={suggest.suggestionsId} suggestionMenuRef={suggestionMenuRef}
           setSuggestionIndex={suggest.setSuggestionIndex}
         />
-
-        {!disabled && scope === "main" && contributions.composerBanners.map((banner) => (
-          <div key={banner.id} className="composer-plugin-banner">
-            <SlotEntryHost entry={banner} context={{ cwd: workspace, sessionFile, variant }} slotName="composerBanners" />
-          </div>
-        ))}
 
         <ComposerAttachmentStrip attachments={attachments} onRemoveAttachment={onRemoveAttachment} />
 

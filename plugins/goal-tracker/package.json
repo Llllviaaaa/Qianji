@@ -1,11 +1,12 @@
 {
   "name": "goal-tracker",
   "version": "0.1.0",
-  "description": "会话级长程目标设定、进度追踪横幅与结束前自动核查提醒（create_goal / get_goal / update_goal + /goal）。",
+  "description": "会话级长程目标设定、验收清单追踪、上下文防漂移提醒与结束前自动核查（create_goal / get_goal / update_goal + /goal）。",
   "qianji": {
     "id": "goal-tracker",
     "name": "目标追踪器",
-    "description": "会话级长程目标设定与进度追踪：提供 create_goal / get_goal / update_goal 工具、/goal 斜杠指令、输入框上方目标状态横幅与任务结束前自动核查提醒。",
+    "description": "会话级长程目标设定与进度追踪：提供 create_goal / get_goal / update_goal 工具、/goal 斜杠指令、验收清单追踪、输入框顶部目标控制卡与任务结束前自动核查提醒。",
+    "inject": ["tools", "commands", "rpc", "agents", "sessions"],
     "host": "./host.ts",
     "client": "./client.tsx",
     "contributes": {

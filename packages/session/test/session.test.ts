@@ -14,6 +14,7 @@ import {
   deriveState,
   estimateEventTokens,
   forkEvents,
+  sessionMarkdown,
   settledSeq,
   slidingCompactionPoint,
   summarize,
@@ -627,5 +628,86 @@ describe("CJK token estimation & session hygiene", () => {
       expect(toolUseMsg.content).toHaveLength(1);
       expect(toolUseMsg.content[0]).toMatchObject({ type: "tool-call", id: "non-error-bad" });
     }
+  });
+});
+
+describe("meta text blocks (slash command separation)", () => {
+  const header = { format: "pid.session" as const, version: 1, id: "s-meta", createdAt: "2026-01-01T00:00:00.000Z", cwd: "/w" };
+
+  it("keeps meta: true blocks in deriveState while hiding them from summarize, sessionMarkdown, and search", async () => {
+    const events = log(() => [
+      ev("user", {
+        content: [
+          { type: "text", text: "/goal 修复所有单测" },
+          { type: "text", text: "SecretBoilerplateSystemExpansionToken777\n请拆解验收标准并调用 update_goal。", meta: true },
+        ],
+      }),
+      assistant(text("好的，我立即开始检查并修复单测。")),
+    ]);
+
+    // 1. deriveState keeps both user visible command and expanded meta instructions for the LLM.
+    const state = deriveState(events);
+    expect(state.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "/goal 修复所有单测" },
+          { type: "text", text: "SecretBoilerplateSystemExpansionToken777\n请拆解验收标准并调用 update_goal。", meta: true },
+        ],
+      },
+      { role: "assistant", content: text("好的，我立即开始检查并修复单测。") },
+    ]);
+
+    // 2. summarize().firstMessage only shows the visible slash command, never the meta template.
+    const summary = summarize(header, events);
+    expect(summary.firstMessage).toBe("/goal 修复所有单测");
+
+    // 3. sessionMarkdown() omits meta: true blocks on user messages while keeping assistant replies.
+    const markdown = sessionMarkdown(events);
+    expect(markdown).toBe(
+      "# Qianji conversation\n\n## User\n\n/goal 修复所有单测\n\n## Assistant\n\n好的，我立即开始检查并修复单测。\n\n",
+    );
+    expect(markdown).not.toContain("SecretBoilerplateSystemExpansionToken777");
+
+    // 4. Sessions.search() matches visible user command & assistant reply, never meta: true boilerplate.
+    const ctx = new Context();
+    await ctx.plugin(Sessions);
+    const session = ctx.sessions.create({ cwd: "/meta-search" });
+    session.append("user", {
+      content: [
+        { type: "text", text: "/goal 修复所有单测 VisibleGoalQuery888" },
+        { type: "text", text: "SecretBoilerplateSystemExpansionToken777", meta: true },
+      ],
+    });
+    session.append("assistant", {
+      content: text("AssistantVisibleReply999"),
+      model,
+      usage,
+      stop: "stop",
+    });
+
+    expect(await ctx.sessions.search("SecretBoilerplateSystemExpansionToken777")).toEqual([]);
+    expect((await ctx.sessions.search("VisibleGoalQuery888")).map((h) => h.session.id)).toEqual([session.id]);
+    expect((await ctx.sessions.search("AssistantVisibleReply999")).map((h) => h.session.id)).toEqual([session.id]);
+    await ctx.fiber.dispose();
+  });
+
+  it("falls back to all text blocks in summarize().firstMessage only when zero non-meta text blocks exist", () => {
+    const metaOnly = log(() => [
+      ev("user", { content: [{ type: "text", text: "OnlyMetaFallbackPrompt", meta: true }] }),
+    ]);
+    expect(summarize(header, metaOnly).firstMessage).toBe("OnlyMetaFallbackPrompt");
+    expect(sessionMarkdown(metaOnly)).toBe("# Qianji conversation\n\n");
+
+    const emptyNonMetaThenReal = log(() => [
+      ev("user", {
+        content: [
+          { type: "text", text: "   " },
+          { type: "text", text: "HiddenMetaShouldNotLeak", meta: true },
+        ],
+      }),
+      ev("user", { content: text("RealSecondTurnMessage") }),
+    ]);
+    expect(summarize(header, emptyNonMetaThenReal).firstMessage).toBe("RealSecondTurnMessage");
   });
 });

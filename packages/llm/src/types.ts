@@ -7,7 +7,11 @@
 export interface TextBlock {
   type: "text";
   text: string;
+  /** Marks system-expanded meta instructions (e.g. slash command prompts) hidden from user transcripts, summaries, exports, and search. */
+  meta?: boolean;
 }
+
+export type TextContent = TextBlock;
 
 export interface ImageBlock {
   type: "image";

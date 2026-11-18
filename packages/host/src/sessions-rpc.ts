@@ -52,9 +52,9 @@ function clipSummaryText(text: string, limit: number): string {
   return `${trimmed.slice(0, limit)}…`;
 }
 
-function formatDroppedEvent(event: SessionEvent): string | undefined {
+export function formatDroppedEvent(event: SessionEvent): string | undefined {
   if (event.type === "user") {
-    const text = event.data.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
+    const text = event.data.content.flatMap((b) => (b.type === "text" && b.meta !== true ? [b.text] : [])).join("\n").trim();
     return text === "" ? undefined : `[user]: ${clipSummaryText(text, BRANCH_SUMMARY_EVENT_CHARS)}`;
   }
   if (event.type === "assistant") {
@@ -162,7 +162,9 @@ export function toUserContent(value: unknown): UserContent[] {
   const content = (typeof value === "string" ? [{ type: "text", text: value }] : value) as PromptContent;
   if (!Array.isArray(content) || content.length === 0) throw new RpcError(ErrorCode.InvalidParams, "content must be a string or a non-empty list of blocks");
   return content.map((block, index): UserContent => {
-    if (block?.type === "text" && typeof block.text === "string") return { type: "text", text: block.text };
+    if (block?.type === "text" && typeof block.text === "string") {
+      return { type: "text", text: block.text, ...(block.meta === true ? { meta: true } : {}) };
+    }
     if (block?.type === "image" && typeof block.mimeType === "string" && typeof block.data === "string") {
       return { type: "image", mimeType: block.mimeType, data: block.data };
     }

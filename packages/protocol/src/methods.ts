@@ -61,7 +61,7 @@ export interface ModelListResult {
 /** User message content: plain text, or text and image blocks. */
 export type PromptContent =
   | string
-  | Array<{ type: "text"; text: string } | { type: "image"; mimeType: string; data: string }>;
+  | Array<{ type: "text"; text: string; meta?: boolean } | { type: "image"; mimeType: string; data: string }>;
 
 export interface ModelChoice {
   provider: string;

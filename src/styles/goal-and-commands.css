@@ -1,0 +1,123 @@
+/*
+ * Slash command user pills, auto-continuation verification dividers,
+ * and Composer Dock plugin banners (`@layer components`).
+ */
+
+/* ── User Bubble Slash Command Pills ─────────────────────────────────── */
+
+.qj-cmd-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  margin-right: 3px;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  background: color-mix(in srgb, var(--qj-text-inverse) 22%, transparent);
+  color: inherit;
+  font-family: var(--qj-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.qj-cmd-pill.is-goal {
+  padding: 2px 9px;
+  margin-right: 4px;
+  font-family: var(--qj-font-sans);
+  font-weight: 620;
+  background: color-mix(in srgb, var(--qj-text-inverse) 28%, transparent);
+  border-color: color-mix(in srgb, currentColor 32%, transparent);
+}
+
+:root[data-theme="light"] .qj-cmd-pill {
+  background: color-mix(in srgb, var(--qj-bg-surface) 76%, transparent);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 26%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+:root[data-theme="light"] .qj-cmd-pill.is-goal {
+  background: color-mix(in srgb, var(--qj-bg-surface) 88%, transparent);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 34%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+.qj-cmd-objective,
+.qj-cmd-args {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* ── Auto-Verification Continuation Separator ────────────────────────── */
+
+.codex-shot .compaction-divider.is-continuation,
+.compaction-divider.is-continuation {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 14px 0;
+  color: var(--qj-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.codex-shot .compaction-divider.is-continuation::before,
+.codex-shot .compaction-divider.is-continuation::after,
+.compaction-divider.is-continuation::before,
+.compaction-divider.is-continuation::after {
+  content: "";
+  flex: 1 1 0%;
+  width: auto;
+  height: 1px;
+  background: var(--qj-border-default);
+}
+
+.codex-shot .compaction-divider.is-continuation span,
+.compaction-divider.is-continuation span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  border-radius: 9999px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-secondary);
+  font-family: var(--qj-font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* ── Composer Dock Banners (Goal Tracker & Plugin Controllers) ───────── */
+
+.composer-dock-banners {
+  order: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 8px;
+  box-sizing: border-box;
+}
+
+.composer-dock-banners:empty,
+.composer-dock-banners:not(:has([data-qj-slot="composerBanners"]:not(:empty))) {
+  display: none;
+  margin: 0;
+}
+
+.composer-dock-banners .composer-plugin-banner {
+  width: 100%;
+  min-width: 0;
+}
+
+.composer-dock-banners .composer-plugin-banner:empty,
+.composer-dock-banners .composer-plugin-banner:not(:has(> [data-qj-slot="composerBanners"]:not(:empty))) {
+  display: none;
+}
