@@ -2,14 +2,22 @@ import {
   useCallback, useEffect, useRef, useState,
   type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import type { CodeReviewScope } from "../../lib/codeReview";
 import { useClientContributions } from "../../lib/clientContributions";
 import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
 import {
-  computeGridColumns,
+  computeTileLayout,
+  detectPaneDropZone,
   filterAllowedPanes,
+  hasPaneInTree,
+  insertPaneIntoTree,
+  pruneTreeToAllowed,
   useWorkbenchLayoutStore,
+  type PaneDropZone,
+  type WorkbenchTileNode,
+  type WorkbenchTileSash,
 } from "../../stores/workbenchLayoutStore";
 import { useWorkbenchStore } from "../../stores/workbenchStore";
 import type { GitSnapshot } from "../../types";
@@ -34,6 +42,50 @@ export interface RightWorkbenchProps {
   };
 }
 
+interface ActivePaneDrag {
+  sourceId: string;
+  title: string;
+  targetId: string | null;
+  zone: PaneDropZone | null;
+  clientX: number;
+  clientY: number;
+}
+
+function buildEffectiveTree(
+  layoutTree: WorkbenchTileNode | null,
+  activePanes: readonly string[],
+): WorkbenchTileNode | null {
+  const allowed = new Set(activePanes);
+  let tree = pruneTreeToAllowed(layoutTree, allowed);
+  for (const id of activePanes) {
+    if (!hasPaneInTree(tree, id)) {
+      tree = insertPaneIntoTree(tree, id);
+    }
+  }
+  return tree;
+}
+
+function hitTestPaneTarget(
+  gridEl: HTMLDivElement | null,
+  sourceId: string,
+  clientX: number,
+  clientY: number,
+): { targetId: string | null; zone: PaneDropZone | null } {
+  if (!gridEl) return { targetId: null, zone: null };
+  for (const el of gridEl.querySelectorAll<HTMLElement>("[data-pane-id]")) {
+    const candidateId = el.dataset.paneId;
+    if (!candidateId || candidateId === sourceId || el.hidden || el.style.display === "none") continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) continue;
+    return {
+      targetId: candidateId,
+      zone: detectPaneDropZone((clientX - rect.left) / rect.width, (clientY - rect.top) / rect.height),
+    };
+  }
+  return { targetId: null, zone: null };
+}
+
 export function RightWorkbench({
   cwd,
   sessionFile,
@@ -48,15 +100,12 @@ export function RightWorkbench({
   const rightOpen = useWorkbenchStore((state) => state.rightOpen);
   const rightMaximized = useWorkbenchStore((state) => state.rightMaximized);
 
+  const layoutTree = useWorkbenchLayoutStore((state) => state.layoutTree);
   const openPanes = useWorkbenchLayoutStore((state) => state.openPanes);
   const inspectorOpen = useWorkbenchLayoutStore((state) => state.inspectorOpen);
   const maximizedPaneId = useWorkbenchLayoutStore((state) => state.maximizedPaneId);
   const twoPaneDirection = useWorkbenchLayoutStore((state) => state.twoPaneDirection);
-  const leftColumnCount = useWorkbenchLayoutStore((state) => state.leftColumnCount);
-  const colRatio = useWorkbenchLayoutStore((state) => state.colRatio);
-  const leftRowRatio = useWorkbenchLayoutStore((state) => state.leftRowRatio);
-  const setColRatio = useWorkbenchLayoutStore((state) => state.setColRatio);
-  const setLeftRowRatio = useWorkbenchLayoutStore((state) => state.setLeftRowRatio);
+  const setSplitNodeRatio = useWorkbenchLayoutStore((state) => state.setSplitNodeRatio);
   const swapOrDockPanes = useWorkbenchLayoutStore((state) => state.swapOrDockPanes);
 
   const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
@@ -66,14 +115,20 @@ export function RightWorkbench({
 
   const [sideChatVisited, setSideChatVisited] = useState(false);
   const [terminalVisited, setTerminalVisited] = useState(false);
-  const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
+  const [dragState, setDragState] = useState<ActivePaneDrag | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   const activePanes = filterAllowedPanes(openPanes);
   const activePanesKey = activePanes.join("|");
   const isPaneMaximizedNow = maximizedPaneId !== null && activePanes.includes(maximizedPaneId);
-  const columnsNow = computeGridColumns(activePanes, twoPaneDirection, leftColumnCount);
-  const isFloatingInspector = !rightMaximized && !isPaneMaximizedNow && inspectorOpen && columnsNow.hasCol2;
+  const effectiveTree = buildEffectiveTree(layoutTree, activePanes);
+  const tileLayout = computeTileLayout(effectiveTree);
+  const isFloatingInspector = !rightMaximized && !isPaneMaximizedNow && inspectorOpen && tileLayout.hasHorizontalSplit;
+
+  useEffect(() => () => {
+    dragCleanupRef.current?.();
+  }, []);
 
   useEffect(() => {
     if (!isFloatingInspector) return;
@@ -104,7 +159,7 @@ export function RightWorkbench({
     if (!activePanes.includes("side-chat")) setSideChatVisited(false);
   });
 
-  const beginGridSplitDrag = useCallback((axis: "col" | "row", event: ReactPointerEvent<HTMLDivElement>) => {
+  const beginSashDrag = useCallback((sash: WorkbenchTileSash, event: ReactPointerEvent<HTMLDivElement>) => {
     const el = gridRef.current;
     if (!el) return;
     event.preventDefault();
@@ -112,11 +167,15 @@ export function RightWorkbench({
     document.body.classList.add("workspace-is-resizing");
 
     const onMove = (moveEvent: PointerEvent) => {
-      if (axis === "col") {
-        setColRatio(rect.width > 0 ? (moveEvent.clientX - rect.left) / rect.width : 0.5);
-      } else {
-        setLeftRowRatio(rect.height > 0 ? (moveEvent.clientY - rect.top) / rect.height : 0.5);
+      if (sash.direction === "horizontal") {
+        const spanPx = sash.container.width * rect.width;
+        const startPx = rect.left + sash.container.left * rect.width;
+        setSplitNodeRatio(sash.id, spanPx > 0 ? (moveEvent.clientX - startPx) / spanPx : 0.5);
+        return;
       }
+      const spanPx = sash.container.height * rect.height;
+      const startPx = rect.top + sash.container.top * rect.height;
+      setSplitNodeRatio(sash.id, spanPx > 0 ? (moveEvent.clientY - startPx) / spanPx : 0.5);
     };
     const cleanup = () => {
       document.body.classList.remove("workspace-is-resizing");
@@ -127,7 +186,74 @@ export function RightWorkbench({
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", cleanup);
     window.addEventListener("pointercancel", cleanup);
-  }, [setColRatio, setLeftRowRatio]);
+  }, [setSplitNodeRatio]);
+
+  const fullMaximizedNow = rightMaximized || isPaneMaximizedNow;
+  const beginPaneHeaderDrag = useCallback((
+    paneId: string,
+    title: string,
+    event: ReactPointerEvent<HTMLElement>,
+  ) => {
+    if (event.button !== 0 || activePanes.length < 2 || fullMaximizedNow) return;
+    const originEl = event.target instanceof Element ? event.target : null;
+    if (originEl?.closest("button, input, a, select, textarea, [role='button']")) return;
+
+    dragCleanupRef.current?.();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let activated = false;
+    let latestTarget: { targetId: string | null; zone: PaneDropZone | null } = { targetId: null, zone: null };
+
+    const cleanup = () => {
+      document.body.classList.remove("workbench-pane-dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("keydown", onKeyDown);
+      dragCleanupRef.current = null;
+      setDragState(null);
+    };
+
+    const onMove = (moveEvent: PointerEvent) => {
+      if (!activated) {
+        if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 6) return;
+        activated = true;
+        document.body.classList.add("workbench-pane-dragging");
+      }
+      latestTarget = hitTestPaneTarget(gridRef.current, paneId, moveEvent.clientX, moveEvent.clientY);
+      setDragState({
+        sourceId: paneId,
+        title,
+        targetId: latestTarget.targetId,
+        zone: latestTarget.zone,
+        clientX: moveEvent.clientX,
+        clientY: moveEvent.clientY,
+      });
+    };
+
+    const onUp = () => {
+      const drop = latestTarget;
+      const shouldCommit = activated && drop.targetId && drop.targetId !== paneId && drop.zone;
+      cleanup();
+      if (shouldCommit && drop.targetId && drop.zone) {
+        swapOrDockPanes(paneId, drop.targetId, drop.zone);
+      }
+    };
+
+    const onCancel = () => cleanup();
+    const onKeyDown = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === "Escape") {
+        keyEvent.preventDefault();
+        cleanup();
+      }
+    };
+
+    dragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("keydown", onKeyDown);
+  }, [activePanes.length, fullMaximizedNow, swapOrDockPanes]);
 
   if (!rightOpen || (!inspectorOpen && activePanes.length === 0)) return null;
 
@@ -139,20 +265,19 @@ export function RightWorkbench({
       ? (activePanes[0] ?? null)
       : null;
 
-  const columns = computeGridColumns(activePanes, twoPaneDirection, leftColumnCount);
   const inspectorMode = fullMaximized
     ? "closed"
     : !inspectorOpen
       ? "closed"
       : activePanes.length === 0
         ? "sole"
-        : columns.hasCol2
+        : tileLayout.hasHorizontalSplit
           ? "floating"
           : "docked";
 
   const effectiveWidth = inspectorMode === "sole"
     ? Math.min(268, resize.max)
-    : columns.hasCol2
+    : tileLayout.hasHorizontalSplit
       ? Math.min(resize.max, Math.max(width, Math.round(resize.max * 0.78)))
       : inspectorMode === "docked"
         ? Math.min(resize.max, Math.max(width, 720))
@@ -163,41 +288,19 @@ export function RightWorkbench({
   if (terminalVisited && !persistentPaneIds.includes("terminal")) persistentPaneIds.push("terminal");
   if (sideChatVisited && sideChatEnabled && !persistentPaneIds.includes("side-chat")) persistentPaneIds.push("side-chat");
 
-  const maxRows = visibleMaximizedId
-    ? 1
-    : Math.max(1, columns.col1.length, columns.col2.length);
-
-  const gridTemplateColumns = !visibleMaximizedId && columns.hasCol2
-    ? `minmax(0, ${colRatio}fr) 1px minmax(0, ${1 - colRatio}fr)`
-    : "minmax(0, 1fr)";
-
-  const gridTemplateRows = visibleMaximizedId || maxRows === 1
-    ? "minmax(0, 1fr)"
-    : maxRows === 2
-      ? `minmax(0, ${leftRowRatio}fr) 1px minmax(0, ${1 - leftRowRatio}fr)`
-      : Array.from({ length: maxRows }, () => "minmax(0, 1fr)").join(" 1px ");
-
   const placementForPane = (paneId: string): CSSProperties | undefined => {
     if (visibleMaximizedId) {
-      return paneId === visibleMaximizedId ? { gridColumn: "1", gridRow: "1" } : undefined;
+      return paneId === visibleMaximizedId ? { position: "absolute", inset: 0 } : undefined;
     }
-    const c1Idx = columns.col1.indexOf(paneId);
-    if (c1Idx >= 0) {
-      const spanAllRows = columns.col1.length === 1 && maxRows > 1;
-      return {
-        gridColumn: "1",
-        gridRow: spanAllRows ? `1 / ${maxRows * 2}` : String(c1Idx * 2 + 1),
-      };
-    }
-    const c2Idx = columns.col2.indexOf(paneId);
-    if (c2Idx >= 0) {
-      const spanAllRows = columns.col2.length === 1 && maxRows > 1;
-      return {
-        gridColumn: "3",
-        gridRow: spanAllRows ? `1 / ${maxRows * 2}` : String(c2Idx * 2 + 1),
-      };
-    }
-    return undefined;
+    const r = tileLayout.panes[paneId];
+    if (!r) return undefined;
+    return {
+      position: "absolute",
+      left: `${r.left * 100}%`,
+      top: `${r.top * 100}%`,
+      width: `${r.width * 100}%`,
+      height: `${r.height * 100}%`,
+    };
   };
 
   return (
@@ -245,35 +348,24 @@ export function RightWorkbench({
               className="pid-wb-panes-grid"
               hidden={activePanes.length === 0}
               data-pane-count={activePanes.length}
-              style={{ gridTemplateColumns, gridTemplateRows }}
+              data-has-horizontal-split={tileLayout.hasHorizontalSplit ? "true" : "false"}
             >
-              {!visibleMaximizedId && columns.hasCol2 && (
-                <div
-                  className="pid-wb-grid-splitter is-col"
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="调整左右面板宽度比例"
-                  style={{ gridColumn: "2", gridRow: maxRows > 1 ? `1 / ${maxRows * 2}` : "1" }}
-                  onPointerDown={(event) => beginGridSplitDrag("col", event)}
-                />
-              )}
-              {!visibleMaximizedId && maxRows === 2 && (
-                <div
-                  className="pid-wb-grid-splitter is-row"
-                  role="separator"
-                  aria-orientation="horizontal"
-                  aria-label="调整上下面板高度比例"
-                  style={{
-                    gridColumn: columns.col1.length === 2 && columns.col2.length === 2
-                      ? "1 / 4"
-                      : columns.col1.length === 2
-                        ? "1"
-                        : "3",
-                    gridRow: "2",
-                  }}
-                  onPointerDown={(event) => beginGridSplitDrag("row", event)}
-                />
-              )}
+              {!visibleMaximizedId && tileLayout.sashes.map((sash) => {
+                const isHorizontal = sash.direction === "horizontal";
+                return (
+                  <div
+                    key={sash.id}
+                    className={`pid-wb-tile-sash ${isHorizontal ? "is-horizontal" : "is-vertical"}`}
+                    role="separator"
+                    aria-orientation={isHorizontal ? "vertical" : "horizontal"}
+                    aria-label={isHorizontal ? "调整左右面板宽度比例" : "调整上下面板高度比例"}
+                    style={isHorizontal
+                      ? { left: `${sash.offset * 100}%`, top: `${sash.start * 100}%`, height: `${sash.span * 100}%` }
+                      : { top: `${sash.offset * 100}%`, left: `${sash.start * 100}%`, width: `${sash.span * 100}%` }}
+                    onPointerDown={(event) => beginSashDrag(sash, event)}
+                  />
+                );
+              })}
               {persistentPaneIds.map((paneId) => {
                 const isOpen = activePanes.includes(paneId);
                 const visible = visibleMaximizedId ? paneId === visibleMaximizedId : isOpen;
@@ -294,10 +386,9 @@ export function RightWorkbench({
                     webPreviewEnabled={webPreviewEnabled}
                     sideChatEnabled={sideChatEnabled}
                     pluginTabs={contributions.rightWorkbenchTabs}
-                    draggingPaneId={draggingPaneId}
-                    onDragStartPane={setDraggingPaneId}
-                    onDragEndPane={() => setDraggingPaneId(null)}
-                    onDropOnPane={swapOrDockPanes}
+                    isDragging={dragState?.sourceId === paneId}
+                    dropZone={dragState?.targetId === paneId ? dragState.zone : null}
+                    onHeaderPointerDown={beginPaneHeaderDrag}
                     onRefreshGit={onRefreshGit}
                     onRestoreFiles={onRestoreFiles}
                     onRequestReview={onRequestReview}
@@ -309,6 +400,16 @@ export function RightWorkbench({
           )}
         </div>
       </aside>
+      {dragState && typeof document !== "undefined" && createPortal(
+        <div
+          className="pid-wb-drag-ghost"
+          style={{ left: `${dragState.clientX + 14}px`, top: `${dragState.clientY + 14}px` }}
+          aria-hidden="true"
+        >
+          {dragState.title}
+        </div>,
+        document.body,
+      )}
     </>
   );
 }

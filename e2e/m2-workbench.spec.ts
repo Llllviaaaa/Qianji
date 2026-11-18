@@ -123,3 +123,64 @@ test("primary sidebar stays pinned across split-screen/narrow resizes, previews 
   await app.keyboard.press("Control+Shift+b");
   await expect(sidebarPanel).toHaveAttribute("data-sidebar-panel-state", "pinned");
 });
+
+test("right workbench prioritizes top-and-bottom stacking and supports pointer dragging into side-by-side or vertical splits", async ({
+  app,
+}) => {
+  await app.setViewportSize({ width: 1360, height: 860 });
+
+  // 1. Open Files then Browser Preview -> defaults to top-and-bottom (Files on top, Preview on bottom).
+  await app.locator('.pid-wb-topbar-controls [data-wb-tab="files"]').click();
+  await app.locator('.pid-wb-topbar-controls [data-wb-tab="preview"]').click();
+
+  const workbench = app.getByRole("complementary", { name: "右侧工作台" });
+  const filesPane = workbench.locator('[data-pane-id="files"]');
+  const previewPane = workbench.locator('[data-pane-id="preview"]');
+  await expect(filesPane).toBeVisible();
+  await expect(previewPane).toBeVisible();
+
+  const filesVertBox = await filesPane.boundingBox();
+  const previewVertBox = await previewPane.boundingBox();
+  expect(filesVertBox).not.toBeNull();
+  expect(previewVertBox).not.toBeNull();
+  if (!filesVertBox || !previewVertBox) throw new Error("Missing pane bounding boxes");
+  expect(Math.abs(filesVertBox.x - previewVertBox.x)).toBeLessThanOrEqual(3);
+  expect(filesVertBox.y + filesVertBox.height).toBeLessThanOrEqual(previewVertBox.y + 3);
+
+  // 2. Pointer-drag Files header onto the right edge of Browser Preview -> arranges side-by-side (Preview left, Files right).
+  const filesHeader = filesPane.locator(".pid-wb-pane-header");
+  const hdrBox = await filesHeader.boundingBox();
+  if (!hdrBox) throw new Error("Missing files header bounding box");
+  await app.mouse.move(hdrBox.x + 40, hdrBox.y + hdrBox.height / 2);
+  await app.mouse.down();
+  await app.mouse.move(previewVertBox.x + previewVertBox.width - 18, previewVertBox.y + previewVertBox.height / 2, {
+    steps: 10,
+  });
+  await expect(previewPane.locator(".pid-wb-drop-indicator.zone-right")).toBeVisible();
+  await app.mouse.up();
+
+  const filesHorizBox = await filesPane.boundingBox();
+  const previewHorizBox = await previewPane.boundingBox();
+  expect(filesHorizBox).not.toBeNull();
+  expect(previewHorizBox).not.toBeNull();
+  if (!filesHorizBox || !previewHorizBox) throw new Error("Missing horizontal pane bounding boxes");
+  expect(Math.abs(filesHorizBox.y - previewHorizBox.y)).toBeLessThanOrEqual(3);
+  expect(previewHorizBox.x + previewHorizBox.width).toBeLessThanOrEqual(filesHorizBox.x + 3);
+
+  // 3. Pointer-drag Files header onto the top edge of Browser Preview -> returns to top-and-bottom (Files on top).
+  const hdrHorizBox = await filesHeader.boundingBox();
+  if (!hdrHorizBox) throw new Error("Missing horizontal files header box");
+  await app.mouse.move(hdrHorizBox.x + 40, hdrHorizBox.y + hdrHorizBox.height / 2);
+  await app.mouse.down();
+  await app.mouse.move(previewHorizBox.x + previewHorizBox.width / 2, previewHorizBox.y + 18, { steps: 10 });
+  await expect(previewPane.locator(".pid-wb-drop-indicator.zone-top")).toBeVisible();
+  await app.mouse.up();
+
+  const filesFinalBox = await filesPane.boundingBox();
+  const previewFinalBox = await previewPane.boundingBox();
+  expect(filesFinalBox).not.toBeNull();
+  expect(previewFinalBox).not.toBeNull();
+  if (!filesFinalBox || !previewFinalBox) throw new Error("Missing final vertical pane boxes");
+  expect(Math.abs(filesFinalBox.x - previewFinalBox.x)).toBeLessThanOrEqual(3);
+  expect(filesFinalBox.y + filesFinalBox.height).toBeLessThanOrEqual(previewFinalBox.y + 3);
+});

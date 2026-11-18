@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ChevronLeft,
@@ -99,17 +99,13 @@ const FEEDBACK_QUICK_CHIPS = ["样式错位", "点击无响应", "白屏/报错"
 export interface BrowserPreviewTabProps {
   cwd?: string;
   paneControls?: ReactNode;
-  draggableHeader?: boolean;
-  onHeaderDragStart?: (event: DragEvent<HTMLElement>) => void;
-  onHeaderDragEnd?: () => void;
+  onHeaderPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
 }
 
 export function BrowserPreviewTab({
   cwd = "",
   paneControls,
-  draggableHeader,
-  onHeaderDragStart,
-  onHeaderDragEnd,
+  onHeaderPointerDown,
 }: BrowserPreviewTabProps) {
   const previewUrl = useWorkbenchStore((state) => state.previewUrl);
   const setPreviewUrl = useWorkbenchStore((state) => state.setPreviewUrl);
@@ -250,9 +246,7 @@ export function BrowserPreviewTab({
     <div className="pid-wb-pane pid-wb-browser-pane">
       <form
         className="pid-wb-pane-header pid-wb-browser-header"
-        draggable={draggableHeader}
-        onDragStart={onHeaderDragStart}
-        onDragEnd={onHeaderDragEnd}
+        onPointerDown={onHeaderPointerDown}
         onSubmit={handleSubmit}
       >
         <div className="pid-wb-browser-urlbar">
