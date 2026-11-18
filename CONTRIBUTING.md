@@ -19,7 +19,9 @@ npm run tauri -- dev
 
 ## Required checks
 
-Run these before opening a pull request:
+See [AGENTS.md](AGENTS.md) for architectural invariants, plugin development workflow, frontend CSS/component budgets, and the tri-end `AppSettings` checklist.
+
+Run these before opening a pull request (also run `node scripts/generate-plugin-types.mjs` whenever modifying `src/sdk/index.ts` or `@qianji/protocol`):
 
 ```powershell
 npm run scan:secrets
@@ -41,12 +43,14 @@ Changes to Tauri commands, permission rules, credential handling, browser/comput
 
 ## Language and user-facing copy
 
-The application interface is Chinese. Code, comments, commit messages,
-documentation and issues are English. There is no locale switcher and no
-translation layer: about 1,360 user-facing strings are written inline, so
-adding a second language is a product decision with real work behind it, not a
-configuration change. Write new interface copy in Chinese, inline, the way the
-surrounding code does.
+The application interface is Chinese. Code identifiers, comments, commit messages,
+and governance/security documentation are English; root `README.md` (Chinese) and
+`README.en.md` (English) are maintained as a bilingual pair, while architecture
+design docs, ADRs, and `packages/*/README.md` files are written primarily in Chinese.
+There is no locale switcher and no UI translation layer: user-facing strings are
+written inline in Chinese, so adding a second UI language is a product decision
+with real work behind it rather than a configuration change. Write new interface
+copy in Chinese, inline, the way the surrounding code does.
 
 Copy currently lives in three layers, which is worth knowing before adding
 more:
@@ -68,7 +72,7 @@ and is also the step that would make a second locale tractable later.
 - Keep unrelated formatting and refactors out of the change.
 - Include screenshots only for UI owned by this project or assets you have permission to redistribute.
 - Do not commit real credentials, user data, local session files, private repository content, or machine-specific configuration.
-- Update `README.md`, `SECURITY.md`, or the relevant document when a public contract changes.
+- Update `README.md`, `README.en.md`, `SECURITY.md`, or the relevant document when a public contract changes.
 - Note tests that were not run and explain why.
 
 ## Security issues

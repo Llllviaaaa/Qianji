@@ -55,7 +55,17 @@ This product includes software developed at Vetta (https://www.openvetta.com).
 - Noto Serif (`@fontsource-variable/noto-serif`) — SIL Open Font License 1.1, Copyright The Noto Project Authors
 - JetBrains Mono (`@fontsource-variable/jetbrains-mono`) — SIL Open Font License 1.1, Copyright The JetBrains Mono Project Authors
 
-The generated runtime also includes the license identifiers and available license files for bundled transitive npm dependencies in `runtime-licenses.json` and `licenses/`.
+## Core Bundled Libraries
+
+When `scripts/prepare-harness-host.mjs` bundles the Harness Host for compilation with Bun, `esbuild` preserves third-party license banners (`legalComments: "eof"`). Core runtime and UI libraries bundled into Qianji include:
+
+- `@deepseek-ai/cordis` & `@deepseek-ai/schemastery` — MIT License (microkernel IoC runtime and schema validation)
+- CodeMirror 6 (`@codemirror/*`) — MIT License (code editor surface and language modes)
+- xterm.js (`@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`) — MIT License (integrated terminal emulator)
+- Mermaid (`mermaid`) & PlantUML (`@plantuml/core`) — MIT License (diagram rendering)
+- DOMPurify (`dompurify`) — Dual-licensed under MPL-2.0 OR Apache-2.0 (selected under Apache-2.0 / permissive compatibility for HTML sanitization)
+- Lucide (`lucide-react`) — ISC License (UI icon set)
+- `ws` — MIT License (WebSocket server/client transport in Harness Host)
 
 ## MIT License
 

@@ -4,21 +4,26 @@ Notable user-facing changes are documented in this file.
 
 ## Unreleased
 
-- Fix: opening Pi Desktop while it is already running (for example while it sits in the tray) started a second copy. It now brings the existing window to the front.
-- Fix: 设置 › 调试 › 打开日志目录 failed with `Not allowed to open path`; it now opens `~/.pid/logs`.
+- Rebrand: renamed **Pi Desktop** to **Qianji (千机)**, moving runtime data and settings to `~/.qianji` and `%APPDATA%/qianji` (with automatic migration from `~/.pid` and `%APPDATA%/pid-desktop`).
+- Fix: opening Qianji while it is already running (for example while it sits in the tray) started a second copy. It now brings the existing window to the front.
+- Fix: 设置 › 调试 › 打开日志目录 failed with `Not allowed to open path`; it now opens `~/.qianji/logs`.
+- Workbench & Sidebar: redesigned the Right Workbench into a hybrid split-tile layout (vertical/horizontal splits, pointer header drag-docking, adaptive Task & Context Inspector, inline Git diff comments, and dockable ConPTY terminal) alongside session tree hierarchy, sorting/pinning, and inline thread actions.
+- Intelligent UI: added `render_ui`, `update_ui`, `/ui` (including `/ui clear`), dual `declarative` and isolated loopback `html` engines, and the Right Workbench Canvas pane.
+- Dynamic Plugins & 10 Official Plugins: added the Unified Plugins Hub, `@qianji/client` SDK with 22 fault-isolated `<PluginSlot>` points, `@layer plugin-ui` + `@scope` CSS isolation, deferred HMR while agent runs are active, Agent closed-loop tools (`qianji_inspect` and `plugin_manager` with offline `plugin-types/`), and 10 bundled plugins (`code-review`, `diagram-viewer`, `goal-tracker`, `message-actions`, `observability`, `quick-prompts`, `session-usage`, `side-chat`, `smart-rewind`, `web-preview`).
+- Agent Core & Tooling (ADRs 0017–0022): added Anthropic Claude 4.6+/5 adaptive thinking, multi-breakpoint prompt caching, and `/v1/models` context discovery; OpenAI-compat auto `reasoning_effort` and HTTP 400 fallbacks; proactive ratio-based sliding compaction and 50K-char tool output spilling (`@qianji/tool-output`); per-call tool timeout & repeat-call guards (`@qianji/tool-guards`) and `activate_tools` lazy loading; Windows `powershell` fallback; Hashline anchored edits, `ripgrep` search, and `diagnostics`; `delegate_task` Git Worktree isolation, opt-in verification shell, `roleModels`, and `outputSchema`; session-managed `bg_process`; `rewind` dead-end `branchSummary`; and progressive indexed Memory 2.0 (`inlineMaxChars`).
 
 ## 0.3.0
 
-Tasks now run on Pi Desktop's own Harness Host instead of the bundled Pi. See `docs/archive/RELEASE_0.3.0.md` for what moves where when upgrading from 0.2.x, and for the release checklist.
+Tasks now run on Qianji's own Harness Host instead of the bundled Pi. See `docs/archive/RELEASE_0.3.0.md` for what moves where when upgrading from 0.2.x, and for the release checklist.
 
-- Pi is no longer bundled. Sessions, model providers, keys, scheduled tasks and logs live under `~/.pid`; keys are encrypted with DPAPI in `~/.pid/secrets.dat`. Pi's own folder is only read, never changed.
+- Pi is no longer bundled. Sessions, model providers, keys, scheduled tasks and logs live under `~/.qianji` (migrated from `~/.pid` on upgrade); keys are encrypted with DPAPI in `~/.qianji/secrets.dat`. Pi's own folder is only read, never changed.
 - On first launch, custom providers from Pi's `models.json`, API keys from Pi's `auth.json`, your skills, themes and pets, and the desktop's scheduled tasks move over once. Pi's past tasks can be imported from the offer on first launch or later from 设置 › 已归档 › 导入到 Harness.
 - OAuth sign-ins (subscription logins) are not supported: add an API key, or a `$VARIABLE` reference, for those providers in 设置 › 模型与连接. The page no longer shows a sign-in option.
 - Fix: a provider without a key had no way to enter one in 设置 › 模型与连接, and a saved key could not be replaced or removed there.
 - 检查连接 asks the provider for its model list instead of sending a prompt, so it costs nothing.
 - If the Harness Host crashes, the app restarts it and reconnects, catching up on what the tasks logged meanwhile; a turn the crash cut off is marked as interrupted. A banner shows while reconnecting, and offers to start the Host again after repeated crashes.
 - Idle tasks leave memory after ten minutes and load again when opened.
-- The Host and the desktop log to `~/.pid/logs` (kept for a week, secrets redacted). 设置 › 调试 opens that folder and exports a diagnostics zip of the logs, versions and configuration for a bug report.
+- The Host and the desktop log to `~/.qianji/logs` (kept for a week, secrets redacted). 设置 › 调试 opens that folder and exports a diagnostics zip of the logs, versions and configuration for a bug report.
 - The desktop no longer carries an HTTP client: `ureq`, `rustls`, `rusqlite`, `json5` and the vendored `webpki-roots` patch are gone from `src-tauri`.
 
 ## 0.2.29 - 2026-10-12

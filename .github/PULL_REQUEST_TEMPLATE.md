@@ -9,6 +9,8 @@ Describe affected security boundaries, data formats, runtime behavior, or compat
 ## Verification
 
 - [ ] `npm run scan:secrets`
+- [ ] `npm run typecheck`
+- [ ] `npm run lint`
 - [ ] `npm run test:unit`
 - [ ] `npm run build`
 - [ ] `cargo fmt --all -- --check` in `src-tauri`
