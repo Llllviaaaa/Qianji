@@ -86,6 +86,22 @@ export function TerminalOrNoticeMessageRow({
     );
   }
 
+  if (message.noticeKind === "goal-complete") {
+    const newlineIdx = message.content.indexOf("\n");
+    const objective = (newlineIdx >= 0 ? message.content.slice(0, newlineIdx) : message.content).trim();
+    const notes = newlineIdx >= 0 ? message.content.slice(newlineIdx + 1).trim() : "";
+    return (
+      <div className="dshc-flow goal-complete-banner" role="status" id={`message-${message.id}`}>
+        <span className="goal-complete-badge">
+          <IconCheck />
+          <span>目标已达成</span>
+        </span>
+        <span className="goal-complete-objective">{objective}</span>
+        {notes !== "" && <span className="goal-complete-notes">{notes}</span>}
+      </div>
+    );
+  }
+
   if (message.noticeKind === "compaction" || message.noticeKind === "branch") {
     const label = message.noticeKind === "compaction" ? "上下文已压缩" : "会话已分叉";
     const detail = message.content.replace(/^(Context compacted|Branch summary)\s*/i, "").trim();

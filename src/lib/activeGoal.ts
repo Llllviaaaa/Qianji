@@ -42,6 +42,35 @@ function numberArg(call: UiToolCall, key: string): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+export function goalMilestoneCopy(
+  normalized: string,
+  args: Record<string, unknown>,
+): { title: string; detail?: string } | null {
+  const pickString = (keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = args[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return undefined;
+  };
+  if (normalized === "create_goal") {
+    return { title: "设定长程目标", detail: pickString(["objective", "goal"]) };
+  }
+  if (normalized !== "update_goal") return null;
+  const action = pickString(["action"])?.toLowerCase();
+  const status = pickString(["status"])?.toLowerCase();
+  const effective = action ?? status;
+  const notes = pickString(["notes"]);
+  const blockedReason = pickString(["blocked_reason", "blockedReason"]);
+  const objective = pickString(["objective"]);
+  if (effective === "complete") return { title: "目标已达成", detail: notes };
+  if (effective === "blocked") return { title: "目标受阻", detail: blockedReason ?? notes };
+  if (effective === "pause") return { title: "暂停目标", detail: notes };
+  if (effective === "resume") return { title: "恢复目标", detail: notes };
+  if (effective === "edit") return { title: "修订目标", detail: objective ?? notes };
+  return { title: "更新目标进展", detail: notes ?? effective };
+}
+
 export function deriveActiveGoal(messages: UiMessage[]): ActiveGoal | null {
   let terminalStatus: ActiveGoal["status"] | null = null;
 
@@ -64,7 +93,8 @@ export function deriveActiveGoal(messages: UiMessage[]): ActiveGoal | null {
       }
 
       if (kind !== "update") continue;
-      const status = stringArg(call, "status")?.toLowerCase();
+      const action = stringArg(call, "action")?.toLowerCase();
+      const status = action ?? stringArg(call, "status")?.toLowerCase();
       if (status === "complete" && !call.running) {
         return null;
       } else if (status === "blocked" && !call.running) {

@@ -1,11 +1,11 @@
 {
   "name": "goal-tracker",
   "version": "0.1.0",
-  "description": "会话级长程目标设定、验收清单追踪、上下文防漂移提醒与结束前自动核查（create_goal / get_goal / update_goal + /goal）。",
+  "description": "DSH 风格长程目标追踪与自动轮次驱动（create_goal / get_goal / update_goal、/goal 控制面与 GoalBar 控制条）。",
   "qianji": {
     "id": "goal-tracker",
     "name": "目标追踪器",
-    "description": "会话级长程目标设定与进度追踪：提供 create_goal / get_goal / update_goal 工具、/goal 斜杠指令、验收清单追踪、输入框顶部目标控制卡与任务结束前自动核查提醒。",
+    "description": "DSH 风格长程目标追踪：支持 active/paused/blocked/complete 四态、CAS 版本控制、agent/settled <goal_round> 自动续跑驱动（默认 256 轮）、/goal 控制面命令与极简 GoalBar 状态条。",
     "inject": ["tools", "commands", "rpc", "agents", "sessions"],
     "host": "./host.ts",
     "client": "./client.tsx",
@@ -15,21 +15,28 @@
       "slots": ["composer.banners"]
     },
     "defaultConfig": {
-      "autoRemindBeforeStop": true,
-      "maxAutoContinues": 2
+      "enableRoundDriver": true,
+      "defaultMaxGoalRounds": 256,
+      "blockedAfterConsecutiveRounds": 3
     },
     "configSchema": {
       "type": "object",
       "properties": {
-        "autoRemindBeforeStop": {
+        "enableRoundDriver": {
           "type": "boolean",
-          "description": "当目标仍处于进行中时，在单轮回复结束前自动提醒模型核查或更新目标状态"
+          "description": "启用同会话空闲自动续跑驱动（在 active 且已武装状态下自动派发下一轮 <goal_round>）"
         },
-        "maxAutoContinues": {
+        "defaultMaxGoalRounds": {
           "type": "number",
-          "minimum": 0,
-          "maximum": 5,
-          "description": "同一目标在结束前最多触发自动核查提醒的次数"
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "单个目标默认允许的最大自动推进轮次上限（默认 256）"
+        },
+        "blockedAfterConsecutiveRounds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "模型连续报告受阻达到该轮次阈值后，才允许进入 blocked 态"
         }
       }
     }

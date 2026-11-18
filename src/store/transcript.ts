@@ -198,7 +198,8 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
         return false;
       }
       const wasStreaming = get().isStreaming;
-      if (wasStreaming && behavior === "followUp") {
+      const slash = payload.images.length === 0 ? parseLeadingSlashCommand(payload.message) : null;
+      if (wasStreaming && behavior === "followUp" && slash?.name !== "goal") {
         const item: ManagedQueuedMessage = {
           id: typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
@@ -212,8 +213,7 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
         return true;
       }
       let effectivePayload = payload;
-      if (!wasStreaming && payload.images.length === 0) {
-        const slash = parseLeadingSlashCommand(payload.message);
+      if ((!wasStreaming || slash?.name === "goal") && payload.images.length === 0) {
         if (slash !== null) {
           try {
             if (slash.rawArgs.trim() === "" && (slash.name === "mcp" || slash.name === "skills")) {
@@ -225,10 +225,13 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
               { cwd: get().cwd, sessionFile: get().sessionFile },
             );
             if (handledByClient) return true;
-            const needsSession =
+            const trimmedArgs = slash.rawArgs.trim();
+            const isGoalCreate =
               slash.name === "goal"
-              && slash.rawArgs.trim() !== ""
-              && !["status", "clear", "reset", "done", "complete"].includes(slash.rawArgs.trim().toLowerCase());
+              && trimmedArgs !== ""
+              && !/^(status|pause|resume|clear|reset|done|complete)(?:\s|$)/i.test(trimmedArgs)
+              && !/^edit(?:\s|$)/i.test(trimmedArgs);
+            const needsSession = isGoalCreate && !wasStreaming;
             const commandResult = await harnessRuntimes.runCommand(runtimeId, slash.name, slash.rawArgs, { ensureSession: needsSession });
             if (needsSession) {
               ctx.recordStartedSession(runtimeId);
@@ -257,9 +260,21 @@ export function createTranscriptSlice(set: SetState, get: GetState, ctx: StoreCo
                 const outputText = commandResult.output ?? `已执行 \`/${slash.name}\`。`;
                 set((state) => {
                   const widgets = { ...state.extensionWidgets };
-                  if (slash.name === "plan" && slash.rawArgs.trim().toLowerCase() === "clear") {
+                  if (slash.name === "plan" && trimmedArgs.toLowerCase() === "clear") {
                     delete widgets["qianji-plan"];
                     delete widgets["pidesktop-plan"];
+                  }
+                  if (slash.name === "goal") {
+                    return {
+                      extensionWidgets: widgets,
+                      messages: appendNotice(state.messages, {
+                        id: `slash-notice-${nonce}`,
+                        role: "notice",
+                        content: outputText,
+                        ...(commandResult.isError ? { isError: true } : {}),
+                        timestamp: now,
+                      }),
+                    };
                   }
                   return {
                     extensionWidgets: widgets,

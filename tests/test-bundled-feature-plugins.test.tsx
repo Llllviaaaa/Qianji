@@ -303,7 +303,7 @@ describe("Official bundled feature plugins suite", () => {
     expect(cmdNames.has("rewind")).toBe(true);
     expect(cmdNames.has("usage")).toBe(true);
 
-    // Exercise goal-tracker tools + before-stop hook + RPC lifecycle
+    // Exercise goal-tracker tools + CAS RPC lifecycle + agent/settled abort pause
     const env = { sessionId: "sess-gt-1", cwd: workspaceDir, signal: new AbortController().signal };
     const createRes = await host.ctx.tools.execute(
       { id: "c1", name: "create_goal", args: { objective: "Finish all plugin tests", token_budget: 50000 } },
@@ -314,26 +314,66 @@ describe("Official bundled feature plugins suite", () => {
     const getRes = await host.ctx.tools.execute({ id: "c2", name: "get_goal", args: {} }, env);
     expect((getRes.content[0] as { text?: string }).text).toContain("Finish all plugin tests");
 
-    const session = await host.ctx.sessions.create({ cwd: workspaceDir });
+    const session = host.ctx.sessions.create({ cwd: workspaceDir });
     await host.ctx.tools.execute(
-      { id: "c3", name: "create_goal", args: { objective: "Verify stop hook" } },
+      { id: "c3", name: "create_goal", args: { objective: "Verify DSH goal lifecycle" } },
       { sessionId: session.id, cwd: workspaceDir, signal: new AbortController().signal },
     );
 
-    const remind1 = await host.ctx.bail("agent/before-stop", session, { turn: 1, stop: "stop", hasText: true });
-    expect(typeof remind1).toBe("string");
-    const remind2 = await host.ctx.bail("agent/before-stop", session, { turn: 2, stop: "stop", hasText: true });
-    expect(typeof remind2).toBe("string");
-    // Respects maxAutoContinues (default 2)
-    const remind3 = await host.ctx.bail("agent/before-stop", session, { turn: 3, stop: "stop", hasText: true });
-    expect(remind3).toBeUndefined();
+    const getGoalHandler = handlers.get("goalTracker.get");
+    const pauseGoalHandler = handlers.get("goalTracker.pause");
+    const resumeGoalHandler = handlers.get("goalTracker.resume");
+    const editGoalHandler = handlers.get("goalTracker.edit");
+    const rpcCtx = { signal: new AbortController().signal, notify: () => {} };
+
+    const snap1 = (await getGoalHandler?.({ sessionId: session.id }, rpcCtx)) as {
+      goal: { id: string; revision: number; phase: string; armed: boolean } | null;
+    };
+    expect(snap1.goal?.phase).toBe("active");
+    expect(snap1.goal?.armed).toBe(true);
+
+    const pausedSnap = (await pauseGoalHandler?.(
+      { sessionId: session.id, goalId: snap1.goal?.id, revision: snap1.goal?.revision },
+      rpcCtx,
+    )) as { goal: { id: string; revision: number; phase: string; armed: boolean } | null };
+    expect(pausedSnap.goal?.phase).toBe("paused");
+    expect(pausedSnap.goal?.armed).toBe(false);
+
+    const resumedSnap = (await resumeGoalHandler?.(
+      { sessionId: session.id, goalId: pausedSnap.goal?.id, revision: pausedSnap.goal?.revision },
+      rpcCtx,
+    )) as { goal: { id: string; revision: number; phase: string; armed: boolean } | null };
+    expect(resumedSnap.goal?.phase).toBe("active");
+    expect(resumedSnap.goal?.armed).toBe(true);
+
+    const editedSnap = (await editGoalHandler?.(
+      {
+        sessionId: session.id,
+        goalId: resumedSnap.goal?.id,
+        revision: resumedSnap.goal?.revision,
+        objective: "Verify DSH goal lifecycle v2",
+      },
+      rpcCtx,
+    )) as { goal: { objective: string; phase: string; armed: boolean } | null };
+    expect(editedSnap.goal?.objective).toBe("Verify DSH goal lifecycle v2");
+    expect(editedSnap.goal?.armed).toBe(true);
+
+    await host.ctx.parallel("agent/settled", session, "aborted");
+    const afterAbort = (await getGoalHandler?.({ sessionId: session.id }, rpcCtx)) as {
+      goal: { phase: string; armed: boolean } | null;
+    };
+    expect(afterAbort.goal?.phase).toBe("paused");
+    expect(afterAbort.goal?.armed).toBe(false);
 
     await host.ctx.tools.execute(
-      { id: "c4", name: "update_goal", args: { status: "complete", notes: "All passed" } },
+      { id: "c4", name: "update_goal", args: { action: "complete", notes: "All passed" } },
       { sessionId: session.id, cwd: workspaceDir, signal: new AbortController().signal },
     );
-    const afterComplete = await host.ctx.bail("agent/before-stop", session, { turn: 4, stop: "stop", hasText: true });
-    expect(afterComplete).toBeUndefined();
+    const afterComplete = (await getGoalHandler?.({ sessionId: session.id }, rpcCtx)) as {
+      goal: { phase: string; armed: boolean } | null;
+    };
+    expect(afterComplete.goal?.phase).toBe("complete");
+    expect(afterComplete.goal?.armed).toBe(false);
 
     // Verify web-preview project detection command
     const previewCmd = await host.ctx.commands.run("preview", "", {

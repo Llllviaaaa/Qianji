@@ -134,17 +134,14 @@ export class HarnessRuntimes {
    * Hear a Host notification such as `schedule/run`. This connects at once,
    * so updates arrive before anything is asked.
    */
-  onNotification(method: string, listener: (params: unknown) => void): () => void {
-    let listeners = this.notificationListeners.get(method);
-    if (listeners === undefined) {
-      listeners = new Set();
-      this.notificationListeners.set(method, listeners);
-    }
+  onNotification(method: string, listener: (params: unknown) => void, options?: { eagerConnect?: boolean }): () => void {
+    const listeners = this.notificationListeners.get(method) ?? new Set<(params: unknown) => void>();
+    this.notificationListeners.set(method, listeners);
     listeners.add(listener);
-    void this.rpc().catch(() => undefined);
+    if (options?.eagerConnect !== false) void this.rpc().catch(() => undefined);
     return () => {
-      listeners?.delete(listener);
-      if (listeners?.size === 0) this.notificationListeners.delete(method);
+      listeners.delete(listener);
+      if (listeners.size === 0) this.notificationListeners.delete(method);
     };
   }
 
@@ -376,7 +373,11 @@ export class HarnessRuntimes {
   async tree(runtimeId: string): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
     const runtime = this.runtime(runtimeId);
     if (runtime.sessionId === undefined) return { tree: [], leafId: null };
-    const events = (await this.readEvents(runtime.sessionId)).map((ev) => (ev.type === "user" && Array.isArray((ev.data as { content?: unknown }).content) ? { ...ev, data: { ...(ev.data as object), content: ((ev.data as { content: Array<{ meta?: boolean }> }).content).filter((b) => b?.meta !== true) } } : ev));
+    const events = (await this.readEvents(runtime.sessionId)).flatMap((ev) => {
+      if (ev.type !== "user" || !Array.isArray((ev.data as { content?: unknown }).content)) return [ev];
+      const filtered = ((ev.data as { content: Array<{ meta?: boolean }> }).content).filter((b) => b?.meta !== true);
+      return filtered.length > 0 ? [{ ...ev, data: { ...(ev.data as object), content: filtered } }] : [];
+    });
     return sessionTreeOf(events);
   }
 

@@ -27,6 +27,14 @@ function isActivityEvent(event: SessionEvent): boolean {
   return event.type !== "label" && event.type !== "model" && event.type !== "effort";
 }
 
+function isGoalRoundUserEvent(event: Extract<SessionEvent, { type: "user" }>): boolean {
+  return (
+    event.data.content.length > 0
+    && event.data.content.every((block) => block.type === "text" && block.meta === true)
+    && event.data.content.some((block) => block.type === "text" && /^\s*<goal_round>/i.test(block.text))
+  );
+}
+
 export function summarize(header: SessionHeader, events: readonly SessionEvent[]): SessionSummary {
   let title: string | undefined;
   let archived = false;
@@ -37,7 +45,7 @@ export function summarize(header: SessionHeader, events: readonly SessionEvent[]
   const byModel = new Map<string, SessionModelUsage>();
   for (const event of events) {
     if (event.type === "user") {
-      messageCount += 1;
+      if (!isGoalRoundUserEvent(event)) messageCount += 1;
     } else if (event.type === "assistant") {
       messageCount += 1;
       const evUsage = event.data.usage;
@@ -69,7 +77,7 @@ export function summarize(header: SessionHeader, events: readonly SessionEvent[]
   }
   if (reasoningTokens > 0) usage.reasoningTokens = reasoningTokens;
   for (const event of currentBranch(events)) {
-    if (event.type === "user" && firstMessage === undefined) {
+    if (event.type === "user" && firstMessage === undefined && !isGoalRoundUserEvent(event)) {
       const nonMeta = event.data.content.flatMap((block) => (block.type === "text" && block.meta !== true ? [block.text] : []));
       const source = nonMeta.length > 0 ? nonMeta : event.data.content.flatMap((block) => (block.type === "text" ? [block.text] : []));
       const text = source.join(" ").replace(/\s+/g, " ").trim();

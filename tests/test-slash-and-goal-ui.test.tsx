@@ -16,6 +16,8 @@ import {
   TranscriptTranslator,
   appendNotice,
   continuationNoticeOf,
+  goalCompleteNoticeOf,
+  goalRoundNoticeOf,
   historyToUi,
 } from "../src/lib/transcript";
 import { groupTranscriptMessages } from "../src/lib/transcriptTurns";
@@ -195,6 +197,23 @@ describe("Slash command meta-prompt separation & new-session /goal bootstrap", (
     runCommandSpy.mockResolvedValueOnce({ handled: true, output: "当前会话暂无进行中的目标。" });
     await useAppStore.getState().sendMessage("/goal done");
     expect(runCommandSpy).toHaveBeenLastCalledWith(runtimeId, "goal", "done", { ensureSession: false });
+    expect(useAppStore.getState().messages.at(-1)).toMatchObject({
+      role: "notice",
+      content: "当前会话暂无进行中的目标。",
+    });
+    expect(useAppStore.getState().messages.some((m) => m.id.startsWith("slash-user-"))).toBe(false);
+
+    // Control-plane `/goal` subcommands run immediately even while `isStreaming: true` (never queued, never fake chat bubbles)
+    useAppStore.setState({ isStreaming: true, managedFollowUpQueue: [] });
+    runCommandSpy.mockResolvedValueOnce({ handled: true, output: "已暂停长程目标。" });
+    const pausedOk = await useAppStore.getState().sendMessage("/goal pause", [], "followUp");
+    expect(pausedOk).toBe(true);
+    expect(runCommandSpy).toHaveBeenLastCalledWith(runtimeId, "goal", "pause", { ensureSession: false });
+    expect(useAppStore.getState().managedFollowUpQueue).toEqual([]);
+    expect(useAppStore.getState().messages.at(-1)).toMatchObject({
+      role: "notice",
+      content: "已暂停长程目标。",
+    });
   });
 
   it("excludes meta: true blocks from historyToUi, live user events, and forkPointsOf", () => {
@@ -463,6 +482,110 @@ describe("before-stop continuation notice & Round 1 main answer preservation", (
     expect(liveSettled[0]?.isStreaming).toBe(false);
     expect(liveSettled[1]?.noticeKind).toBe("continuation");
   });
+
+  it("translates DSH <goal_round> meta-only user events and goal-complete events cleanly without empty user bubbles", () => {
+    const roundEvent: PersistedEvent = {
+      seq: 3,
+      ts: "2026-11-18T00:00:10.500Z",
+      type: "user",
+      data: {
+        content: [
+          {
+            type: "text",
+            text: '<goal_round>\nObjective: "完成架构改造"\nRound: 2/256\n</goal_round>',
+            meta: true,
+          },
+        ],
+      },
+    };
+    expect(goalRoundNoticeOf(roundEvent)).toMatchObject({
+      id: "host-3",
+      role: "notice",
+      noticeKind: "continuation",
+      content: "目标自动推进（第 2/256 轮）",
+    });
+
+    const completeEvent: PersistedEvent = {
+      seq: 7,
+      ts: "2026-11-18T00:00:20.000Z",
+      type: "custom",
+      data: {
+        ns: "qianji-goal",
+        data: {
+          id: "g-1",
+          sessionId: "s-1",
+          revision: 3,
+          objective: "完成架构改造",
+          phase: "complete",
+          justCompleted: true,
+          notes: "全部测试绿灯",
+        },
+      },
+    };
+    expect(goalCompleteNoticeOf(completeEvent)).toMatchObject({
+      id: "host-7",
+      role: "notice",
+      noticeKind: "goal-complete",
+      content: "完成架构改造\n全部测试绿灯",
+    });
+
+    const events: PersistedEvent[] = [
+      {
+        seq: 1,
+        ts: "2026-11-18T00:00:00.000Z",
+        type: "user",
+        data: { content: [{ type: "text", text: "/goal 完成架构改造" }] },
+      },
+      {
+        seq: 2,
+        ts: "2026-11-18T00:00:10.000Z",
+        type: "assistant",
+        data: {
+          content: [{ type: "text", text: "第一轮主回复内容" }],
+          model: { provider: "p", model: "m" },
+          usage: { inputTokens: 100, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          stop: "stop",
+        },
+      },
+      roundEvent,
+      {
+        seq: 4,
+        ts: "2026-11-18T00:00:15.000Z",
+        type: "assistant",
+        data: {
+          content: [{ type: "text", text: "第二轮收尾确认。" }],
+          model: { provider: "p", model: "m" },
+          usage: { inputTokens: 120, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          stop: "stop",
+        },
+      },
+      completeEvent,
+    ];
+
+    const ui = historyToUi(events);
+    expect(ui.map((m) => [m.role, m.noticeKind ?? null])).toEqual([
+      ["user", null],
+      ["assistant", null],
+      ["notice", "continuation"],
+      ["assistant", null],
+      ["notice", "goal-complete"],
+    ]);
+    expect(forkPointsOf(events)).toEqual([{ entryId: "1", text: "/goal 完成架构改造" }]);
+
+    const translator = new TranscriptTranslator();
+    expect(translator.event(roundEvent)).toEqual([
+      expect.objectContaining({
+        type: "notice",
+        message: expect.objectContaining({ noticeKind: "continuation", content: "目标自动推进（第 2/256 轮）" }),
+      }),
+    ]);
+
+    const completeHtml = renderWithAppStore(createElement(Message, { message: ui[4] as UiMessage }));
+    expect(completeHtml).toContain("goal-complete-banner");
+    expect(completeHtml).toContain("目标已达成");
+    expect(completeHtml).toContain("完成架构改造");
+    expect(completeHtml).toContain("全部测试绿灯");
+  });
 });
 
 describe("Goal milestone tool presentation & Message visibility", () => {
@@ -509,6 +632,26 @@ describe("Goal milestone tool presentation & Message visibility", () => {
       kind: "plan",
       title: "更新目标进展",
       detail: "已完成协议层改造",
+    });
+
+    expect(presentToolCall(makeCall("update_goal", { action: "pause", notes: "等待人工确认" }))).toMatchObject({
+      kind: "plan",
+      title: "暂停目标",
+      detail: "等待人工确认",
+    });
+    expect(presentToolCall(makeCall("update_goal", { action: "resume" }))).toMatchObject({
+      kind: "plan",
+      title: "恢复目标",
+    });
+    expect(presentToolCall(makeCall("update_goal", { action: "edit", objective: "新的目标描述" }))).toMatchObject({
+      kind: "plan",
+      title: "修订目标",
+      detail: "新的目标描述",
+    });
+    expect(presentToolCall(makeCall("update_goal", { action: "blocked", blocked_reason: "缺少密钥" }))).toMatchObject({
+      kind: "plan",
+      title: "目标受阻",
+      detail: "缺少密钥",
     });
   });
 

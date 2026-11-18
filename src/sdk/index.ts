@@ -168,10 +168,29 @@ export function subscribeSessionActivity(listener: (snapshot: ActiveSessionSnaps
       listener(buildActiveSessionSnapshot());
     }
   });
+  const offSessionEvent = internalHarnessRuntimes.onNotification("session/event", (rawParams) => {
+    const params = rawParams as { sessionId?: unknown; event?: { type?: unknown } } | undefined;
+    const activeSessionId = internalUseAppStore.getState().sessionId;
+    if (
+      params?.sessionId === activeSessionId
+      && (params?.event?.type === "custom" || params?.event?.type === "rewind")
+    ) {
+      listener(buildActiveSessionSnapshot());
+    }
+  }, { eagerConnect: false });
+  const offGoalChanged = internalHarnessRuntimes.onNotification("goalTracker/changed", (rawParams) => {
+    const params = rawParams as { sessionId?: unknown } | undefined;
+    const activeSessionId = internalUseAppStore.getState().sessionId;
+    if (params?.sessionId === undefined || params.sessionId === activeSessionId) {
+      listener(buildActiveSessionSnapshot());
+    }
+  }, { eagerConnect: false });
   return () => {
     offStore();
     offRuntime();
     offHost();
+    offSessionEvent();
+    offGoalChanged();
   };
 }
 
