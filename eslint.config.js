@@ -22,7 +22,8 @@ export default tseslint.config(
       "**/plugin-types/**",
       "**/bundled-plugins/**",
       "**/bundled-skills/**",
-      // Vendored tooling, not project source.
+      // Vendored tooling and dependency overrides, not project source.
+      "vendor/**",
       ".gitnexus/**",
     ],
   },
