@@ -6,7 +6,7 @@
  * - isolated child Cordis scopes per active workspace (`WorkspacePluginScope`), and
  * - fiber-isolated fault tolerance with transactional HMR rollback (ADR 0016).
  */
-import { existsSync, watch as fsWatch, type FSWatcher } from "node:fs";
+import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 import {
@@ -57,9 +57,9 @@ import {
   extractStackFrameComparisonKeys,
   flushImmediate,
   resolveCordisPluginExport,
-  shouldIgnoreWatchedPath,
   signatureOf,
 } from "./plugin-util.ts";
+import { PluginWatcherController } from "./plugin-watchers.ts";
 import "./web-server.ts";
 
 export interface PluginManagerOptions {
@@ -68,6 +68,8 @@ export interface PluginManagerOptions {
   builtins?: (activeTrustedWorkspace?: string) => readonly BuiltinPluginDefinition[];
   /** Optional read-only directories scanned as `builtin` tier (e.g. `resources/harness/bundled-plugins`). */
   bundledPluginsDirs?: readonly string[] | (() => readonly string[]);
+  watchDebounceMs?: number;
+  settledHmrGraceMs?: number;
   onChanged?: (notification: PluginChangedNotification) => void;
   onTrustChanged?: (notification: WorkspaceTrustChangedNotification) => void;
 }
@@ -96,14 +98,6 @@ interface PreparedCandidate {
   clientEtag?: string;
 }
 
-interface WatcherEntry {
-  dir: string;
-  watcher: FSWatcher;
-  timer?: ReturnType<typeof setTimeout>;
-}
-
-const WATCH_DEBOUNCE_MS = 120;
-
 export class PluginManager {
   readonly bundles = new ClientBundleRegistry();
   private readonly mounted = new Map<string, MountedFiber>();
@@ -113,7 +107,7 @@ export class PluginManager {
   private readonly loggedClientErrorKeys = new Set<string>();
   private readonly clientEtags = new Map<string, string>();
   private readonly extraBundledDirs = new Set<string>();
-  private readonly watchers = new Map<string, WatcherEntry>();
+  private readonly watcherController: PluginWatcherController;
   private readonly workspaceScope: WorkspacePluginScope;
   private readonly httpRouteFiber: { dispose(): unknown };
   private readonly offStatusListener: () => void;
@@ -130,6 +124,13 @@ export class PluginManager {
     private readonly ctx: Context,
     private readonly options: PluginManagerOptions,
   ) {
+    this.watcherController = new PluginWatcherController({
+      ctx,
+      watchDebounceMs: options.watchDebounceMs,
+      settledHmrGraceMs: options.settledHmrGraceMs,
+      invalidateDir: (dir) => this.bundles.invalidateDir(dir),
+      triggerHmrSync: (forceIds) => this.sync({ reason: "hmr", forceIds }),
+    });
     this.workspaceScope = new WorkspacePluginScope(ctx);
     const httpBridgePlugin = {
       name: "qianji-plugins-http-bridge",
@@ -318,6 +319,7 @@ export class PluginManager {
   circuitBreakPlugin(pluginId: string, reason: unknown): void {
     if (this.disposed) return;
     this.circuitBroken.add(pluginId);
+    this.watcherController.clearPending(pluginId);
     void this.enqueue(async () => {
       if (this.disposed) return;
       const mounted = this.mounted.get(pluginId);
@@ -512,6 +514,7 @@ export class PluginManager {
         });
       }
       this.circuitBroken.delete(id);
+      this.watcherController.clearPending(id);
       if (!enabled) {
         this.errors.delete(id);
         this.clientErrors.delete(id);
@@ -554,6 +557,7 @@ export class PluginManager {
           };
         });
       }
+      this.watcherController.clearPending(id);
       this.clientErrors.delete(id);
       this.clearLoggedClientErrorKeys(id);
       await this.syncNow({ reason: "configured", forceIds: new Set([id]), ...(options.workspace === undefined ? {} : { workspace: options.workspace }) });
@@ -568,6 +572,7 @@ export class PluginManager {
       if (id !== undefined) {
         const existing = this.latestSnapshot.find((entry) => entry.id === id);
         if (existing?.dir !== undefined) this.bundles.invalidateDir(existing.dir);
+        this.watcherController.clearPending(id);
         this.circuitBroken.delete(id);
         this.errors.delete(id);
         this.clientErrors.delete(id);
@@ -580,6 +585,7 @@ export class PluginManager {
         });
       } else {
         this.bundles.clear();
+        this.watcherController.clearPending();
         this.circuitBroken.clear();
         this.errors.clear();
         this.clientErrors.clear();
@@ -603,6 +609,7 @@ export class PluginManager {
       const installed = await installPlugin(this.options.dataDir, params);
       installedId = installed.manifest.id;
       this.bundles.invalidateDir(installed.manifest.dir);
+      this.watcherController.clearPending(installedId);
       this.circuitBroken.delete(installedId);
       this.errors.delete(installedId);
       this.clientErrors.delete(installedId);
@@ -629,6 +636,7 @@ export class PluginManager {
       for (const pluginId of ids) {
         const updated = await updateInstalledPlugin(this.options.dataDir, pluginId);
         this.bundles.invalidateDir(updated.manifest.dir);
+        this.watcherController.clearPending(updated.manifest.id);
         this.circuitBroken.delete(updated.manifest.id);
         this.errors.delete(updated.manifest.id);
         this.clientErrors.delete(updated.manifest.id);
@@ -648,6 +656,7 @@ export class PluginManager {
       const current = this.latestSnapshot.find((entry) => entry.id === id);
       removeUserPluginFiles(this.options.dataDir, id, current?.tier === "user" ? current.dir : undefined);
       if (current?.dir !== undefined) this.bundles.invalidateDir(current.dir);
+      this.watcherController.clearPending(id);
       this.circuitBroken.delete(id);
       this.errors.delete(id);
       this.clientErrors.delete(id);
@@ -713,12 +722,8 @@ export class PluginManager {
       clearTimeout(this.statusRefreshTimer);
       this.statusRefreshTimer = undefined;
     }
+    this.watcherController.dispose();
     await this.enqueue(async () => {
-      for (const watcher of this.watchers.values()) {
-        if (watcher.timer !== undefined) clearTimeout(watcher.timer);
-        watcher.watcher.close();
-      }
-      this.watchers.clear();
       const orderedTeardown = reverseTopologicalOrder([...this.mounted.values()]);
       for (const mounted of orderedTeardown) {
         await mounted.fiber?.dispose();
@@ -1167,7 +1172,7 @@ export class PluginManager {
       // 6. Build public snapshot and reconcile file watchers.
       this.latestCandidates = candidates;
       this.latestSnapshot = this.buildSnapshot(candidates);
-      this.reconcileWatchers(candidates);
+      this.watcherController.reconcile(candidates);
 
       if (params.reason !== undefined && (changed.length > 0 || params.reason === "trust" || params.reason === "toggled" || params.reason === "configured")) {
         const snapshot = this.activeWorkspace !== undefined ? this.withUntrustedWorkspaceOverlay(this.latestSnapshot, this.activeWorkspace) : [...this.latestSnapshot];
@@ -1178,49 +1183,6 @@ export class PluginManager {
       return changed;
     } finally {
       this.syncing = false;
-    }
-  }
-
-  private reconcileWatchers(candidates: readonly ResolvedCandidate[]): void {
-    const wanted = new Map<string, string>();
-    for (const candidate of candidates) {
-      if (candidate.enabled && candidate.watch && candidate.tier !== "builtin" && candidate.dir !== undefined && existsSync(candidate.dir)) {
-        wanted.set(candidate.id, candidate.dir);
-      }
-    }
-
-    for (const [id, entry] of this.watchers) {
-      const targetDir = wanted.get(id);
-      if (targetDir !== undefined && targetDir === entry.dir) continue;
-      if (entry.timer !== undefined) clearTimeout(entry.timer);
-      entry.watcher.close();
-      this.watchers.delete(id);
-    }
-
-    for (const [id, dir] of wanted) {
-      if (this.watchers.has(id)) continue;
-      try {
-        const watcher = fsWatch(dir, { recursive: true }, (_eventType, filename) => {
-          if (this.disposed || shouldIgnoreWatchedPath(filename)) return;
-          const active = this.watchers.get(id);
-          if (active === undefined) return;
-          if (active.timer !== undefined) clearTimeout(active.timer);
-          active.timer = setTimeout(() => {
-            active.timer = undefined;
-            if (this.disposed) return;
-            this.bundles.invalidateDir(dir);
-            void this.sync({ reason: "hmr", forceIds: new Set([id]) }).catch((error: unknown) => {
-              this.ctx.logger("plugins").error("HMR sync failed for %s: %s", id, error);
-            });
-          }, WATCH_DEBOUNCE_MS);
-        });
-        watcher.on("error", (error) => {
-          this.ctx.logger("plugins").warn("watcher error for %s (%s): %s", id, dir, error);
-        });
-        this.watchers.set(id, { dir, watcher });
-      } catch (error) {
-        this.ctx.logger("plugins").warn("could not watch plugin %s (%s): %s", id, dir, error);
-      }
     }
   }
 }
