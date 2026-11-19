@@ -154,8 +154,8 @@ Harness Host 基于 `@deepseek-ai/cordis` 构建控制反转（IoC）微内核�
 | `systemPrompt.section` | Service | 按 `SectionOrder` 权重动态拼接系统提示词片段 | `prompt-context`, `permissions`, `memory`, `intelligent-ui` |
 | `agent/before-start` | `serial` | 一轮对话运行开始前执行 | `checkpoints`（自动拍摄 Git 工作区快照）、`hooks`、`goal-tracker`、`plugin-watchers` |
 | `agent/turn-start` / `turn-end` | `serial` | 每一轮 LLM + 工具迭代开始与结束 | `hooks`、`session-usage` 轮次耗时与速度追踪 |
-| `agent/before-stop` | `serial` | Agent 准备结束输出前拦截，返回字符串可注入续跑检查提示 | `plan`（未完成计划续跑）、`goal-tracker`（目标验收核查） |
-| `agent/settled` | `parallel` | 消息队列排空、Agent 进入空闲状态 | `session/flush`、`hooks` (`agent_end` / `agent_settled`)、`plugin-watchers`（刷出延迟 HMR） |
+| `agent/before-stop` | `serial` | Agent 准备结束输出前拦截，返回字符串可注入续跑检查提示 | `plan`（未完成计划续跑） |
+| `agent/settled` | `parallel` | 消息队列排空、Agent 进入空闲状态 | `session/flush`、`hooks` (`agent_end` / `agent_settled`)、`goal-tracker`（DSH `<goal_round>` 自动推进驱动）、`plugin-watchers`（刷出延迟 HMR） |
 | `session/event` / `session/delta` | `emit` | 持久化事件落盘后 / 实时流式增量产生时 | `sessions-rpc`（推送至订阅的 WebSocket 客户端）、`session-search-fts` |
 
 ### 3.3 三级动态插件体系、信任模型与全栈 HMR（[ADR 0016](adr/0016-dynamic-plugins-and-hmr.md)、[ADR 0017](adr/0017-plugin-trust-model.md)）
@@ -189,7 +189,7 @@ flowchart LR
 | :--- | :--- | :--- |
 | `code-review` | `host` + `client` | `/review` 命令、只读 `code_review_diff` 工具、`codeReview.summary` RPC，菜单栏/线程/文件右键直达 Git 审查 |
 | `diagram-viewer` | `client` | 注册 `.mmd`/`.mermaid`/`.puml`/`.plantuml`/`.wsd` 文件预览器，并驱动对话中 Mermaid / PlantUML 代码块交互渲染 |
-| `goal-tracker` | `host` + `client` | `create_goal`/`get_goal`/`update_goal` 工具、`/goal` 命令、输入框目标控制卡（`composerBanners`）及 `llm/request` + `agent/before-stop` 验收闭环 |
+| `goal-tracker` | `host` + `client` | DSH 风格目标追踪：`create_goal`/`get_goal`/`update_goal` 工具（含 CAS 与连续受阻门限）、`/goal` 控制面命令、`agent/settled` `<goal_round>` 长程驱动及精简 `GoalBar`（`composerBanners`） |
 | `message-actions` | `client` | 为助手消息操作栏（`message.actions`）挂载分享、锚点定位高亮与引用追问按钮 |
 | `observability` | `host` + `client` | 三端异常与卡顿取证：`observability_inspect` 只读工具、`/logs`（及 `/obs`）命令、状态栏健康胶囊、右侧观测面板与诊断导出 |
 | `quick-prompts` | `client` | 新会话首页快捷启动指令胶囊（`home.quickActions`），支持自定义与点击回填/直发 |
@@ -269,7 +269,7 @@ sequenceDiagram
 - **上下文压力治理与滑动压缩**：默认在消费达到已知模型 `contextWindow` 的 `compactAtContextRatio`（`0.8`）时主动触发压缩；运行中采用 `slidingCompactionPoint` 保留最近 `keepRecentTokens`（默认 `12_000`）完整工具回合，并在压缩摘要后重注入工作集提示；若摘要请求自身超长则按 `SUMMARY_CLIP_LEVELS`（8000 → 1000 字符）逐级裁剪重试。
 - **工具输出溢出与保护守卫**：[`@qianji/tool-output`](../packages/tool-output/src/index.ts) 对超过 50,000 字符的文本结果保留首尾各 40% 并把全文写入 `~/.qianji/spill/<sessionId>/<callId>.txt`（7 天自动清理）；[`@qianji/tool-guards`](../packages/tool-guards/src/index.ts) 为每次调用分配独立复制的 `env`，提供默认 10 分钟执行时限（含 1 秒中止宽限剥离）及连续第 3/5/8 次重复相同调用的换路提醒。
 - **按需延迟激活工具 (`activate_tools`)**：`Tools` 服务支持 `deferred: true` 工具分组（`browser`、`computer`、`code_intelligence`、`process`、`plugin_dev` 及工具数 > 8 的 MCP 服务器），初始仅暴露精简工具目录，模型按需激活后再注入完整 Schema。
-- **Steer、Follow-Up 与 Before-Stop 闭环**：运行中支持 `steer` 实时纠偏与可编辑 `followUp` 队列；`agent/before-stop` 允许 `plan`、`goal-tracker` 等插件在模型准备收尾前执行核查与自动续跑。
+- **Steer、Follow-Up、Before-Stop 与 Goal Round 闭环**：运行中支持 `steer` 实时纠偏与可编辑 `followUp` 队列；`agent/before-stop` 允许 `plan` 插件在收尾前检查未完成计划，`goal-tracker` 在 `agent/settled` 空闲阶段按轮次预算驱动同会话 `<goal_round>` 持续推进。
 
 ### 4.3 事件溯源会话存储与全文检索 (`@qianji/session*`)
 - **追加写 JSONL 格式（[ADR 0004](adr/0004-session-format.md)）**：

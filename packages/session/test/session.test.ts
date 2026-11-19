@@ -711,6 +711,16 @@ describe("meta text blocks (slash command separation)", () => {
       ev("user", { content: text("RealSecondTurnMessage") }),
     ]);
     expect(summarize(header, emptyNonMetaThenReal).firstMessage).toBe("RealSecondTurnMessage");
+
+    const syntheticGoalRound = log(() => [
+      ev("user", { content: [{ type: "text", text: "<goal_round>\nObjective: \"test\"\nRound: 1/256\n</goal_round>", meta: true }] }),
+      ev("assistant", { content: text("working"), model, usage, stop: "stop" }),
+      ev("user", { content: text("HumanFollowUp") }),
+    ]);
+    expect(summarize(header, syntheticGoalRound)).toMatchObject({
+      firstMessage: "HumanFollowUp",
+      messageCount: 2,
+    });
   });
 });
 

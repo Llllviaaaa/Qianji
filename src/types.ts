@@ -475,7 +475,7 @@ export interface UiMessage {
   role: "user" | "assistant" | "terminal" | "notice";
   content: string;
   /** Distinguishes compaction/branch/continuation notices from generic system notes. */
-  noticeKind?: "compaction" | "branch" | "continuation";
+  noticeKind?: "compaction" | "branch" | "continuation" | "goal-complete";
   images?: ImageContent[];
   thinking?: string;
   /** Ordered thinking / narration / tool rows for the compact turn fold. */

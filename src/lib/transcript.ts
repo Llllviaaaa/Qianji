@@ -60,6 +60,44 @@ export function continuationNoticeOf(event: PersistedEvent): UiMessage | null {
   return { id: `host-${event.seq}`, role: "notice", noticeKind: "continuation", content, timestamp: timestampOf(event) };
 }
 
+export function isMetaOnlyUserEvent(event: PersistedEvent): boolean {
+  if (event.type !== "user") return false;
+  const blocks = blocksOf((event.data as { content?: unknown }).content);
+  return textOf(blocks) === "" && imagesOf(blocks) === undefined;
+}
+
+/** Friendly separator notice for DSH-style `<goal_round>` synthetic `meta: true` user events. */
+export function goalRoundNoticeOf(event: PersistedEvent): UiMessage | null {
+  if (!isMetaOnlyUserEvent(event)) return null;
+  const blocks = blocksOf((event.data as { content?: unknown }).content);
+  const metaText = blocks
+    .flatMap((block) => (block.type === "text" && block.meta === true && typeof block.text === "string" ? [block.text] : []))
+    .join("\n");
+  if (!/<goal_round>/i.test(metaText)) return null;
+  const round = /Round:\s*(\d+\/\d+)/i.exec(metaText)?.[1];
+  const content = round !== undefined ? `目标自动推进（第 ${round} 轮）` : "目标自动推进";
+  return { id: `host-${event.seq}`, role: "notice", noticeKind: "continuation", content, timestamp: timestampOf(event) };
+}
+
+/** Milestone notice rendered in the transcript when a goal transitions to `complete` (`justCompleted: true`). */
+export function goalCompleteNoticeOf(event: PersistedEvent): UiMessage | null {
+  if (event.type !== "custom") return null;
+  const outer = event.data as { ns?: unknown; data?: unknown } | undefined;
+  if (outer?.ns !== "qianji-goal") return null;
+  const inner = outer.data as { justCompleted?: unknown; objective?: unknown; notes?: unknown } | undefined;
+  if (inner?.justCompleted !== true || typeof inner.objective !== "string") return null;
+  const objective = inner.objective.trim();
+  if (objective === "") return null;
+  const notes = typeof inner.notes === "string" ? inner.notes.trim() : "";
+  return {
+    id: `host-${event.seq}`,
+    role: "notice",
+    noticeKind: "goal-complete",
+    content: notes !== "" ? `${objective}\n${notes}` : objective,
+    timestamp: timestampOf(event),
+  };
+}
+
 function imagesOf(blocks: Block[]): ImageContent[] | undefined {
   const images = blocks.flatMap((block): ImageContent[] => (
     block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string"
@@ -147,6 +185,14 @@ export function historyToUi(events: readonly PersistedEvent[]): UiMessage[] {
     if (event.type === "user") {
       markAbortedToolUseAssistant(lastAssistant);
       lastAssistant = undefined;
+      if (isMetaOnlyUserEvent(event)) {
+        const notice = goalRoundNoticeOf(event);
+        if (notice !== null) {
+          turnStartedAt = notice.timestamp || turnStartedAt;
+          messages.push(notice);
+        }
+        continue;
+      }
       const message = userMessageOf(event);
       turnStartedAt = message.timestamp;
       messages.push(message);
@@ -182,9 +228,9 @@ export function historyToUi(events: readonly PersistedEvent[]): UiMessage[] {
       const summary = (event.data as { summary?: string }).summary ?? "";
       messages.push({ id: `host-${event.seq}`, role: "notice", noticeKind: "compaction", content: `Context compacted\n\n${summary}`, timestamp: timestampOf(event) });
     } else if (event.type === "custom") {
-      const notice = continuationNoticeOf(event);
+      const notice = continuationNoticeOf(event) ?? goalCompleteNoticeOf(event);
       if (notice !== null) {
-        turnStartedAt = notice.timestamp || turnStartedAt;
+        if (notice.noticeKind === "continuation") turnStartedAt = notice.timestamp || turnStartedAt;
         messages.push(notice);
       }
     }
@@ -317,8 +363,13 @@ export class TranscriptTranslator {
 
   event(event: PersistedEvent): TranscriptEvent[] {
     switch (event.type) {
-      case "user":
+      case "user": {
+        if (isMetaOnlyUserEvent(event)) {
+          const notice = goalRoundNoticeOf(event);
+          return notice === null ? [] : [{ type: "notice", message: notice }];
+        }
         return [{ type: "user", message: userMessageOf(event) }];
+      }
       case "assistant":
         this.toolCalls.clear();
         return [{ type: "assistant", message: assistantMessageOf(event) }];
@@ -329,7 +380,7 @@ export class TranscriptTranslator {
       case "tool-result":
         return [{ type: "tool-end", ...toolResultOf(event) }];
       case "custom": {
-        const notice = continuationNoticeOf(event);
+        const notice = continuationNoticeOf(event) ?? goalCompleteNoticeOf(event);
         return notice === null ? [] : [{ type: "notice", message: notice }];
       }
       default:

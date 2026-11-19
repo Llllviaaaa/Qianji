@@ -1,4 +1,5 @@
 import type { UiToolCall } from "../types";
+import { goalMilestoneCopy } from "./activeGoal";
 import { planFromToolCall, type TaskPlanSummary } from "./envSources";
 import { isWebSearchTool, webSearchQuery, webSearchSources, type WebSearchSource } from "./webAccess";
 
@@ -314,16 +315,6 @@ export function classifyToolKind(name: string): ToolKind {
   if (normalized === "update_plan" || normalized === "create_goal" || normalized === "update_goal") return "plan";
   if (normalized === "render_ui" || normalized === "update_ui") return "ui";
   return "other";
-}
-
-function goalMilestoneCopy(normalized: string, args: Record<string, unknown>): { title: string; detail?: string } | null {
-  if (normalized === "create_goal") return { title: "设定长程目标", detail: stringArg(args, ["objective", "goal"]) };
-  if (normalized !== "update_goal") return null;
-  const status = stringArg(args, ["status"])?.toLowerCase();
-  const notes = stringArg(args, ["notes"]);
-  if (status === "complete") return { title: "目标已达成", detail: notes };
-  if (status === "blocked") return { title: "目标受阻", detail: notes };
-  return { title: "更新目标进展", detail: notes ?? stringArg(args, ["status"]) };
 }
 
 function browserHeading(name: string, url?: string): string {

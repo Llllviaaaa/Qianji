@@ -34,7 +34,11 @@ export function sessionInfoFromHost(session: HostSessionInfo): SessionInfo {
 
 /** The user messages on the current branch, as fork points (`entryId` is the event's seq). */
 export function forkPointsOf(events: readonly PersistedEvent[]): ForkPoint[] {
-  return currentBranch(events).flatMap((event) => (event.type === "user" ? [{ entryId: String(event.seq), text: userMessageOf(event).content }] : []));
+  return currentBranch(events).flatMap((event) => {
+    if (event.type !== "user") return [];
+    const ui = userMessageOf(event);
+    return ui.content === "" && ui.images === undefined ? [] : [{ entryId: String(event.seq), text: ui.content }];
+  });
 }
 
 export interface HarnessTreeNode {
@@ -59,6 +63,10 @@ export function sessionTreeOf(events: readonly PersistedEvent[]): { tree: Harnes
       continue;
     }
     if (event.type !== "user" && event.type !== "assistant") continue;
+    if (event.type === "user") {
+      const ui = userMessageOf(event);
+      if (ui.content === "" && ui.images === undefined) continue;
+    }
     const parentSeq = path.at(-1);
     const node: HarnessTreeNode = {
       entry: {

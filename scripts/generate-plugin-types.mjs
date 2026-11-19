@@ -327,6 +327,8 @@ export const ListChecks: LucideIcon;
 export const LoaderCircle: LucideIcon;
 export const MessageSquare: LucideIcon;
 export const MessageSquareReply: LucideIcon;
+export const Pause: LucideIcon;
+export const Pencil: LucideIcon;
 export const Play: LucideIcon;
 export const Plug: LucideIcon;
 export const Plus: LucideIcon;
@@ -586,7 +588,7 @@ export interface UiMessage {
   entryId?: string;
   role: "user" | "assistant" | "terminal" | "notice";
   content: string;
-  noticeKind?: "compaction" | "branch";
+  noticeKind?: "compaction" | "branch" | "continuation" | "goal-complete";
   images?: ImageContent[];
   timestamp: number;
   thinking?: string;
