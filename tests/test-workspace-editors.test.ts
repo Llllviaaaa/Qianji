@@ -43,6 +43,7 @@ test("resolves workspace-relative paths", () => {
   assert.equal(resolveWorkspacePath("D:\\repo\\", "src/app.ts"), "D:\\repo\\src\\app.ts");
   assert.equal(resolveWorkspacePath("D:\\repo", "./src/app.ts"), "D:\\repo\\src\\app.ts");
   assert.equal(resolveWorkspacePath("D:\\repo", "C:\\other\\file.rs"), "C:\\other\\file.rs");
+  assert.equal(resolveWorkspacePath("D:\\repo", "D:/other/report.pdf"), "D:\\other\\report.pdf");
   assert.equal(resolveWorkspacePath("/home/me/repo", "src\\app.ts"), "/home/me/repo/src/app.ts");
   assert.equal(relativeWorkspacePath("D:\\repo", "D:\\Repo\\src\\app.ts"), "src/app.ts");
   assert.equal(relativeWorkspacePath("D:\\repo", "src/app.ts"), "src/app.ts");

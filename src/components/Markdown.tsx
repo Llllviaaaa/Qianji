@@ -1,16 +1,20 @@
 import { Children, createContext, isValidElement, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type MouseEvent, type ReactElement, type ReactNode } from "react";
-import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Copy, FileText } from "lucide-react";
 import { useAppStore } from "../store";
 import { showToast } from "../notifications";
+import { agent } from "../lib/agent";
 import { stripCodeReviewDirectives } from "../lib/codeReview";
 import { matchCodeBlockRenderer, useClientContributions } from "../lib/clientContributions";
+import { describeError } from "../lib/errors";
+import { FILE_SCHEME, INLINE_FILE_RE, fileHref, linkifyFilePaths, normalizeMarkdownUrl, parseFileHref } from "../lib/markdownFileLinks";
 import { isRichContentLanguage, parseRichContent } from "../lib/richContent";
 import { splitStreamingMarkdownBlocks } from "../lib/streamingMarkdown";
+import { resolveWorkspacePath } from "../lib/workspaceEditors";
 import { INTELLIGENT_UI_FENCE_LANGUAGE, parseIntelligentUiFence } from "../lib/intelligentUi";
 import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
@@ -24,60 +28,21 @@ import { useFileActions } from "./WorkspaceOpeners";
 export type OpenWorkspaceFile = (path: string, line?: number) => void;
 export const WorkspaceFileOpenContext = createContext<OpenWorkspaceFile | null>(null);
 
-const FILE_SCHEME = "pifile://";
-
-/**
- * File tokens come in two conservative shapes:
- * - path with ≥1 separator and any short extension (src/App.tsx, D:\repo\a.rs)
- * - bare filename with a whitelisted code/doc extension (README.md, prd.md) —
- *   the whitelist keeps domains (pi.dev) and version numbers (1.30.0) unlinked.
- */
-const BARE_FILE_EXTENSIONS =
-  "tsx|ts|jsx|js|mjs|cjs|rs|py|go|java|rb|php|md|markdown|json|jsonc|css|scss|less|html|htm|svg|toml|yaml|yml|txt|xml|sql|ps1|bat|ini|cfg|conf|lock|csv|svelte|vue";
-const PATH_FILE_TOKEN = String.raw`(?:[A-Za-z]:[\\/])?(?:\.{1,2}[\\/])?[\w.-]+(?:[\\/][\w.-]+)+\.[A-Za-z0-9]{1,6}`;
-const BARE_FILE_TOKEN = String.raw`[\w-]+(?:\.[\w-]+)*\.(?:${BARE_FILE_EXTENSIONS})(?![\w.-])`;
-const INLINE_FILE_RE = new RegExp(`^(${PATH_FILE_TOKEN}|${BARE_FILE_TOKEN})(?::(\\d+))?$`);
-const TEXT_FILE_RE = new RegExp(
-  String.raw`(?<![\w\u0060[(\\/.-])(${PATH_FILE_TOKEN}|${BARE_FILE_TOKEN})(?::(\d+)|\s?[（(]\s*line\s+(\d+)\s*[)）])?`,
-  "g",
-);
-
-function fileHref(path: string, line?: string): string {
-  return `${FILE_SCHEME}${encodeURIComponent(path)}${line ? `#L${line}` : ""}`;
-}
-
-/** Turn bare file-path tokens in prose (not inside code spans/fences) into pifile:// links. */
-function linkifyFilePaths(markdown: string): string {
-  const parts = markdown.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*`)/);
-  return parts
-    .map((part, index) => {
-      if (index % 2 === 1) return part;
-      return part.replace(TEXT_FILE_RE, (full, path: string, colonLine?: string, parenLine?: string) =>
-        `[${full}](${fileHref(path, colonLine || parenLine)})`);
-    })
-    .join("");
-}
-
 function openFileRef(event: MouseEvent, href: string) {
   event.preventDefault();
-  const path = decodeURIComponent(href.slice(FILE_SCHEME.length).split("#")[0]);
+  const { path } = parseFileHref(href);
   const cwd = useAppStore.getState().cwd;
-  const sep = cwd.includes("\\") ? "\\" : "/";
-  const normalizedChild = sep === "\\" ? path.replace(/\//g, "\\") : path.replace(/\\/g, "/");
-  const absolute = /^(?:[A-Za-z]:[\\/]|[\\/])/.test(path)
-    ? path
-    : cwd
-      ? `${cwd.replace(/[\\/]+$/, "")}${sep}${normalizedChild}`
-      : path;
-  const fallback = () => {
+  const absolute = resolveWorkspacePath(cwd, path);
+  const fallback = (error?: unknown) => {
     void navigator.clipboard.writeText(absolute).catch(() => undefined);
-    showToast(`无法直接打开，已复制路径：${absolute}`, "info");
+    const reason = error !== undefined ? `（${describeError(error)}）` : "";
+    showToast(`无法直接打开${reason}，已复制路径：${absolute}`, "info");
   };
-  try {
-    openPath(absolute).catch(fallback);
-  } catch {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
     fallback();
+    return;
   }
+  agent.openFileInDefaultApp(absolute).catch((error) => fallback(error));
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -266,12 +231,6 @@ function richContentFenceCount(markdown: string): number {
   return allRichOpeners === richStarts && richStarts === richCompleted ? richCompleted : -1;
 }
 
-function parseFileHref(href: string): { path: string; line?: number } {
-  const [encoded, hash] = href.slice(FILE_SCHEME.length).split("#");
-  const line = hash?.startsWith("L") ? Number(hash.slice(1)) : undefined;
-  return { path: decodeURIComponent(encoded), line: line !== undefined && Number.isFinite(line) ? line : undefined };
-}
-
 function FileRef({ href, children }: { href: string; children?: ReactNode }) {
   const openInApp = useContext(WorkspaceFileOpenContext);
   const fileActions = useFileActions();
@@ -280,7 +239,7 @@ function FileRef({ href, children }: { href: string; children?: ReactNode }) {
     <a
       className="file-ref"
       href={href}
-      title={editor ? `单击预览 · Ctrl+单击在 ${editor.name} 中打开 · 右键查看更多` : undefined}
+      title={editor ? `单击预览 · Ctrl+单击在 ${editor.name} 中打开 · 右键查看更多` : "单击预览 · 右键查看更多"}
       onContextMenu={(event) => {
         if (!fileActions) return;
         const { path, line } = parseFileHref(href);
@@ -310,8 +269,7 @@ function FileRef({ href, children }: { href: string; children?: ReactNode }) {
 
 const REMARK_PLUGINS: PluggableList = [remarkGfm];
 const REHYPE_PLUGINS: PluggableList = [[rehypeHighlight, { detect: false, ignoreMissing: true }]];
-const markdownUrlTransform = (url: string) =>
-  url.startsWith(FILE_SCHEME) ? url : defaultUrlTransform(url);
+const markdownUrlTransform = normalizeMarkdownUrl;
 
 interface MarkdownProps {
   content: string;
@@ -343,7 +301,9 @@ const MarkdownBlockChunk = memo(function MarkdownBlockChunk({
             onClick={(event) => {
               if (!href) return;
               event.preventDefault();
-              void openUrl(href);
+              void openUrl(href).catch((error) => {
+                showToast(`无法打开链接：${describeError(error)}`, "error");
+              });
             }}
           >
             {children}

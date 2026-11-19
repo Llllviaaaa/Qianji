@@ -169,6 +169,7 @@ export const agent = {
     invoke<void>("open_workspace_in_editor", { path, editorId }),
   openFileInEditor: (path: string, editorId: WorkspaceEditorInfo["id"], options: { line?: number; column?: number; workspace?: string } = {}) =>
     invoke<void>("open_file_in_editor", { path, editorId, line: options.line ?? null, column: options.column ?? null, workspace: options.workspace ?? null }),
+  openFileInDefaultApp: (path: string) => invoke<void>("open_file_in_default_app", { path }),
   revealPathInFileManager: (path: string) => invoke<void>("reveal_path_in_file_manager", { path }),
   listTerminalApps: () => invoke<TerminalAppInfo[]>("list_terminal_apps"),
   openWorkspaceInTerminalApp: (path: string, appId: string) =>

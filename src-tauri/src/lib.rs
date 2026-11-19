@@ -329,6 +329,7 @@ pub fn run() {
             list_workspace_editors,
             open_workspace_in_editor,
             open_file_in_editor,
+            open_file_in_default_app,
             reveal_path_in_file_manager,
             list_terminal_apps,
             open_workspace_in_terminal_app,
