@@ -66,8 +66,25 @@ export function ProviderAccordionBody({
     <div className="models-acc-drawer">
       {check && check.status !== "checking" && (
         <div className={`models-check-banner ${check.status}`}>
-          {check.status === "ok" ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
-          <span>{check.message}</span>
+          <div className="models-check-banner-head">
+            {check.status === "ok" ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
+            <span>{check.message}</span>
+            {check.status === "error" && check.error?.status !== undefined && (
+              <code className="models-check-pill">HTTP {check.error.status}</code>
+            )}
+            {check.status === "error" && (check.error?.code ?? check.error?.errorType) && (
+              <code className="models-check-pill">{check.error?.code ?? check.error?.errorType}</code>
+            )}
+          </div>
+          {check.status === "error" && check.error?.requestId && (
+            <div className="models-check-meta">Request ID: <code>{check.error.requestId}</code></div>
+          )}
+          {check.status === "error" && check.error?.rawBody && check.error.rawBody.trim() !== check.message.trim() && (
+            <details className="models-check-raw-details">
+              <summary>查看提供商原始返回</summary>
+              <pre className="models-check-raw"><code>{check.error.rawBody}</code></pre>
+            </details>
+          )}
         </div>
       )}
 

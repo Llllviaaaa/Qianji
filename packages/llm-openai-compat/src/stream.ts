@@ -3,7 +3,7 @@
  * including streaming `<think>...</think>` extraction, structured `delta.content`
  * parts, `choice.message` fallback, and multi-chunk `tool_calls` assembly.
  */
-import { LlmError, type FinishReason, type StreamChunk } from "@qianji/llm";
+import { errorFromPayload, LlmError, type FinishReason, type StreamChunk } from "@qianji/llm";
 import { InlineThinkParser, type ThinkSegment } from "./inline-think.ts";
 
 const FINISH_REASONS: Record<string, FinishReason | "retryable-error"> = {
@@ -177,10 +177,20 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
     try {
       chunk = JSON.parse(event.data) as WireChunk;
     } catch {
-      throw new LlmError({ kind: "unknown", message: `${providerId} sent malformed stream data`, retryable: false });
+      throw new LlmError({
+        kind: "unknown",
+        provider: providerId,
+        message: `${providerId} sent malformed stream data`,
+        retryable: false,
+        rawBody: event.data.trim().slice(0, 2_000) || undefined,
+      });
     }
     if (chunk.error !== undefined) {
-      throw new LlmError({ kind: "server", message: `${providerId}: ${chunk.error.message ?? "stream error"}`, retryable: true });
+      const parsed = errorFromPayload(providerId, event.data);
+      if (parsed.kind === "unknown") {
+        throw new LlmError({ ...parsed.toInfo(), kind: "server", retryable: true });
+      }
+      throw parsed;
     }
     for (const choice of chunk.choices ?? []) {
       const useMessageFallback =

@@ -20,7 +20,7 @@ import {
   type Agents,
   type RunOutcome,
 } from "@qianji/agent";
-import { BlockAssembler, type LlmRequest, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
+import { BlockAssembler, toLlmError, type LlmRequest, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
 import { CONTINUATION_NAMESPACE, hasVisibleProse, type EventOf, type ModelRef, type Session } from "@qianji/session";
 import "@qianji/system-prompt";
 import { ACTIVATE_TOOLS_NAME, textOutput, type ToolEnv, type ToolOutput } from "@qianji/tools";
@@ -210,6 +210,15 @@ export class AgentLoop extends Service implements Agents {
       outcome = await this.loop(session, run);
     } catch (error) {
       this.ctx.logger("agent").error("run of %s failed: %s", session.id, error);
+      const errorInfo = toLlmError(error, run.controller.signal).toInfo();
+      const model = session.state().model ?? { provider: "unknown", model: "unknown" };
+      session.append("assistant", {
+        content: [],
+        model,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        stop: "error",
+        error: errorInfo,
+      });
     }
     try {
       await session.flush();

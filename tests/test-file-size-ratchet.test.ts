@@ -36,7 +36,6 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "src/store/runtime.ts": 625,
   "src/stores/workbenchStore.ts": 581,
   "src/components/ModelPicker.tsx": 522,
-  "src/types.ts": 501,
 };
 
 function countPhysicalLines(absolutePath: string): number {

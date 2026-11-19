@@ -12,7 +12,9 @@ import type {
   ModelProviderModel,
   ModelThinkingLevel,
 } from "../types";
+import { HarnessRpcError } from "./harnessClient";
 import { harnessRuntimes, isRpcMethodNotFound } from "./harnessRuntime";
+import { parseUiLlmError } from "./llmError";
 
 type HostApi = "openai-compat" | "openai-responses" | "anthropic" | "gemini";
 
@@ -196,7 +198,12 @@ export const harnessProviders = {
       });
       return { ok: true, message: `连接正常，服务端响应 ${models.length} 个模型` };
     } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      const parsed = error instanceof HarnessRpcError ? parseUiLlmError(error.data, id) : undefined;
+      return {
+        ok: false,
+        message: parsed?.message ?? (error instanceof Error ? error.message : String(error)),
+        ...(parsed === undefined ? {} : { error: parsed }),
+      };
     }
   },
 };

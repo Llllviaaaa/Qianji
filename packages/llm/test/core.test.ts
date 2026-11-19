@@ -215,4 +215,86 @@ describe("errors", () => {
       });
     }
   });
+
+  it("extracts Codex/DSH diagnostics, marks quota 429 non-retryable, redacts secrets, and catches HTTP 200 JSON errors", async () => {
+    const syntheticKey = ["sk", "fake", "1234567890abcdef"].join("-");
+    const quotaResp = new Response(
+      JSON.stringify({
+        error: {
+          message: `You exceeded your current quota (key ${syntheticKey})`,
+          type: "insufficient_quota",
+          code: "credit_balance_exhausted",
+        },
+      }),
+      { status: 429, headers: { "x-request-id": "req_codex_99", "content-type": "application/json" } },
+    );
+    const quotaErr = await errorFromResponse(quotaResp, "openai");
+    expect(quotaErr.kind).toBe("rate-limit");
+    expect(quotaErr.status).toBe(429);
+    expect(quotaErr.retryable).toBe(false);
+    expect(quotaErr.code).toBe("credit_balance_exhausted");
+    expect(quotaErr.errorType).toBe("insufficient_quota");
+    expect(quotaErr.requestId).toBe("req_codex_99");
+    expect(quotaErr.message).not.toContain(syntheticKey);
+    expect(quotaErr.rawBody).toContain("credit_balance_exhausted");
+    expect(quotaErr.rawBody).not.toContain(syntheticKey);
+
+    // HTTP 200 relay returning JSON error envelope on SSE endpoint
+    const [{ createServer }, { postSse, getJson }] = await Promise.all([
+      import("node:http"),
+      import("../src/http.ts"),
+    ]);
+    const server = createServer((req, res) => {
+      if (req.url === "/json-200") {
+        res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_relay_200" });
+        res.end(JSON.stringify({ error: { message: "No available upstream channel", code: "503", type: "server_error" } }));
+        return;
+      }
+      if (req.url === "/sse-raw-json") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(JSON.stringify({ msg: "余额不足，请充值", code: 429 }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Invalid token", type: "authentication_error" } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    try {
+      const ac = new AbortController();
+      await expect(async () => {
+        for await (const _ev of postSse(`${baseUrl}/json-200`, {}, {}, ac.signal, "relay")) {
+          // should throw before yielding
+        }
+      }).rejects.toMatchObject({
+        kind: "overloaded",
+        status: 503,
+        requestId: "req_relay_200",
+        message: "relay: No available upstream channel",
+      });
+
+      await expect(async () => {
+        for await (const _ev of postSse(`${baseUrl}/sse-raw-json`, {}, {}, ac.signal, "relay")) {
+          // should throw before yielding
+        }
+      }).rejects.toMatchObject({
+        kind: "rate-limit",
+        retryable: false,
+        message: "relay: 余额不足，请充值",
+      });
+
+      await expect(getJson(`${baseUrl}/models`, {}, "relay", ac.signal)).rejects.toMatchObject({
+        kind: "auth",
+        retryable: false,
+        message: "relay: Invalid token",
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      });
+    }
+  });
 });

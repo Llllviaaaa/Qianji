@@ -1,3 +1,6 @@
+import type { UiLlmError } from "./lib/llmError";
+export type { UiLlmError };
+
 export interface ImageContent {
   type: "image";
   data: string;
@@ -20,13 +23,7 @@ export interface Usage {
 }
 
 export type ModelThinkingLevel =
-  | "off" | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "auto"
+  | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "auto"
   | (string & {});
 
 export interface ModelInfo {
@@ -88,6 +85,7 @@ export interface ModelProviderInput {
 export interface ModelProviderCheckResult {
   ok: boolean;
   message: string;
+  error?: UiLlmError;
 }
 
 export interface SessionStats {
@@ -470,22 +468,19 @@ export interface ComputerElementState {
 
 export interface UiMessage {
   id: string;
-  /** The user message's seq in its Host session log, which rewind and fork take. */
   entryId?: string;
   role: "user" | "assistant" | "terminal" | "notice";
   content: string;
-  /** Distinguishes compaction/branch/continuation notices from generic system notes. */
   noticeKind?: "compaction" | "branch" | "continuation" | "goal-complete";
   images?: ImageContent[];
   thinking?: string;
-  /** Ordered thinking / narration / tool rows for the compact turn fold. */
   workSteps?: WorkStep[];
   model?: string;
   usage?: Usage;
   isStreaming?: boolean;
   toolCalls?: UiToolCall[];
   isError?: boolean;
-  /** The user stopped this turn; what it wrote so far is kept, and it is not an error. */
+  error?: UiLlmError;
   isAborted?: boolean;
   stopReason?: string;
   durationMs?: number;

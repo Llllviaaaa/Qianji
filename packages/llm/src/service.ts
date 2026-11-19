@@ -383,9 +383,10 @@ export class LlmService extends Service {
       );
     }
     this.ctx.logger("llm").info(
-      "%s/%s %s in %d out %d cache %d/%d %dms%s",
+      "%s/%s %s in %d out %d cache %d/%d %dms%s%s",
       request.provider, request.model, final.reason, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens,
       Date.now() - started, attempts > 1 ? ` after ${attempts} attempts` : "",
+      final.error !== undefined ? ` (${final.error.message})` : "",
     );
   }
 }

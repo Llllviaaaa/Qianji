@@ -136,10 +136,13 @@ export function mergeAssistantTurn(messages: UiMessage[]): UiMessage {
   }
   const normalized = normalizedMessages(messages);
   const last = normalized[normalized.length - 1];
+  const lastErrorMessage = [...normalized].reverse().find((message) => message.isError === true || message.error !== undefined);
+  const turnError = lastErrorMessage?.error;
   const finalIndex = findFinalContentIndex(normalized);
   const preserveLastError = finalIndex < 0 && last?.isError === true && last.content.trim() !== "";
   const effectiveFinalIndex = preserveLastError ? normalized.length - 1 : finalIndex;
-  const content = effectiveFinalIndex >= 0 ? normalized[effectiveFinalIndex].content : "";
+  const rawFinalContent = effectiveFinalIndex >= 0 ? normalized[effectiveFinalIndex].content : "";
+  const content = rawFinalContent || (last?.isError === true ? (turnError?.message ?? lastErrorMessage?.content ?? "") : "");
   const steps = workStepsFromMessages(normalized, content, effectiveFinalIndex);
   const thinking = steps.filter((step) => step.kind === "thinking").map((step) => step.text).join("\n\n") || undefined;
   const merged: UiMessage = {
@@ -151,6 +154,7 @@ export function mergeAssistantTurn(messages: UiMessage[]): UiMessage {
     toolCalls: mergeToolCalls(normalized),
     isStreaming: normalized.some((message) => message.isStreaming),
     isError: normalized.some((message) => message.isError),
+    ...(turnError === undefined ? {} : { error: turnError }),
     isAborted: normalized.some((message) => message.isAborted),
     stopReason: last.stopReason,
     durationMs: turnDurationMs(normalized),
