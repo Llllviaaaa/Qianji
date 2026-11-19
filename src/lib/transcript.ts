@@ -4,6 +4,7 @@
  */
 import type { LiveDelta, PersistedEvent } from "@qianji/protocol";
 import type { ExtensionUIRequest, ImageContent, UiMessage, UiToolCall, Usage } from "../types";
+import { formatRetryStatusText, parseUiLlmError } from "./llmError";
 import { INTERRUPTED_TURN, interruptTurn, markAbortedToolUseAssistant, settleStoppedTurn } from "./transcriptSettle";
 
 export { INTERRUPTED_TURN, interruptTurn, settleStoppedTurn };
@@ -126,20 +127,22 @@ export function userMessageOf(event: PersistedEvent): UiMessage {
 
 /** A finished model reply, with the tool calls it asked for (not run yet). */
 export function assistantMessageOf(event: PersistedEvent, durationMs?: number): UiMessage {
-  const data = event.data as { content?: unknown; model?: { model?: string }; usage?: unknown; stop?: string; error?: { message?: string } };
+  const data = event.data as { content?: unknown; model?: { provider?: string; model?: string }; usage?: unknown; stop?: string; error?: unknown };
   const blocks = blocksOf(data.content);
   const thinking = blocks.flatMap((block) => (block.type === "thinking" && typeof block.text === "string" ? [block.text] : [])).join("");
   const timestamp = timestampOf(event);
+  const parsedError = parseUiLlmError(data.error, data.model?.provider);
   const toolCalls = blocks.flatMap((block): UiToolCall[] => (
     block.type === "tool-call" && typeof block.id === "string" && typeof block.name === "string"
       ? [{ id: block.id, name: block.name, args: (block.arguments ?? {}) as Record<string, unknown>, running: false, startedAt: timestamp }]
       : []
   ));
   return {
-    id: `host-${event.seq}`, role: "assistant", content: textOf(blocks) || data.error?.message || "",
+    id: `host-${event.seq}`, role: "assistant", content: textOf(blocks) || parsedError?.message || "",
     thinking: thinking || undefined, model: data.model?.model, usage: usageOf(data.usage),
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined, isStreaming: false,
-    isError: data.stop === "error", isAborted: data.stop === "aborted",
+    isError: data.stop === "error", ...(parsedError === undefined ? {} : { error: parsedError }),
+    isAborted: data.stop === "aborted",
     stopReason: typeof data.stop === "string" ? data.stop : undefined,
     durationMs, timestamp,
   };
@@ -439,13 +442,7 @@ export class TranscriptTranslator {
       }
       case "retry": {
         this.toolCalls.clear();
-        const attempt = typeof chunk.attempt === "number" ? chunk.attempt : 1;
-        const maxAttempts = typeof chunk.maxAttempts === "number" ? chunk.maxAttempts : attempt + 1;
-        const totalRetries = Math.max(1, maxAttempts - 1);
-        const delayMs = typeof chunk.delayMs === "number" ? chunk.delayMs : 0;
-        const waitHint = delayMs >= 1_500 ? `（${Math.round(delayMs / 1000)}s 后）` : "";
-        const prefix = typeof chunk.effort === "string" ? "长流中断，已自动下调思考强度重试" : "连接波动，正在重试";
-        return [{ type: "retry-status", text: `${prefix} ${attempt}/${totalRetries}${waitHint}…` }];
+        return [{ type: "retry-status", text: formatRetryStatusText(chunk) }];
       }
       case "finish": {
         if (this.toolCalls.size === 0) return [];

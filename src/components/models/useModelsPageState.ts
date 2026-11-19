@@ -207,6 +207,7 @@ export function useModelsPageState(form: AppSettings, update: Update) {
       providerId: provider.id,
       status: result.ok ? "ok" : "error",
       message: result.message,
+      ...(result.error === undefined ? {} : { error: result.error }),
     });
   };
 

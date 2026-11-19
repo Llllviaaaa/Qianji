@@ -12,10 +12,12 @@ import {
   Save,
   X,
 } from "lucide-react";
-import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import { SlotEntryHost } from "../common/ErrorBoundary";
-import { Markdown } from "../Markdown";
+import { useFileActions } from "../WorkspaceOpeners";
+import { agent } from "../../lib/agent";
 import { matchFileViewer, useClientContributions } from "../../lib/clientContributions";
+import { describeError } from "../../lib/errors";
+import { resolveWorkspacePath } from "../../lib/workspaceEditors";
 import { useAppStore } from "../../store";
 import {
   matchesWorkbenchFileCwd,
@@ -25,8 +27,8 @@ import {
   useWorkbenchStore,
   type OpenWorkbenchFile,
   type WorkbenchFileViewMode,
-  type WorkbenchPreviewKind,
 } from "../../stores/workbenchStore";
+import { DynamicDocumentPreview } from "./DynamicDocumentPreview";
 
 const LazyCodeMirrorSurface = lazy(() => import("./CodeMirrorSurface"));
 
@@ -34,119 +36,13 @@ export interface CodeEditorTabProps {
   cwd: string;
 }
 
-function escapeHtmlAttr(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function injectBaseTag(rawHtml: string, baseUrl: string | null): string {
-  if (!baseUrl || /<base\b/i.test(rawHtml)) return rawHtml;
-  const baseTag = `<base href="${escapeHtmlAttr(baseUrl)}" />`;
-  if (/<head(\s[^>]*)?>/i.test(rawHtml)) {
-    return rawHtml.replace(/<head(\s[^>]*)?>/i, (match) => `${match}\n${baseTag}`);
-  }
-  if (/<html(\s[^>]*)?>/i.test(rawHtml)) {
-    return rawHtml.replace(/<html(\s[^>]*)?>/i, (match) => `${match}\n<head>${baseTag}</head>`);
-  }
-  return `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8" />\n${baseTag}\n</head>\n<body>\n${rawHtml}\n</body>\n</html>`;
-}
-
-function buildSvgStageHtml(svgContent: string, baseUrl: string | null): string {
-  const baseTag = baseUrl ? `<base href="${escapeHtmlAttr(baseUrl)}" />` : "";
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" />${baseTag}<style>
-  html, body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; box-sizing: border-box; background: transparent; }
-  svg { max-width: 100%; height: auto; }
-</style></head><body>${svgContent}</body></html>`;
-}
-
-function appendCacheVersion(url: string, token: string): string {
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}_v=${encodeURIComponent(token)}`;
-}
-
-interface DynamicDocumentPreviewProps {
-  file: OpenWorkbenchFile;
-  kind: Exclude<WorkbenchPreviewKind, null>;
-  previewHttpUrl: string | null;
-  reloadNonce: number;
-}
-
-function DynamicDocumentPreview({
-  file,
-  kind,
-  previewHttpUrl,
-  reloadNonce,
-}: DynamicDocumentPreviewProps) {
-  const isDirty = file.content !== file.savedContent;
-  const [debouncedContent, setDebouncedContent] = useState(file.content);
-
-  useSyncOnChange([file.cwd, file.path], () => {
-    setDebouncedContent(file.content);
-  });
-
-  useEffect(() => {
-    if (!isDirty) return;
-    const timer = window.setTimeout(() => {
-      setDebouncedContent(file.content);
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [file.content, file.cwd, file.path, isDirty]);
-
-  const renderedContent = isDirty ? debouncedContent : file.content;
-
-  const liveDataUrl = useMemo(() => {
-    if (kind === "markdown") return "";
-    const htmlDoc = kind === "svg"
-      ? buildSvgStageHtml(renderedContent, previewHttpUrl)
-      : injectBaseTag(renderedContent, previewHttpUrl);
-    return `data:text/html;charset=utf-8,${encodeURIComponent(htmlDoc)}`;
-  }, [kind, previewHttpUrl, renderedContent]);
-
-  if (kind === "markdown") {
-    return (
-      <div className="pid-wb-md-preview dshc-md" data-workbench-preview="markdown">
-        <Markdown content={file.content} />
-      </div>
-    );
-  }
-
-  if (kind === "svg" && file.isBinary && file.data) {
-    return (
-      <div className="pid-wb-image-preview" data-workbench-preview="svg-binary">
-        <img src={`data:image/svg+xml;base64,${file.data}`} alt={file.path} />
-      </div>
-    );
-  }
-
-  const useLoopbackServer = !isDirty
-    && previewHttpUrl !== null
-    && (kind === "html" || (kind === "svg" && file.content.trim() === ""));
-
-  const frameSrc = useLoopbackServer
-    ? appendCacheVersion(previewHttpUrl, `${reloadNonce}-${file.savedContent.length}`)
-    : liveDataUrl;
-
-  const sandboxFlags = useLoopbackServer
-    ? "allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-    : "allow-scripts allow-forms allow-popups allow-modals";
-
-  return (
-    <div className="pid-wb-preview-stage" data-workbench-preview={kind}>
-      <iframe
-        key={`${file.cwd ?? ""}::${file.path}:${useLoopbackServer ? "http" : "data"}:${reloadNonce}`}
-        className="pid-wb-iframe"
-        src={frameSrc}
-        title={`动态预览 ${file.path}`}
-        sandbox={sandboxFlags}
-      />
-    </div>
-  );
-}
-
 export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
   const openFiles = useWorkbenchStore((state) => state.openFiles);
   const preferredPath = useWorkbenchStore((state) => resolveWorkspaceActiveFilePath(state, cwd));
   const sessionFile = useAppStore((state) => state.sessionFile);
   const contributions = useClientContributions();
+  const fileActions = useFileActions();
+  const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
   const workspaceFiles = useMemo(
     () => openFiles.filter((item) => matchesWorkbenchFileCwd(item.cwd, cwd)),
@@ -158,8 +54,10 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
   const [previewNonce, setPreviewNonce] = useState(0);
 
   const previewKind = activeFile ? previewKindForPath(activeFile.path) : null;
+  const isPdfFile = activeFile?.mimeType === "application/pdf" || /\.pdf$/i.test(activeFile?.path ?? "");
   const effectiveFileCwd = activeFile?.cwd || cwd;
-  const activePreviewKey = activeFile && effectiveFileCwd && (previewKind === "html" || previewKind === "svg")
+  const needsLoopbackUrl = previewKind === "html" || previewKind === "svg" || isPdfFile;
+  const activePreviewKey = activeFile && effectiveFileCwd && needsLoopbackUrl
     ? `${effectiveFileCwd}::${activeFile.path}`
     : null;
   const previewHttpUrl = activePreviewKey && previewUrlEntry?.key === activePreviewKey
@@ -176,6 +74,32 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
       cancelled = true;
     };
   }, [activeFile, activePreviewKey, effectiveFileCwd]);
+
+  const handleOpenExternalDefault = useCallback(() => {
+    if (!activeFile) return;
+    if (fileActions) {
+      fileActions.openWithDefaultApp(activeFile.path);
+      return;
+    }
+    if (!inTauri) return;
+    const absolute = resolveWorkspacePath(effectiveFileCwd, activeFile.path);
+    void agent.openFileInDefaultApp(absolute).catch((error) => {
+      useAppStore.getState().showToast(`无法在外部默认应用中打开：${describeError(error)}`, "error");
+    });
+  }, [activeFile, effectiveFileCwd, fileActions, inTauri]);
+
+  const handleRevealInExplorer = useCallback(() => {
+    if (!activeFile) return;
+    if (fileActions) {
+      fileActions.reveal(activeFile.path);
+      return;
+    }
+    if (!inTauri) return;
+    const absolute = resolveWorkspacePath(effectiveFileCwd, activeFile.path);
+    void agent.revealPathInFileManager(absolute).catch((error) => {
+      useAppStore.getState().showToast(`无法在资源管理器中显示：${describeError(error)}`, "error");
+    });
+  }, [activeFile, effectiveFileCwd, fileActions, inTauri]);
 
   const handleSave = useCallback(async () => {
     if (!activeFile || !effectiveFileCwd) return;
@@ -239,6 +163,8 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
     : activeFile.isBinary
       ? "preview"
       : (activeFile.viewMode ?? defaultMode);
+  const showBrowserExternal = effectiveMode !== "code" && (previewKind === "html" || previewKind === "svg");
+  const pdfSrc = previewHttpUrl ?? (activeFile.data ? `data:application/pdf;base64,${activeFile.data}` : null);
 
   const setMode = (mode: WorkbenchFileViewMode) => {
     useWorkbenchStore.getState().setFileViewMode(activeFile.path, mode, effectiveFileCwd);
@@ -331,7 +257,7 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
             </div>
           )}
 
-          {effectiveMode !== "code" && (previewKind === "html" || previewKind === "svg") && (
+          {showBrowserExternal ? (
             <>
               <button
                 type="button"
@@ -345,17 +271,42 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
               <button
                 type="button"
                 className="pid-wb-icon-btn"
-                disabled={!previewHttpUrl}
-                title="在外部浏览器中打开"
-                aria-label="在外部浏览器中打开"
+                title={previewHttpUrl ? "在外部浏览器中打开" : "使用系统默认应用打开"}
+                aria-label={previewHttpUrl ? "在外部浏览器中打开" : "使用系统默认应用打开"}
                 onClick={() => {
-                  if (previewHttpUrl) void openUrl(previewHttpUrl);
+                  if (previewHttpUrl) {
+                    void openUrl(previewHttpUrl).catch((error) => {
+                      useAppStore.getState().showToast(`打开外部浏览器失败：${describeError(error)}`, "error");
+                    });
+                  } else {
+                    handleOpenExternalDefault();
+                  }
                 }}
               >
                 <ExternalLink size={13} />
               </button>
             </>
+          ) : (
+            <button
+              type="button"
+              className="pid-wb-icon-btn"
+              title="使用系统默认应用打开"
+              aria-label="使用系统默认应用打开"
+              onClick={handleOpenExternalDefault}
+            >
+              <ExternalLink size={13} />
+            </button>
           )}
+
+          <button
+            type="button"
+            className="pid-wb-icon-btn"
+            title="在文件资源管理器中显示"
+            aria-label="在文件资源管理器中显示"
+            onClick={handleRevealInExplorer}
+          >
+            <FolderOpen size={13} />
+          </button>
 
           {activeFile.truncated && (
             <span className="pid-wb-badge warn" title="大文件已截断为只读预览">只读（大文件截断）</span>
@@ -387,7 +338,19 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
         {activeFile.loading ? (
           <div className="pid-wb-empty">正在读取 {activeFile.path}…</div>
         ) : activeFile.error ? (
-          <div className="pid-wb-empty error">{activeFile.error}</div>
+          <div className="pid-wb-empty error">
+            <p>{activeFile.error}</p>
+            <div className="pid-wb-subbar-actions">
+              <button type="button" className="pid-wb-btn" onClick={handleOpenExternalDefault}>
+                <ExternalLink size={13} />
+                <span>使用系统默认应用打开</span>
+              </button>
+              <button type="button" className="pid-wb-btn" onClick={handleRevealInExplorer}>
+                <FolderOpen size={13} />
+                <span>在文件资源管理器中显示</span>
+              </button>
+            </div>
+          </div>
         ) : canRenderPreview && effectiveMode === "preview" && customViewer !== undefined ? (
           <SlotEntryHost
             entry={customViewer}
@@ -455,8 +418,29 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
                 alt={activeFile.path}
               />
             </div>
+          ) : isPdfFile && pdfSrc ? (
+            <div className="pid-wb-preview-stage" data-workbench-preview="pdf">
+              <iframe
+                key={`${activeFile.cwd ?? ""}::${activeFile.path}:pdf:${previewNonce}`}
+                className="pid-wb-iframe"
+                src={pdfSrc}
+                title={`PDF 预览 ${activeFile.path}`}
+              />
+            </div>
           ) : (
-            <div className="pid-wb-empty">二进制文件无法直接作为文本编辑（{(activeFile.size / 1024).toFixed(1)} KB）</div>
+            <div className="pid-wb-empty">
+              <p>二进制文件无法直接作为文本编辑（{(activeFile.size / 1024).toFixed(1)} KB）</p>
+              <div className="pid-wb-subbar-actions">
+                <button type="button" className="pid-wb-btn primary" onClick={handleOpenExternalDefault}>
+                  <ExternalLink size={13} />
+                  <span>使用系统默认应用打开</span>
+                </button>
+                <button type="button" className="pid-wb-btn" onClick={handleRevealInExplorer}>
+                  <FolderOpen size={13} />
+                  <span>在文件资源管理器中显示</span>
+                </button>
+              </div>
+            </div>
           )
         ) : (
           <Suspense fallback={<div className="pid-wb-empty">正在加载编辑器…</div>}>

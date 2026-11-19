@@ -34,6 +34,7 @@ import {
   type ProcessSegment,
 } from "./message/messageHelpers";
 import { ProcessGroup, ReasoningRow, RunningRow } from "./message/MessageProcessBlocks";
+import { TurnErrorCard } from "./message/TurnErrorCard";
 import { UserMessageRow } from "./message/UserMessageRow";
 import { ToolCall } from "./ToolCall";
 
@@ -291,21 +292,14 @@ export const Message = memo(function Message({
           })}
         </div>
       )}
-      {hasContent && (message.isError ? (
-        <div className="dshc-turn-error" role="status">
-          <span className="dshc-state-dot" data-state="error" aria-hidden="true" />
-          <div className="dshc-turn-error-copy">
-            <span className="dshc-turn-error-title">本轮出错</span>
-            <span className="dshc-turn-error-message">{assistantContent}</span>
-          </div>
-        </div>
-      ) : (
+      {hasContent && (!message.isError || (message.error !== undefined && assistantContent.trim() !== message.error.message.trim())) && (
         <div className="dshc-answer" data-streaming={working || undefined}>
           <div className="dshc-md dshc-md-prose">
             <Markdown content={assistantContent} allowRichContent={allowRichContent && !working} isStreaming={working} />
           </div>
         </div>
-      ))}
+      )}
+      {message.isError && <TurnErrorCard message={message} fallbackContent={assistantContent} />}
       {working && (
         <RunningRow
           label={liveLabel}

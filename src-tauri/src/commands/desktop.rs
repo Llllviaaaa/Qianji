@@ -464,9 +464,47 @@ fn launch_editor(
         .map_err(|err| AppError::Process(format!("failed to open {}: {err}", editor.name)))
 }
 
+const BLOCKED_DEFAULT_OPEN_EXTENSIONS: &[&str] = &[
+    "app", "bash", "bat", "cmd", "com", "command", "cpl", "dll", "exe", "hta", "inf", "jar", "js",
+    "jse", "lnk", "msc", "msi", "msp", "msu", "pif", "ps1", "psd1", "psm1", "reg", "scr", "sh",
+    "sys", "vbe", "vbs", "wsf", "wsh", "zsh",
+];
+
+pub(crate) fn is_blocked_default_open_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|ext| {
+            BLOCKED_DEFAULT_OPEN_EXTENSIONS
+                .iter()
+                .any(|blocked| ext.eq_ignore_ascii_case(blocked))
+        })
+}
+
+pub(crate) fn normalize_existing_local_path(raw: &str) -> Result<PathBuf, AppError> {
+    let trimmed = raw.trim();
+    let target = PathBuf::from(trimmed);
+    if trimmed.is_empty() || !target.is_absolute() {
+        return Err(AppError::InvalidInput(
+            "file path must be absolute".to_string(),
+        ));
+    }
+    if !target.exists() {
+        return Err(AppError::NotFound(format!(
+            "{} does not exist",
+            target.display()
+        )));
+    }
+    Ok(strip_windows_prefix(
+        fs::canonicalize(&target).unwrap_or(target),
+    ))
+}
+
 #[tauri::command(async)]
 pub(crate) fn open_workspace_in_editor(path: String, editor_id: String) -> Result<(), AppError> {
-    let workspace = validate_workspace_directory(&path)?;
+    let workspace = strip_windows_prefix(
+        fs::canonicalize(validate_workspace_directory(&path)?)
+            .unwrap_or_else(|_| PathBuf::from(path.trim())),
+    );
     launch_editor(&editor_id, Some(&workspace), None, None, None)
 }
 
@@ -479,33 +517,59 @@ pub(crate) fn open_file_in_editor(
     column: Option<u32>,
     workspace: Option<String>,
 ) -> Result<(), AppError> {
-    let file = PathBuf::from(path.trim());
-    if !file.is_absolute() {
-        return Err(AppError::InvalidInput(
-            "file path must be absolute".to_string(),
-        ));
-    }
-    if !file.exists() {
-        return Err(AppError::NotFound(format!(
-            "{} does not exist",
-            file.display()
-        )));
-    }
+    let file = normalize_existing_local_path(&path)?;
     let workspace = workspace
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .filter(|value| value.is_dir());
+        .filter(|value| value.is_dir())
+        .map(|value| strip_windows_prefix(fs::canonicalize(&value).unwrap_or(value)));
     if file.is_dir() {
         return launch_editor(&editor_id, Some(&file), None, None, None);
     }
     launch_editor(&editor_id, workspace.as_deref(), Some(&file), line, column)
 }
 
+/// Opens a local file with the OS default application (blocking direct execution of executables/scripts).
+#[tauri::command(async)]
+pub(crate) fn open_file_in_default_app(path: String) -> Result<(), AppError> {
+    let target = normalize_existing_local_path(&path)?;
+    if target.is_dir() {
+        return open_workspace_in_file_manager(target.to_string_lossy().to_string());
+    }
+    if is_blocked_default_open_extension(&target) {
+        return Err(AppError::InvalidInput(
+            "出于安全考虑，不能直接运行可执行或脚本文件，请改用编辑器打开或在资源管理器中查看"
+                .to_string(),
+        ));
+    }
+    match tauri_plugin_opener::open_path(&target, None::<&str>) {
+        Ok(()) => Ok(()),
+        #[cfg(windows)]
+        Err(tauri_plugin_opener::Error::Io(ref err)) if err.raw_os_error() == Some(1223) => Ok(()),
+        #[cfg(windows)]
+        Err(tauri_plugin_opener::Error::Io(ref err)) if err.raw_os_error() == Some(1155) => {
+            use std::os::windows::process::CommandExt;
+            // OpenAs_RunDLL parses the remaining command line verbatim as a file path (do not quote).
+            hidden_command("rundll32.exe")
+                .raw_arg(format!("shell32.dll,OpenAs_RunDLL {}", target.display()))
+                .spawn()
+                .map(|_| ())
+                .map_err(|spawn_err| {
+                    AppError::Process(format!("failed to open file picker: {spawn_err}"))
+                })
+        }
+        Err(err) => Err(AppError::Process(format!(
+            "failed to open file in default app: {err}"
+        ))),
+    }
+}
+
 #[tauri::command(async)]
 pub(crate) fn open_workspace_in_file_manager(path: String) -> Result<(), AppError> {
     let workspace = validate_workspace_directory(&path)?;
+    let workspace = strip_windows_prefix(fs::canonicalize(&workspace).unwrap_or(workspace));
 
     #[cfg(windows)]
     {
@@ -538,13 +602,7 @@ pub(crate) fn open_workspace_in_file_manager(path: String) -> Result<(), AppErro
 /// Shows a file selected in its folder, the way "Reveal in File Explorer" does.
 #[tauri::command(async)]
 pub(crate) fn reveal_path_in_file_manager(path: String) -> Result<(), AppError> {
-    let target = PathBuf::from(path.trim());
-    if !target.is_absolute() || !target.exists() {
-        return Err(AppError::NotFound(format!(
-            "{} does not exist",
-            target.display()
-        )));
-    }
+    let target = normalize_existing_local_path(&path)?;
 
     #[cfg(windows)]
     {
@@ -1044,5 +1102,79 @@ mod tests {
         assert_eq!(prefer_native_editor_executable(script, spec), executable);
 
         fs::remove_dir_all(root).expect("temporary editor directory should be removed");
+    }
+
+    #[test]
+    fn default_open_allows_documents_and_blocks_executables() {
+        for allowed in [
+            "report.docx",
+            "spec.pdf",
+            "README.md",
+            "notes.txt",
+            "sheet.xlsx",
+            "slides.pptx",
+            "chart.png",
+            "index.html",
+            "diagram.svg",
+            "config.json",
+            "app.ts",
+            "main.rs",
+            "archive.zip",
+            "no_extension",
+        ] {
+            assert!(
+                !is_blocked_default_open_extension(Path::new(allowed)),
+                "{allowed} should be allowed to open in default app"
+            );
+        }
+        for blocked in [
+            "setup.exe",
+            "installer.MSI",
+            "run.bat",
+            "script.cmd",
+            "deploy.ps1",
+            "macro.vbs",
+            "shortcut.lnk",
+            "run.sh",
+            "payload.js",
+        ] {
+            assert!(
+                is_blocked_default_open_extension(Path::new(blocked)),
+                "{blocked} should be blocked from direct default-app execution"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_existing_local_paths_and_rejects_invalid_ones() {
+        assert!(normalize_existing_local_path("").is_err());
+        assert!(normalize_existing_local_path("relative/file.md").is_err());
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "pid-desktop-open-default-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let file = dir.join("sample.md");
+        fs::write(&file, "# hello").expect("sample file should be written");
+
+        let forward_slash = file.to_string_lossy().replace('\\', "/");
+        let normalized = normalize_existing_local_path(&forward_slash)
+            .expect("existing forward-slash absolute path should normalize");
+        assert!(normalized.is_file());
+        #[cfg(windows)]
+        {
+            let text = normalized.to_string_lossy();
+            assert!(!text.starts_with(r"\\?\"));
+            assert!(!text.contains('/'));
+        }
+
+        let missing = dir.join("missing.pdf");
+        assert!(normalize_existing_local_path(&missing.to_string_lossy()).is_err());
+        fs::remove_dir_all(dir).expect("temp dir should be removed");
     }
 }

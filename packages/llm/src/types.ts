@@ -142,6 +142,16 @@ export interface LlmErrorInfo {
   status?: number;
   /** Whether trying the same request again may succeed. */
   retryable: boolean;
+  /** Provider id that returned the error when known. */
+  provider?: string;
+  /** Machine-readable error code from provider response (e.g. `insufficient_quota`, `rate_limit_exceeded`). */
+  code?: string;
+  /** Machine-readable error type from provider response (e.g. `invalid_request_error`, `overloaded_error`). */
+  errorType?: string;
+  /** Upstream request or trace ID from headers/body for debugging and support. */
+  requestId?: string;
+  /** Sanitized raw error response body (pretty JSON or text excerpt) for expandable inspection. */
+  rawBody?: string;
 }
 
 /** Per-million-token USD pricing for a model (`@qianji/pricing`). */

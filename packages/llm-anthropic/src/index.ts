@@ -5,6 +5,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import {
   LlmError,
+  errorFromPayload,
   getJson,
   joinUrl,
   postSse,
@@ -301,7 +302,13 @@ export async function* translateStream(events: AsyncIterable<{ event?: string; d
     try {
       event = JSON.parse(sse.data) as WireEvent;
     } catch {
-      throw new LlmError({ kind: "unknown", message: `${providerId} sent malformed stream data`, retryable: false });
+      throw new LlmError({
+        kind: "unknown",
+        provider: providerId,
+        message: `${providerId} sent malformed stream data`,
+        retryable: false,
+        rawBody: sse.data.trim().slice(0, 2_000) || undefined,
+      });
     }
     const index = event.index ?? 0;
     switch (event.type) {
@@ -332,8 +339,12 @@ export async function* translateStream(events: AsyncIterable<{ event?: string; d
         stopped = true;
         break;
       case "error": {
-        const known = STREAM_ERRORS[event.error?.type ?? ""] ?? { kind: "unknown" as const, retryable: false };
-        throw new LlmError({ ...known, message: `${providerId}: ${event.error?.message ?? event.error?.type ?? "stream error"}` });
+        const parsed = errorFromPayload(providerId, sse.data);
+        const known = STREAM_ERRORS[event.error?.type ?? ""];
+        if (known !== undefined && parsed.kind === "unknown") {
+          throw new LlmError({ ...parsed.toInfo(), ...known });
+        }
+        throw parsed;
       }
       default:
         // ping and future event types

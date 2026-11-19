@@ -1102,4 +1102,26 @@ describe("agent loop", () => {
     expect(xmlVisible.provider.requests).toHaveLength(1);
     expect(xmlVisible.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
   });
+
+  it("persists an assistant error event when an unexpected exception escapes the loop", async () => {
+    const harness = await setup([textReply("unreachable")]);
+    harness.ctx.on("agent/before-start", () => {
+      throw new Error("provider credential store locked");
+    });
+
+    await run(harness, "Trigger failure");
+
+    expect(harness.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "error" });
+    const assistantErrors = harness.session.events.filter(
+      (event) => event.type === "assistant" && event.data.stop === "error",
+    );
+    expect(assistantErrors).toHaveLength(1);
+    expect(assistantErrors[0]?.data).toMatchObject({
+      stop: "error",
+      error: {
+        message: "provider credential store locked",
+        retryable: false,
+      },
+    });
+  });
 });

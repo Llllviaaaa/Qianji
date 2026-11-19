@@ -1800,36 +1800,178 @@
   line-height: 16px;
 }
 
-/* ── A turn that failed (MessageItem turnErrorRow) ─────────────────── */
+/* ── A turn that failed (DSH + Codex hybrid error card) ────────────── */
 
 .codex-shot .dshc-turn-error {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
-  align-items: start;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  padding: 2px 0;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--dshc-error) 28%, var(--dsh-claude-border-l1, var(--border)));
+  background: color-mix(in srgb, var(--dshc-error) 6%, var(--dsh-claude-raised, var(--panel)));
   font-size: var(--dshc-fs-2);
   line-height: calc(20px + var(--dshc-fd-2));
 }
 
-.codex-shot .dshc-turn-error .dshc-state-dot {
-  margin-top: 5px;
+.codex-shot .dshc-turn-error-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.codex-shot .dshc-turn-error-copy {
+.codex-shot .dshc-turn-error-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+}
+
+.codex-shot .dshc-turn-error .dshc-state-dot {
+  flex: none;
+  margin-top: 0;
 }
 
 .codex-shot .dshc-turn-error-title {
-  margin-right: 6px;
   color: var(--dshc-error);
   font-weight: 600;
 }
 
+.codex-shot .dshc-turn-error-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--dshc-error) 22%, var(--dsh-claude-border-l1, var(--border)));
+  background: color-mix(in srgb, var(--dshc-error) 10%, transparent);
+  color: var(--dshc-label-primary, var(--text));
+  font-family: var(--qj-font-mono, "JetBrains Mono", Consolas, monospace);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.codex-shot .dshc-turn-error-badge.is-status {
+  color: var(--dshc-error);
+  font-weight: 600;
+}
+
+.codex-shot .dshc-turn-error-source {
+  color: var(--dshc-label-muted, var(--text-2));
+  font-family: var(--qj-font-mono, "JetBrains Mono", Consolas, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.codex-shot .dshc-turn-error-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.codex-shot .dshc-turn-error-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--dsh-claude-border-l1, var(--border));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dshc-label-secondary, var(--text-2));
+  font-size: 11.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.codex-shot .dshc-turn-error-btn:hover {
+  background: var(--dsh-claude-hover-bg, var(--hover));
+  color: var(--dshc-label-primary, var(--text));
+}
+
+.codex-shot .dshc-turn-error-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 .codex-shot .dshc-turn-error-message {
-  color: var(--dshc-label-secondary);
+  color: var(--dshc-label-primary, var(--text));
+  font-family: var(--qj-font-mono, "JetBrains Mono", Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.codex-shot .dshc-turn-error-hint {
+  color: var(--dshc-label-secondary, var(--text-2));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.codex-shot .dshc-turn-error-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--dsh-claude-border-l1, var(--border)) 72%, transparent);
+}
+
+.codex-shot .dshc-turn-error-raw-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dshc-label-secondary, var(--text-2));
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.codex-shot .dshc-turn-error-raw-toggle:hover {
+  color: var(--dshc-label-primary, var(--text));
+}
+
+.codex-shot .dshc-turn-error-reqid {
+  color: var(--dshc-label-muted, var(--text-2));
+  font-size: 11px;
+  line-height: 16px;
+  user-select: text;
+}
+
+.codex-shot .dshc-turn-error-reqid code {
+  font-family: var(--qj-font-mono, "JetBrains Mono", Consolas, monospace);
+  font-size: 11px;
+}
+
+.codex-shot .dshc-turn-error-raw {
+  margin: 0;
+  padding: 9px 10px;
+  max-height: 240px;
+  overflow: auto;
+  border-radius: 7px;
+  border: 1px solid var(--dsh-claude-border-l1, var(--border));
+  background: var(--dsh-claude-code-block-bg, var(--qj-bg-subtle));
+  color: var(--dshc-label-secondary, var(--text-2));
+  font-family: var(--qj-font-mono, "JetBrains Mono", Consolas, monospace);
+  font-size: 11.5px;
+  line-height: 1.48;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
 @media (prefers-reduced-motion: reduce) {

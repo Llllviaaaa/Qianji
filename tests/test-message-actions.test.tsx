@@ -504,3 +504,75 @@ test("agent-end outcomes and reloaded tool-use hints", () => {
   ];
   assert.equal(historyToUi(abortedHistory)[1]?.isAborted, true);
 });
+
+test("DSH + Codex provider error card renders diagnostics, raw toggle, and preserves partial prose", () => {
+  const providerErrorEvents: PersistedEvent[] = [
+    { seq: 1, ts: "2026-11-19T10:00:00.000Z", type: "user", data: { content: [{ type: "text", text: "你好" }] } },
+    {
+      seq: 2,
+      ts: "2026-11-19T10:00:02.000Z",
+      type: "assistant",
+      data: {
+        content: [{ type: "text", text: "先输出了一半的内容" }],
+        model: { provider: "sub2api", model: "grok-4.20" },
+        usage: { inputTokens: 100, outputTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        stop: "error",
+        error: {
+          kind: "overloaded",
+          status: 503,
+          code: "server_is_overloaded",
+          requestId: "req_abc123",
+          message: "sub2api returned HTTP 503: Service temporarily unavailable",
+          rawBody: JSON.stringify({ error: { message: "Service temporarily unavailable", code: "server_is_overloaded" } }, null, 2),
+          retryable: true,
+        },
+      },
+    },
+  ];
+
+  const ui = historyToUi(providerErrorEvents);
+  const assistant = ui[1];
+  assert.ok(assistant);
+  assert.equal(assistant.isError, true);
+  assert.equal(assistant.content, "先输出了一半的内容");
+  assert.equal(assistant.error?.status, 503);
+  assert.equal(assistant.error?.provider, "sub2api");
+  assert.equal(assistant.error?.requestId, "req_abc123");
+
+  const merged = mergeAssistantTurn([assistant]);
+  const markup = renderToStaticMarkup(createElement(Message, { message: merged }));
+  // Both partial prose AND the structured provider error card are visible!
+  assert.match(markup, /先输出了一半的内容/);
+  assert.match(markup, /class="dshc-turn-error"/);
+  assert.match(markup, /模型服务过载/);
+  assert.match(markup, /HTTP 503/);
+  assert.match(markup, /server_is_overloaded/);
+  assert.match(markup, /sub2api \/ grok-4\.20/);
+  assert.match(markup, /Service temporarily unavailable/);
+  assert.match(markup, /req_abc123/);
+  assert.match(markup, /查看提供商原始返回/);
+
+  // Auth / quota errors surface a direct jump to model settings.
+  const authMarkup = renderToStaticMarkup(createElement(Message, {
+    message: {
+      id: "auth-err",
+      role: "assistant",
+      content: "",
+      isError: true,
+      model: "gpt-5",
+      error: {
+        kind: "auth",
+        status: 401,
+        provider: "openai",
+        code: "invalid_api_key",
+        message: "openai returned HTTP 401: Incorrect API key provided",
+        retryable: false,
+      },
+      timestamp: 0,
+    },
+  }));
+  assert.match(authMarkup, /认证失败/);
+  assert.match(authMarkup, /HTTP 401/);
+  assert.match(authMarkup, /invalid_api_key/);
+  assert.match(authMarkup, /模型设置/);
+});

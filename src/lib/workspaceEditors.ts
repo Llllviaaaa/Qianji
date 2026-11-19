@@ -71,7 +71,9 @@ export function isAbsoluteLocalPath(path: string): boolean {
 /** Resolves a workspace-relative path (as tools and diffs print it) against the workspace. */
 export function resolveWorkspacePath(workspace: string, path: string): string {
   const trimmed = path.trim().replace(/^\.[\\/]/, "");
-  if (isAbsoluteLocalPath(trimmed) || !workspace) return trimmed;
+  if (isAbsoluteLocalPath(trimmed) || !workspace) {
+    return /^[A-Za-z]:[\\/]/.test(trimmed) ? trimmed.replace(/\//g, "\\") : trimmed;
+  }
   const windows = /^[A-Za-z]:[\\/]/.test(workspace) || workspace.includes("\\");
   const separator = windows ? "\\" : "/";
   const base = workspace.replace(/[\\/]+$/, "");

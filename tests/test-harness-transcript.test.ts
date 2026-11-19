@@ -103,7 +103,19 @@ describe("live progress as transcript events", () => {
         type: "llm-chunk",
         chunk: { type: "retry", attempt: 1, maxAttempts: 5, delayMs: 2_000, effort: "medium", error: { kind: "network", message: "reset", retryable: true } },
       }),
-    ).toEqual([{ type: "retry-status", text: "长流中断，已自动下调思考强度重试 1/4（2s 后）…" }]);
+    ).toEqual([{ type: "retry-status", text: "长流中断，已自动下调思考强度重试 1/4（2s 后） · reset…" }]);
+    expect(
+      translator.delta({
+        type: "llm-chunk",
+        chunk: {
+          type: "retry",
+          attempt: 2,
+          maxAttempts: 5,
+          delayMs: 5_000,
+          error: { kind: "overloaded", status: 503, message: "sub2api returned HTTP 503: Service temporarily unavailable", retryable: true },
+        },
+      }),
+    ).toEqual([{ type: "retry-status", text: "HTTP 503: Service temporarily unavailable · 正在重试 2/4（5s 后）…" }]);
     expect(["off", "minimal", "medium", "xhigh", "max", "ultra"].map(effortForLevel)).toEqual([
       "off",
       "minimal",

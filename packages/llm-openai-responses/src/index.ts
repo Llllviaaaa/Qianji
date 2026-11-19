@@ -7,6 +7,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import {
   LlmError,
+  errorFromPayload,
   getJson,
   joinUrl,
   postSse,
@@ -226,21 +227,21 @@ export async function* translateStream(
     } catch {
       throw new LlmError({
         kind: "unknown",
+        provider: providerId,
         message: `${providerId} sent malformed Responses stream JSON`,
         retryable: false,
+        rawBody: sse.data.trim().slice(0, 2_000) || undefined,
       });
     }
 
     const eventType = payload.type ?? sse.event ?? "";
 
     if (eventType === "error" || payload.error !== undefined) {
-      const code = payload.error?.code ?? payload.error?.type ?? "";
-      const retryable = code === "rate_limit_exceeded" || code === "server_error";
-      throw new LlmError({
-        kind: code === "rate_limit_exceeded" ? "rate-limit" : retryable ? "server" : "invalid-request",
-        message: `${providerId}: ${payload.error?.message ?? "stream error"}`,
-        retryable,
-      });
+      const parsed = errorFromPayload(providerId, sse.data);
+      if (parsed.kind === "unknown") {
+        throw new LlmError({ ...parsed.toInfo(), kind: "invalid-request", retryable: false });
+      }
+      throw parsed;
     }
 
     switch (eventType) {
@@ -323,13 +324,11 @@ export async function* translateStream(
       }
 
       case "response.failed": {
-        const err = payload.response?.error;
-        const code = err?.code ?? "";
-        throw new LlmError({
-          kind: code === "rate_limit_exceeded" ? "rate-limit" : "server",
-          message: `${providerId}: ${err?.message ?? "response failed"}`,
-          retryable: code === "rate_limit_exceeded" || code === "server_error",
-        });
+        const parsed = errorFromPayload(providerId, sse.data);
+        if (parsed.kind === "unknown") {
+          throw new LlmError({ ...parsed.toInfo(), kind: "server", retryable: false });
+        }
+        throw parsed;
       }
 
       default:

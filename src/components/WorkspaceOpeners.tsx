@@ -15,7 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { Check, Copy, Eye, FolderOpen, PanelBottom, Paperclip, SquareTerminal } from "lucide-react";
+import { Check, Copy, ExternalLink, Eye, FolderOpen, PanelBottom, Paperclip, SquareTerminal } from "lucide-react";
 import {
   AntigravityMonochromeGlyph,
   ChromeChevronDownIcon,
@@ -249,6 +249,8 @@ export interface FileActions {
   openPreview: (path: string, line?: number) => void;
   /** Opens in the project's editor (or `editor`), at `line` when the editor supports it. */
   openInEditor: (path: string, line?: number, editor?: WorkspaceEditorInfo) => void;
+  /** Opens the file using the OS default application (any non-executable file type). */
+  openWithDefaultApp: (path: string) => void;
   reveal: (path: string) => void;
   /** Right-click menu for a file path. */
   showMenu: (event: ReactMouseEvent, path: string, line?: number) => void;
@@ -296,6 +298,12 @@ export function FileActionsProvider({
         onNotify(`无法在资源管理器中显示：${describeError(error)}`, "error");
       });
     };
+    const openWithDefaultApp = (path: string) => {
+      if (!inTauri) return;
+      void agent.openFileInDefaultApp(resolveWorkspacePath(workspace, path)).catch((error) => {
+        onNotify(`无法在外部默认应用中打开：${describeError(error)}`, "error");
+      });
+    };
     const openInEditor = (path: string, line?: number, editor = preferredEditor ?? undefined) => {
       if (!editor) {
         onNotify("未检测到可用的编辑器，已改为在资源管理器中显示", "info");
@@ -314,6 +322,7 @@ export function FileActionsProvider({
       preferredEditor,
       openPreview: onOpenPreview,
       openInEditor,
+      openWithDefaultApp,
       reveal,
       showMenu: (event, path, line) => {
         event.preventDefault();
@@ -412,6 +421,9 @@ function FilePathMenu({
       <div className="file-context-menu-title" title={absolute}>{relativeWorkspacePath(workspace, menu.path)}{menu.line ? `:${menu.line}` : ""}</div>
       <button type="button" role="menuitem" onClick={act(() => actions.openPreview(menu.path, menu.line))}>
         <Eye size={14} /><span>在应用内预览{lineLabel}</span>
+      </button>
+      <button type="button" role="menuitem" onClick={act(() => actions.openWithDefaultApp(menu.path))}>
+        <ExternalLink size={14} /><span>使用系统默认应用打开</span>
       </button>
       {preferredEditor && (
         <button type="button" role="menuitem" onClick={act(() => actions.openInEditor(menu.path, menu.line, preferredEditor))}>

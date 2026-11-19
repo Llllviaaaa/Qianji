@@ -18,6 +18,7 @@ import type {
   ModelProviderConfig,
   ModelProviderInput,
   ModelThinkingLevel,
+  UiLlmError,
 } from "../../types";
 
 export type Update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
@@ -26,6 +27,7 @@ export interface CheckState {
   providerId: string;
   status: "checking" | "ok" | "error";
   message: string;
+  error?: UiLlmError;
 }
 
 export type Notice = { kind: "success" | "error"; text: string } | null;
@@ -99,13 +101,14 @@ export function modelTraitBadges(
   return badges;
 }
 
-export async function checkProviderWithElapsed(providerId: string): Promise<{ ok: boolean; message: string }> {
+export async function checkProviderWithElapsed(providerId: string): Promise<{ ok: boolean; message: string; error?: UiLlmError }> {
   const started = performance.now();
   const result = await harnessProviders.check(providerId);
   const elapsedSec = ((performance.now() - started) / 1000).toFixed(1);
   return {
     ok: result.ok,
     message: result.ok ? `${result.message} · ${elapsedSec}s` : result.message,
+    ...(result.error === undefined ? {} : { error: result.error }),
   };
 }
 

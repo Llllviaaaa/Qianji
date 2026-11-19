@@ -5,6 +5,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import {
   LlmError,
+  errorFromPayload,
   getJson,
   joinUrl,
   postSse,
@@ -286,27 +287,15 @@ export async function* translateStream(
     } catch {
       throw new LlmError({
         kind: "unknown",
+        provider: providerId,
         message: `${providerId} sent malformed Gemini stream JSON`,
         retryable: false,
+        rawBody: sse.data.trim().slice(0, 2_000) || undefined,
       });
     }
     if (chunk.error !== undefined) {
-      const code = chunk.error.code;
-      const retryable = code === 429 || code === 500 || code === 503;
-      const kind = code === 401 || code === 403
-        ? "auth"
-        : code === 429
-          ? "rate-limit"
-          : code === 503
-            ? "overloaded"
-            : code !== undefined && code >= 500
-              ? "server"
-              : "invalid-request";
-      throw new LlmError({
-        kind,
-        ...(code === undefined ? {} : { status: code }),
-        message: `${providerId}: ${chunk.error.message ?? chunk.error.status ?? "stream error"}`,
-        retryable,
+      throw errorFromPayload(providerId, sse.data, {
+        ...(typeof chunk.error.code === "number" ? { status: chunk.error.code } : {}),
       });
     }
 
