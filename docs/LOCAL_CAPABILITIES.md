@@ -24,9 +24,10 @@
 
 按真实工程需求按需迭代：
 
-1. **官方插件生态扩展**：在已有的 `plugin_manager(action: "scaffold")`、离线 `plugin-types/` 与 3 套基础模板（`tool-only`、`ui-slot-widget`、`fullstack-panel`）之上，按需沉淀更多垂直场景官方插件包。
-2. **终端进阶交互**：按需评估终端内搜索高亮与多分屏布局，继续保持终端输出不自动塞入模型上下文。
-3. **跨平台强隔离向导**：在现有 Windows Sandbox（`.wsb`）与 Dev Container 模板基础上，按需补充容器自动检测与一键拉起体验。
+1. **Agent ⇄ Bot 双形态切换（核心演进）**：在已有的单进程常驻 Harness Host、托盘防休眠、`@qianji/schedule`、`@qianji/memory`、MCP、Browser/Computer Use、`Intelligent UI` 与精灵图虚拟形象底座之上，构建可一键切换的 **Bot 形态**（跨天连续个人时间线、Heartbeat 周期心跳主动巡检与提醒卡片、右侧分身档案与自主行动时间轴，以及 Bot → Agent 双向接力）。
+2. **官方插件生态扩展**：在已有的 `plugin_manager(action: "scaffold")`、离线 `plugin-types/` 与 3 套基础模板（`tool-only`、`ui-slot-widget`、`fullstack-panel`）之上，按需沉淀更多垂直场景官方插件包。
+3. **终端进阶交互**：按需评估终端内搜索高亮与多分屏布局，继续保持终端输出不自动塞入模型上下文。
+4. **跨平台强隔离向导**：在现有 Windows Sandbox（`.wsb`）与 Dev Container 模板基础上，按需补充容器自动检测与一键拉起体验。
 
 ## 明确不做
 
