@@ -2,20 +2,37 @@
  * Abdication Fallback tracker for single, keyed, chain, and factory slots
  * (ADR 0023 §5.1).
  *
- * When a winning plugin entry crashes during render/select or enters a circuit-
- * breaker lockout for `(etag, configKey, reloadEpoch)`, the tracker marks that
- * entry abdicated for the current cycle, reports the render error, invokes
- * registered `onAbdicate` callbacks (e.g. non-blocking toast notifications),
- * and wakes slot renderers so they fall back immediately to the next candidate
- * (ultimately down to the builtin default).
+ * Pure leaf kernel module: has zero upward imports on `src/lib/*`.
+ * `src/lib/clientPluginState.ts` binds the live runtime metadata/lockout/error
+ * host via `bindDefaultAbdicationHost()` once initialized, preventing any ESM
+ * module-evaluation cycles.
  */
-import {
-  getClientPluginRuntimeMeta,
-  getClientSlotLockout,
-  getPluginReloadEpoch,
-  recordClientRenderError,
-  subscribeClientPluginErrors,
-} from "../../lib/clientPluginState";
+
+export interface AbdicationHostBinding {
+  readonly getRuntimeMeta: (pluginId: string) => { readonly etag: string; readonly configKey: string } | undefined;
+  readonly getReloadEpoch: (pluginId: string) => number;
+  readonly getSlotLockout: (pluginId: string | undefined, slotId: string) => { locked: boolean; message?: string };
+  readonly recordRenderError: (pluginId: string | undefined, slotId: string, error: unknown) => void;
+  readonly subscribeErrors: (listener: () => void) => () => void;
+}
+
+const NOOP_UNSUB = (): void => undefined;
+
+let defaultHost: AbdicationHostBinding = {
+  getRuntimeMeta: () => undefined,
+  getReloadEpoch: () => 0,
+  getSlotLockout: () => ({ locked: false }),
+  recordRenderError: () => undefined,
+  subscribeErrors: () => NOOP_UNSUB,
+};
+
+const hostBoundListeners = new Set<() => void>();
+
+/** Bind the default client plugin error/lockout host (invoked by `src/lib/clientPluginState.ts`). */
+export function bindDefaultAbdicationHost(host: AbdicationHostBinding): void {
+  defaultHost = host;
+  for (const listener of [...hostBoundListeners]) listener();
+}
 
 export interface AbdicationCycle {
   readonly etag: string;
@@ -50,14 +67,35 @@ export function resolveDefaultPluginCycle(pluginId: string): AbdicationCycle {
     return {
       etag: "",
       configKey: "{}",
-      reloadEpoch: getPluginReloadEpoch(pluginId),
+      reloadEpoch: defaultHost.getReloadEpoch(pluginId),
     };
   }
-  const meta = getClientPluginRuntimeMeta(pluginId);
+  const meta = defaultHost.getRuntimeMeta(pluginId);
   return {
     etag: meta?.etag ?? "",
     configKey: meta?.configKey ?? "{}",
-    reloadEpoch: getPluginReloadEpoch(pluginId),
+    reloadEpoch: defaultHost.getReloadEpoch(pluginId),
+  };
+}
+
+function defaultRecordRenderError(pluginId: string | undefined, slotId: string, error: unknown): void {
+  defaultHost.recordRenderError(pluginId, slotId, error);
+}
+
+function defaultGetSlotLockout(pluginId: string | undefined, slotId: string): { locked: boolean; message?: string } {
+  return defaultHost.getSlotLockout(pluginId, slotId);
+}
+
+function defaultSubscribeErrors(listener: () => void): () => void {
+  let offCurrent = defaultHost.subscribeErrors(listener);
+  const rebind = (): void => {
+    offCurrent();
+    offCurrent = defaultHost.subscribeErrors(listener);
+  };
+  hostBoundListeners.add(rebind);
+  return () => {
+    hostBoundListeners.delete(rebind);
+    offCurrent();
   };
 }
 
@@ -99,15 +137,10 @@ export class AbdicationTracker {
 
   constructor(options: AbdicationTrackerOptions = {}) {
     this.getCycle = options.getCycle ?? resolveDefaultPluginCycle;
-    this.recordError = options.recordError ?? recordClientRenderError;
-    this.getLockout = options.getLockout ?? getClientSlotLockout;
-    this.subscribeErrorsFn = options.subscribeErrors ?? subscribeClientPluginErrors;
-    // Defer subscribing to the default `clientPluginState` store until first runtime use
-    // so module-evaluation cycles (e.g. `clientPluginRuntime -> clientPluginState -> store ->
-    // clientContributions -> clientSlotsRegistry`) never hit TDZ on `clientErrorListeners`.
-    if (options.subscribeErrors !== undefined) {
-      this.ensureErrorSubscription();
-    }
+    this.recordError = options.recordError ?? defaultRecordRenderError;
+    this.getLockout = options.getLockout ?? defaultGetSlotLockout;
+    this.subscribeErrorsFn = options.subscribeErrors ?? defaultSubscribeErrors;
+    this.ensureErrorSubscription();
   }
 
   /** Lazily attach the `clientPluginState` listener once modules have finished initializing. */

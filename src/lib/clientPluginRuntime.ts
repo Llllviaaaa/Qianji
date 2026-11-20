@@ -11,6 +11,7 @@ import type {
   PluginInfo,
   PluginReportClientErrorParams,
 } from "@qianji/protocol";
+import { resolveContextPluginId, tagFiberPluginId } from "../kernel/runtime/fiberIdentity";
 import type { CrashLogLimiter, FrontendLogSink } from "./crashLogger";
 import {
   currentStyleSeq,
@@ -92,26 +93,7 @@ export interface ClientPluginActivationError {
   failedReloadEpoch: number;
 }
 
-const fiberToPluginId = new WeakMap<object, string>();
-
-/** Associate a Cordis Fiber object with an owning plugin ID. */
-export function tagFiberPluginId(fiber: object, pluginId: string): void {
-  fiberToPluginId.set(fiber, pluginId);
-}
-
-/** Walk a Cordis `Context`'s fiber ancestry to determine which external plugin owns the call. */
-export function resolveContextPluginId(ctx: unknown): string | undefined {
-  if (typeof ctx !== "object" || ctx === null) return undefined;
-  let cursor: unknown = (ctx as { fiber?: unknown }).fiber;
-  let guard = 0;
-  while (typeof cursor === "object" && cursor !== null && guard < 32) {
-    const tagged = fiberToPluginId.get(cursor);
-    if (tagged !== undefined) return tagged;
-    cursor = (cursor as { parent?: { fiber?: unknown } }).parent?.fiber;
-    guard += 1;
-  }
-  return undefined;
-}
+export { resolveContextPluginId, tagFiberPluginId };
 
 const globalStyleHost = globalThis as unknown as {
   __qianjiInjectPluginStyle?: (pluginId: string, css: string, styleKey?: string) => () => void;
@@ -302,19 +284,12 @@ export function createClientPluginRuntime<P = unknown>(
     ? root.on("internal/plugin", (fiber: unknown) => {
         if (typeof fiber !== "object" || fiber === null) return;
         if (mountingPluginId !== undefined) {
-          fiberToPluginId.set(fiber, mountingPluginId);
+          tagFiberPluginId(fiber, mountingPluginId);
           return;
         }
-        let cursor: unknown = (fiber as { parent?: { fiber?: unknown } }).parent?.fiber;
-        let guard = 0;
-        while (typeof cursor === "object" && cursor !== null && guard < 32) {
-          const inherited = fiberToPluginId.get(cursor);
-          if (inherited !== undefined) {
-            fiberToPluginId.set(fiber, inherited);
-            return;
-          }
-          cursor = (cursor as { parent?: { fiber?: unknown } }).parent?.fiber;
-          guard += 1;
+        const inherited = resolveContextPluginId((fiber as { parent?: unknown }).parent);
+        if (inherited !== undefined) {
+          tagFiberPluginId(fiber, inherited);
         }
       })
     : undefined;
@@ -473,7 +448,7 @@ export function createClientPluginRuntime<P = unknown>(
           try {
             nextFiber = root.plugin(nextPlugin, config);
             if (typeof nextFiber === "object" && nextFiber !== null) {
-              fiberToPluginId.set(nextFiber, item.id);
+              tagFiberPluginId(nextFiber, item.id);
             }
           } finally {
             mountingPluginId = undefined;
@@ -530,7 +505,7 @@ export function createClientPluginRuntime<P = unknown>(
               try {
                 restoredFiber = root.plugin(current.plugin, current.config);
                 if (typeof restoredFiber === "object" && restoredFiber !== null) {
-                  fiberToPluginId.set(restoredFiber, item.id);
+                  tagFiberPluginId(restoredFiber, item.id);
                 }
               } finally {
                 mountingPluginId = undefined;
@@ -541,6 +516,7 @@ export function createClientPluginRuntime<P = unknown>(
               mounted.set(sourceKey, { ...current, fiber: restoredFiber });
             } catch {
               mounted.delete(sourceKey);
+              setClientRuntimeMeta(item.id, undefined);
             }
           }
           throw mountError;

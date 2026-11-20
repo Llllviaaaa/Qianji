@@ -19,6 +19,7 @@ export const SAFE_MODE_STORAGE_KEY = "qianji:safe-mode";
 export type SafeModeReason = "query" | "window-flag" | "session-storage" | "hotkey" | "manual";
 
 export interface SafeModeSnapshot {
+  readonly active: boolean;
   readonly enabled: boolean;
   readonly reason: SafeModeReason | null;
   readonly toggledCount: number;
@@ -138,6 +139,7 @@ export class SafeModeController {
     this.explicitSearch = options.search;
     const initial = detectInitialSafeMode(this.win, this.storage, this.explicitSearch);
     this.snapshot = {
+      active: initial.enabled,
       enabled: initial.enabled,
       reason: initial.reason,
       toggledCount: 0,
@@ -180,6 +182,7 @@ export class SafeModeController {
     if (this.snapshot.enabled === enabled) return;
     this.persistStorage(enabled);
     this.snapshot = {
+      active: enabled,
       enabled,
       reason: enabled ? reason : null,
       toggledCount: this.snapshot.toggledCount + 1,
@@ -208,6 +211,7 @@ export class SafeModeController {
       return;
     }
     this.snapshot = {
+      active: detected.enabled,
       enabled: detected.enabled,
       reason: detected.reason,
       toggledCount: this.snapshot.toggledCount,

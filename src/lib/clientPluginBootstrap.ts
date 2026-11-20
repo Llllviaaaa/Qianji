@@ -5,12 +5,17 @@
  * single lightweight Cordis root context (`pidClientRoot`) wired directly to
  * `ClientContributionService` and `createClientPluginRuntime`.
  */
-import { createElement, type ReactNode } from "react";
-import { Context, Service, type Plugin } from "@deepseek-ai/cordis";
+import { createElement } from "react";
+import { Context, type Plugin } from "@deepseek-ai/cordis";
 import { Layers } from "lucide-react";
 import { agent } from "./agent";
 import {
-  ClientContributionRegistry,
+  BetterSidebarCompatService,
+  betterSidebarCompatModule,
+  type LegacyFileViewerDescriptor,
+  type LegacySidebarTabDescriptor,
+} from "./betterSidebarCompat";
+import {
   ClientContributionService,
   ClientStylesService,
   clientContributions,
@@ -18,21 +23,23 @@ import {
 } from "./clientContributions";
 import { registerCorePrimitiveFactories } from "../kernel/primitives/factories";
 import {
+  createBuiltinCorePluginCoordinator,
   createSafeModeGatedTransport,
   installPluginStyleGlobals,
   safeModeController,
   setPluginTier,
+  type BuiltinCorePluginCoordinator,
+  type BuiltinCorePluginDescriptor,
 } from "../kernel/runtime";
 import { installSessionScopeAdapter, registerFrontendServices } from "../kernel/services";
 import { ClientSlotsService, clientSlotsRegistry } from "../kernel/slots";
 import {
   createClientPluginRuntime,
-  resolveContextPluginId,
   type ClientPluginRuntimeHandle,
   type ClientPluginTransport,
   type ModuleLoaderGlobal,
 } from "./clientPluginRuntime";
-import { HARNESS_SESSION_PREFIX, harnessRuntimes, isHarnessSessionFile } from "./harnessRuntime";
+import { harnessRuntimes } from "./harnessRuntime";
 import { messageImagesToAttachments, rewindController } from "./rewindController";
 import {
   deriveSessionIntelligentUis,
@@ -50,12 +57,6 @@ import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import { useWorkbenchStore } from "../stores/workbenchStore";
 
-declare module "@deepseek-ai/cordis" {
-  interface Context {
-    betterSidebar: BetterSidebarCompatService;
-  }
-}
-
 declare global {
   interface Window {
     __ModuleLoader__?: ModuleLoaderGlobal;
@@ -63,170 +64,12 @@ declare global {
   }
 }
 
-export { ClientStylesService };
-
-export interface LegacySidebarTabDescriptor {
-  id: string;
-  title?: string | (() => string);
-  label?: string;
-  icon?: ReactNode | ((size: number) => ReactNode);
-  order?: number;
-  bottomOnly?: boolean;
-  component?: (props: Record<string, unknown>) => ReactNode;
-  render?: (props: Record<string, unknown>) => ReactNode;
-}
-
-export interface LegacyFileViewerDescriptor {
-  id: string;
-  title?: string | (() => string);
-  label?: string;
-  extensions?: readonly string[];
-  mimeTypes?: readonly string[];
-  order?: number;
-  component?: (props: Record<string, unknown>) => ReactNode;
-  render?: (props: Record<string, unknown>) => ReactNode;
-}
-
-/**
- * Lightweight compatibility shim for external client-only plugins declaring
- * `inject: ["betterSidebar"]` or importing `"dsh-better-sidebar"`. Maps tab
- * and file viewer contributions directly into `ClientContributionRegistry`
- * with zero legacy DSH bundle weight.
- */
-export class BetterSidebarCompatService extends Service {
-  static provide = "betterSidebar";
-  readonly version = "0.26.0";
-  readonly features = ["openFile", "targetedOpen", "fileViewer"] as const;
-  private readonly registry: ClientContributionRegistry;
-
-  constructor(ctx: Context, registry: ClientContributionRegistry = clientContributions) {
-    super(ctx, "betterSidebar");
-    this.registry = registry;
-  }
-
-  registerTab(descriptor: LegacySidebarTabDescriptor): () => void {
-    const callerCtx = this.ctx;
-    const pluginId = resolveContextPluginId(callerCtx);
-    const resolveLabel = (): string => {
-      if (typeof descriptor.title === "function") return descriptor.title();
-      if (typeof descriptor.title === "string" && descriptor.title !== "") return descriptor.title;
-      return descriptor.label || descriptor.id;
-    };
-    const icon = typeof descriptor.icon === "function" ? descriptor.icon(14) : descriptor.icon;
-    const contribution = {
-      id: descriptor.id,
-      ...(pluginId === undefined ? {} : { pluginId }),
-      label: resolveLabel(),
-      ...(icon === undefined ? {} : { icon }),
-      ...(descriptor.order === undefined ? {} : { order: descriptor.order }),
-      render: ({ cwd, sessionFile }: { cwd: string; sessionFile: string | null }): ReactNode => {
-        const sessionId = sessionFile && isHarnessSessionFile(sessionFile)
-          ? sessionFile.slice(HARNESS_SESSION_PREFIX.length)
-          : "";
-        const props = {
-          ctx: callerCtx,
-          cwd,
-          sessionFile,
-          scope: { sessionId, cwd },
-          tab: { id: descriptor.id, type: descriptor.id, title: resolveLabel() },
-          visible: true,
-          onOpenFile: (path: string) => {
-            void useWorkbenchStore.getState().openFile(cwd, path);
-          },
-        };
-        if (typeof descriptor.component === "function") return descriptor.component(props);
-        if (typeof descriptor.render === "function") return descriptor.render(props);
-        return null;
-      },
-    };
-    const rawDispose = descriptor.bottomOnly
-      ? this.registry.registerBottomPanelTab(contribution)
-      : this.registry.registerRightWorkbenchTab(contribution);
-    let disposed = false;
-    const once = () => {
-      if (disposed) return;
-      disposed = true;
-      rawDispose();
-    };
-    return callerCtx.effect(() => once);
-  }
-
-  registerFileViewer(descriptor: LegacyFileViewerDescriptor): () => void {
-    if (typeof descriptor !== "object" || descriptor === null || typeof descriptor.id !== "string") {
-      return () => undefined;
-    }
-    const callerCtx = this.ctx;
-    const pluginId = resolveContextPluginId(callerCtx);
-    const resolveLabel = (): string => {
-      if (typeof descriptor.title === "function") return descriptor.title();
-      if (typeof descriptor.title === "string" && descriptor.title !== "") return descriptor.title;
-      return descriptor.label || descriptor.id;
-    };
-    const rawDispose = this.registry.registerFileViewer({
-      id: descriptor.id,
-      ...(pluginId === undefined ? {} : { pluginId }),
-      label: resolveLabel(),
-      ...(descriptor.extensions === undefined ? {} : { extensions: descriptor.extensions }),
-      ...(descriptor.mimeTypes === undefined ? {} : { mimeTypes: descriptor.mimeTypes }),
-      ...(descriptor.order === undefined ? {} : { order: descriptor.order }),
-      render: (fileCtx) => {
-        const props = {
-          ctx: callerCtx,
-          ...fileCtx,
-        };
-        if (typeof descriptor.component === "function") return descriptor.component(props);
-        if (typeof descriptor.render === "function") return descriptor.render(props);
-        return null;
-      },
-    });
-    let disposed = false;
-    const once = () => {
-      if (disposed) return;
-      disposed = true;
-      rawDispose();
-    };
-    return callerCtx.effect(() => once);
-  }
-
-  registerFileIcon(_descriptor: unknown): () => void {
-    return () => {};
-  }
-
-  openFile(scope: { cwd?: string } | undefined, path: string): void {
-    const cwd = scope?.cwd || useAppStore.getState().cwd;
-    void useWorkbenchStore.getState().openFile(cwd, path);
-  }
-
-  openTab(seed: { type?: string; id?: string; path?: string }, scope?: { cwd?: string }): void {
-    if (typeof seed.path === "string" && seed.path !== "") {
-      const cwd = scope?.cwd || useAppStore.getState().cwd;
-      void useWorkbenchStore.getState().openFile(cwd, seed.path);
-      return;
-    }
-    const target = seed.type ?? seed.id;
-    if (typeof target === "string" && target !== "") {
-      useWorkbenchStore.getState().openTab(target);
-    }
-  }
-
-  closeTab(_tabId: string): void {}
-  activateTab(tabId: string): void {
-    useWorkbenchStore.getState().openTab(tabId);
-  }
-  subscribe(_listener: () => void): () => void {
-    return () => {};
-  }
-  subscribeState(_listener: () => void): () => void {
-    return () => {};
-  }
-  getSnapshot(): Record<string, unknown> {
-    return {};
-  }
-}
-
-const betterSidebarCompatModule = {
+export {
   BetterSidebarCompatService,
-  SIDEBAR_SERVICE_VERSION: "0.26.0",
+  ClientStylesService,
+  type BuiltinCorePluginDescriptor,
+  type LegacyFileViewerDescriptor,
+  type LegacySidebarTabDescriptor,
 };
 
 export * from "../sdk";
@@ -294,24 +137,26 @@ export function registerClientModule(specifier: string, loader: () => Promise<un
   CLIENT_MODULES[specifier] = loader;
 }
 
-const defaultTransport: ClientPluginTransport = createSafeModeGatedTransport(
-  {
-    list: (workspace) => pluginClient.list(workspace),
-    clientBundle: (params) => pluginClient.clientBundle(params),
-    reportClientError: (params) => pluginClient.reportClientError(params),
-    clearClientError: (params) => pluginClient.clearClientError(params),
-    onChanged: (listener) => pluginClient.onChanged((payload) => listener(payload)),
-    onTrustChanged: (listener) => pluginClient.onTrustChanged(() => listener()),
-    onHostReconnect: (listener) => {
-      let seenConnected = false;
-      return harnessRuntimes.onHostStatus((status) => {
-        if (status === "connected") {
-          if (seenConnected) listener();
-          seenConnected = true;
-        }
-      });
-    },
+const rawHostPluginTransport: ClientPluginTransport = {
+  list: (workspace) => pluginClient.list(workspace),
+  clientBundle: (params) => pluginClient.clientBundle(params),
+  reportClientError: (params) => pluginClient.reportClientError(params),
+  clearClientError: (params) => pluginClient.clearClientError(params),
+  onChanged: (listener) => pluginClient.onChanged((payload) => listener(payload)),
+  onTrustChanged: (listener) => pluginClient.onTrustChanged(() => listener()),
+  onHostReconnect: (listener) => {
+    let seenConnected = false;
+    return harnessRuntimes.onHostStatus((status) => {
+      if (status === "connected") {
+        if (seenConnected) listener();
+        seenConnected = true;
+      }
+    });
   },
+};
+
+const defaultTransport: ClientPluginTransport = createSafeModeGatedTransport(
+  rawHostPluginTransport,
   safeModeController,
   (plugins) => {
     for (const item of plugins) {
@@ -322,7 +167,43 @@ const defaultTransport: ClientPluginTransport = createSafeModeGatedTransport(
 
 let singletonRoot: Context | undefined;
 let singletonRuntime: ClientPluginRuntimeHandle | undefined;
+let singletonBuiltinCoordinator: BuiltinCorePluginCoordinator | undefined;
 let singletonServicesReady: Promise<void> | undefined;
+const pendingBuiltinDescriptors: BuiltinCorePluginDescriptor[] = [];
+
+/**
+ * Register Vite-bundled built-in core/feature client plugins with the microkernel
+ * coordinator. Safe to call either before or after `ensureClientPluginRuntime()`.
+ */
+export function registerBuiltinCorePlugins(
+  descriptors: readonly BuiltinCorePluginDescriptor[],
+): () => void {
+  if (singletonBuiltinCoordinator !== undefined) {
+    return singletonBuiltinCoordinator.register(descriptors);
+  }
+  for (const desc of descriptors) {
+    const existingIdx = pendingBuiltinDescriptors.findIndex((item) => item.id === desc.id);
+    if (existingIdx >= 0) {
+      pendingBuiltinDescriptors[existingIdx] = desc;
+    } else {
+      pendingBuiltinDescriptors.push(desc);
+    }
+  }
+  const ids = descriptors.map((desc) => desc.id);
+  const idSet = new Set(ids);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    for (let i = pendingBuiltinDescriptors.length - 1; i >= 0; i -= 1) {
+      const item = pendingBuiltinDescriptors[i];
+      if (item !== undefined && idSet.has(item.id)) {
+        pendingBuiltinDescriptors.splice(i, 1);
+      }
+    }
+    singletonBuiltinCoordinator?.unregister(ids);
+  };
+}
 
 function mountBuiltinIntelligentUiSync(): void {
   let mountedDisposers: Array<() => void> = [];
@@ -478,15 +359,40 @@ export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
   });
   mountBuiltinIntelligentUiSync();
   singletonRoot = root;
-  singletonRuntime = createClientPluginRuntime<Plugin>(root, {
+  singletonBuiltinCoordinator = createBuiltinCorePluginCoordinator(root, {
+    transport: rawHostPluginTransport,
+    safeMode: safeModeController,
+    descriptors: pendingBuiltinDescriptors,
+  });
+  const baseRuntime = createClientPluginRuntime<Plugin>(root, {
     transport: defaultTransport,
     modules: CLIENT_MODULES,
   });
+  singletonRuntime = {
+    setWorkspace(workspace) {
+      singletonBuiltinCoordinator?.setWorkspace(workspace);
+      baseRuntime.setWorkspace(workspace);
+    },
+    async sync() {
+      await Promise.all([
+        baseRuntime.sync(),
+        singletonBuiltinCoordinator?.sync() ?? Promise.resolve(),
+      ]);
+    },
+    async dispose() {
+      await singletonBuiltinCoordinator?.dispose();
+      await baseRuntime.dispose();
+    },
+  };
   return singletonRuntime;
 }
 
 export function getClientRootContext(): Context | undefined {
   return singletonRoot;
+}
+
+export function getBuiltinCorePluginCoordinator(): BuiltinCorePluginCoordinator | undefined {
+  return singletonBuiltinCoordinator;
 }
 
 export function whenClientPluginServicesReady(): Promise<void> {

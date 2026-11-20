@@ -39,7 +39,58 @@ export const CLIENT_SLOTS_DTS = `import type { ComponentType, ReactNode } from "
 import type { Context } from "@deepseek-ai/cordis";
 import type { StoreDecl } from "@qianji/client-store";
 
-export interface SlotMap {}
+export interface CoreSlotMap {
+  root: SlotSpec<{ readonly safeMode?: boolean }, "single", "root">;
+  "shell.menubar": SlotSpec<{ readonly title?: string; readonly sidebarVisible?: boolean; readonly onToggleSidebar?: () => void }, "single", "root">;
+  "shell.sidebar": SlotSpec<{ readonly visible?: boolean; readonly width?: number; readonly onResize?: (width: number) => void }, "single", "root">;
+  "shell.topbar": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly title?: string }, "single", "root">;
+  "shell.stage": SlotSpec<{ readonly route?: unknown; readonly cwd?: string; readonly sessionFile?: string | null; readonly hubView?: string | null; readonly draftMode?: boolean }, "chain", "session-maybe">;
+  "shell.workbench.right": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly open?: boolean; readonly maximized?: boolean }, "single", "session-maybe">;
+  "shell.workbench.bottom": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly open?: boolean; readonly activeTab?: string }, "single", "session-maybe">;
+  "shell.statusbar": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly align?: "left" | "right" }, "list", "session-maybe">;
+  "shell.overlays": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null }, "list", "root">;
+  "shell.modals": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null }, "list", "root">;
+  "sidebar.header": SlotSpec<{ readonly cwd?: string; readonly onNewTask?: () => void }, "single", "root">;
+  "sidebar.nav": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly activeView?: string | null }, "list", "root">;
+  "sidebar.threads": SlotSpec<{ readonly cwd?: string; readonly activeSessionFile?: string | null; readonly searchQuery?: string }, "single", "root">;
+  "sidebar.sessionRow": SlotSpec<{ readonly session: Record<string, unknown>; readonly active: boolean; readonly running?: boolean; readonly onSelect: () => void }, "chain", "root">;
+  "sidebar.sections": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null }, "list", "root">;
+  "sidebar.footer": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly onOpenSettings?: (page?: string) => void }, "single", "root">;
+  "home.hero": SlotSpec<{ readonly cwd?: string; readonly workspaceOptions?: readonly string[] }, "single", "root">;
+  "home.quickActions": SlotSpec<{ readonly cwd: string; readonly sessionFile: string | null; readonly prefillComposer: (prompt: string) => void; readonly sendPrompt: (prompt: string) => void }, "list", "root">;
+  "home.sections": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null }, "list", "root">;
+  "conversation.header": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null }, "list", "session">;
+  "conversation.transcript": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly messages?: readonly unknown[]; readonly isStreaming?: boolean }, "single", "session">;
+  "conversation.turn": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly turnIndex: number; readonly userMessage?: unknown; readonly assistantMessages: readonly unknown[]; readonly isStreaming: boolean; readonly isLastTurn: boolean }, "chain", "session">;
+  "conversation.message": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly message: Record<string, unknown>; readonly isStreaming?: boolean; readonly isLast?: boolean }, "chain", "session">;
+  "conversation.message.actions": SlotSpec<{ readonly cwd: string; readonly sessionFile: string | null; readonly message: Record<string, unknown>; readonly contentText: string }, "list", "session">;
+  "conversation.thinking": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly message: Record<string, unknown>; readonly thinking: string; readonly isStreaming?: boolean }, "chain", "session">;
+  "conversation.toolCall": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly call: Record<string, unknown>; readonly state: "running" | "error" | "ok"; readonly messageId?: string }, "keyed", "session">;
+  "conversation.markdown.codeBlock": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly language: string; readonly code: string; readonly isStreaming?: boolean }, "keyed", "session">;
+  "conversation.turnFooter": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly message: Record<string, unknown>; readonly durationMs?: number }, "list", "session">;
+  "conversation.composerDock": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly variant?: "task-start" | "follow-up"; readonly isolated?: boolean }, "single", "session-maybe">;
+  "conversation.approvalDialog": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly request: Record<string, unknown>; readonly onAnswer: (requestId: string, value: unknown) => void }, "chain", "session">;
+  "composer.main": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly variant?: "task-start" | "follow-up"; readonly sessionKey?: string; readonly isolated?: boolean; readonly isStreaming?: boolean; readonly pendingApproval?: boolean }, "chain", "session-maybe">;
+  "composer.banners": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly variant?: "task-start" | "follow-up"; readonly sessionKey?: string }, "list", "session-maybe">;
+  "composer.attachments": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly variant?: "task-start" | "follow-up"; readonly sessionKey?: string; readonly attachments: readonly unknown[]; readonly onRemove?: (index: number) => void }, "single", "session-maybe">;
+  "composer.input": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly variant?: "task-start" | "follow-up"; readonly sessionKey?: string; readonly placeholder?: string; readonly disabled?: boolean; readonly onSubmit?: () => void }, "single", "session-maybe">;
+  "composer.toolbar": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly variant?: "task-start" | "follow-up"; readonly sessionKey?: string }, "list", "session-maybe">;
+  "composer.status": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly variant?: "task-start" | "follow-up"; readonly sessionKey?: string; readonly position?: "before-model" | "after-model" }, "list", "session-maybe">;
+  "workbench.topbarControls": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null }, "list", "session-maybe">;
+  "workbench.tilingGrid": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly openPanes?: readonly string[]; readonly maximizedPaneId?: string | null }, "single", "session-maybe">;
+  "workbench.panes": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly paneId: string; readonly active: boolean; readonly maximized?: boolean; readonly onClose?: () => void }, "keyed", "session-maybe">;
+  "workbench.fileViewer": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly path: string; readonly content: string; readonly isBinary: boolean; readonly mimeType?: string; readonly dataBase64?: string; readonly size: number; readonly truncated?: boolean }, "keyed", "session-maybe">;
+  "workbench.inspector.sections": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null }, "list", "session-maybe">;
+  "workbench.bottom.tabs": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly tabId: string; readonly active: boolean }, "keyed", "session-maybe">;
+  "settings.shell": SlotSpec<{ readonly open?: boolean; readonly page?: string; readonly cwd?: string; readonly sessionFile?: string | null; readonly onClose?: () => void; readonly onSelectPage?: (page: string) => void }, "single", "root">;
+  "settings.pages": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly page: string; readonly closeSettings: () => void }, "keyed", "root">;
+  "settings.sections": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly page: string; readonly closeSettings: () => void }, "list", "root">;
+  "hub.pages": SlotSpec<{ readonly cwd?: string; readonly sessionFile?: string | null; readonly pageId: string; readonly onClose?: () => void }, "keyed", "root">;
+}
+export type CoreSlotKey = keyof CoreSlotMap;
+export declare const CORE_SLOT_SPECS: Readonly<Record<CoreSlotKey, ChildSlotDecl>>;
+
+export interface SlotMap extends CoreSlotMap {}
 export interface SlotFactoryMap {}
 export interface LocaleNamespaceMap {}
 export interface ResourceProtocolMap {}
@@ -590,6 +641,7 @@ export type FrontendServiceName =
 export type SafeModeReason = "query" | "window-flag" | "session-storage" | "hotkey" | "manual";
 
 export interface SafeModeSnapshot {
+  readonly active: boolean;
   readonly enabled: boolean;
   readonly reason: SafeModeReason | null;
   readonly toggledCount: number;

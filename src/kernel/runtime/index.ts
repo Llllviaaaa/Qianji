@@ -35,6 +35,23 @@ export {
 } from "./safeMode";
 
 export {
+  BuiltinCorePluginCoordinator,
+  createBuiltinCorePluginCoordinator,
+  type BuiltinCorePluginCoordinatorOptions,
+  type BuiltinCorePluginCoordinatorSnapshot,
+  type BuiltinCorePluginDescriptor,
+  type BuiltinCorePluginState,
+  type BuiltinCorePluginTransport,
+  type BuiltinPluginStateStatus,
+} from "./builtinCorePlugins";
+
+export {
+  describeSafeModeReason,
+  SafeModeBanner,
+  type SafeModeBannerProps,
+} from "./SafeModeBanner";
+
+export {
   clearPluginTiers,
   createSlotOverridesStore,
   getPluginTier,

@@ -3,7 +3,7 @@
  * Election/ownership helpers live in `election.ts`; Cordis service lives in `service.ts`.
  */
 import type { Context } from "@deepseek-ai/cordis";
-import { resolveContextPluginId } from "../../lib/clientPluginRuntime";
+import { resolveContextPluginId } from "../runtime/fiberIdentity";
 import {
   getPluginTier,
   slotOverridesStore,
