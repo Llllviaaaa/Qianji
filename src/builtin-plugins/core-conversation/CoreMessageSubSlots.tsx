@@ -167,6 +167,7 @@ export function CoreToolCallCard({
   state,
   cwd,
   sessionFile,
+  renderFactory,
 }: SlotComponentProps<ConversationToolCallSlotProps, "session">): ReactNode {
   const [expanded, setExpanded] = useState(false);
   const contributions = useClientContributions();
@@ -196,7 +197,7 @@ export function CoreToolCallCard({
   const summary = filePath !== null ? fileBaseName(filePath) : summarizeToolArgs(call.args);
   const hasDetail = (call.result !== undefined && call.result !== "") || Object.keys(call.args).length > 0;
 
-  return (
+  const fallbackCard = (
     <div
       className="dshc-tool"
       data-tool={call.name}
@@ -253,6 +254,8 @@ export function CoreToolCallCard({
       )}
     </div>
   );
+
+  return renderFactory("host.conversation.toolCall", { call }, { fallback: fallbackCard });
 }
 
 /* ── conversation.markdown.codeBlock ── */

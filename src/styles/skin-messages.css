@@ -110,6 +110,23 @@
   margin-top: 12px;
 }
 
+/* Slot-wrapper-safe vertical flow matching direct-sibling spacing across display: contents boundaries. */
+.codex-shot .conversation-transcript,
+.codex-shot .conversation-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.codex-shot .conversation-turn:has(.dshc-user-row) .dshc-turn:has(> .dshc-turn-process:first-child) {
+  margin-top: 10px;
+}
+
+.codex-shot .conversation-turn:has(.dshc-user-row) .dshc-turn:has(> .dshc-answer:first-child) {
+  margin-top: 6px;
+}
+
 .codex-shot .load-earlier-messages {
   display: flex;
   justify-content: center;
