@@ -1120,4 +1120,95 @@ describe("ADR 0023 Wave 2B: core-conversation & core-composer built-in plugins",
     mounted.unmount();
     await env.dispose();
   });
+
+  it("preserves streamingBehavior ('followUp' and 'steer') when submitting from CoreComposerDock while streaming", async () => {
+    const origSendMessage = useAppStore.getState().sendMessage;
+    const sendSpy = vi.fn(async () => true);
+    useAppStore.setState({
+      isStreaming: true,
+      sendMessage: sendSpy,
+    });
+
+    const env = await bootCoreChatKernel();
+    try {
+      const mounted = mountDom(
+        createElement(
+          SlotKernelProvider,
+          { registry: env.registry, ctx: env.root },
+          createElement(SlotHost, {
+            slotKey: "shell.stage",
+            kind: "chain",
+            scope: "session-maybe",
+            props: {
+              cwd: "/repo/core-chat",
+              sessionFile: "harness:sess-main-1",
+              hubView: null,
+              draftMode: false,
+            },
+            registry: env.registry,
+            rootCtx: env.root,
+          }),
+        ),
+      );
+
+      const textarea = mounted.container.findOne(
+        (el) => el.getAttribute("data-testid") === "composer-textarea",
+      ) as MiniTextareaElement | undefined;
+      expect(textarea).toBeDefined();
+
+      // Open streaming behavior menu and select "排队到下一轮" ("followUp")
+      const behaviorBtn = mounted.container.findOne((el) =>
+        (el.getAttribute("aria-label") ?? "").startsWith("运行中发送："),
+      );
+      expect(behaviorBtn).toBeDefined();
+      act(() => {
+        behaviorBtn?.dispatchEvent(new MiniEvent("click", { bubbles: true }));
+      });
+
+      const followUpOption = mounted.container.findOne(
+        (el) => el.getAttribute("role") === "menuitemradio" && el.textContent.includes("排队到下一轮"),
+      );
+      expect(followUpOption).toBeDefined();
+      act(() => {
+        followUpOption?.dispatchEvent(new MiniEvent("click", { bubbles: true }));
+      });
+
+      if (textarea !== undefined) {
+        setTextareaValue(textarea, "queue this follow-up while streaming");
+        await act(async () => {
+          textarea.dispatchEvent(new MiniEvent("keydown", { bubbles: true, key: "Enter" }));
+        });
+      }
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      expect(sendSpy).toHaveBeenCalledWith("queue this follow-up while streaming", [], "followUp");
+
+      // Switch back to "调整当前任务" ("steer") and verify "steer" is passed too
+      act(() => {
+        behaviorBtn?.dispatchEvent(new MiniEvent("click", { bubbles: true }));
+      });
+      const steerOption = mounted.container.findOne(
+        (el) => el.getAttribute("role") === "menuitemradio" && el.textContent.includes("调整当前任务"),
+      );
+      expect(steerOption).toBeDefined();
+      act(() => {
+        steerOption?.dispatchEvent(new MiniEvent("click", { bubbles: true }));
+      });
+
+      if (textarea !== undefined) {
+        setTextareaValue(textarea, "steer mid-turn");
+        await act(async () => {
+          textarea.dispatchEvent(new MiniEvent("keydown", { bubbles: true, key: "Enter" }));
+        });
+      }
+
+      expect(sendSpy).toHaveBeenCalledTimes(2);
+      expect(sendSpy).toHaveBeenNthCalledWith(2, "steer mid-turn", [], "steer");
+
+      mounted.unmount();
+    } finally {
+      useAppStore.setState({ sendMessage: origSendMessage, isStreaming: false });
+      await env.dispose();
+    }
+  });
 });

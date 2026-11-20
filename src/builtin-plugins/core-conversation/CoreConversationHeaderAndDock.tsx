@@ -2,7 +2,7 @@
  * Built-in default slot components for `conversation.header` and
  * `conversation.composerDock` (including `LivePlanBar`, ADR 0023 `core-conversation`).
  */
-import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronUp,
@@ -18,7 +18,6 @@ import {
   useSessionHandle,
   useSessionState,
   useWorkspaceState,
-  type AttachmentPayload,
   type UiMessage,
 } from "@qianji/client";
 import type {
@@ -220,14 +219,13 @@ export function CoreComposerDock({
   renderSlotChain,
 }: SlotComponentProps<ConversationComposerDockSlotProps, "session-maybe">): ReactNode {
   const sessionState = useSessionState();
-  const sessionService = useFrontendService("sessionService");
   const workspaceState = useWorkspaceState();
   const navigationState = useNavigationState();
   const handleOptions = useMemo(
     () => (isolated === true ? { isolated: true, cwd: ownerCwd } : undefined),
     [isolated, ownerCwd],
   );
-  const { handle, snapshot: handleSnap } = useSessionHandle(sessionId, handleOptions);
+  const { snapshot: handleSnap } = useSessionHandle(sessionId, handleOptions);
 
   const resolvedCwd = ownerCwd ?? handleSnap?.cwd ?? sessionState?.cwd ?? workspaceState?.cwd ?? "";
   const resolvedSessionFile =
@@ -237,19 +235,6 @@ export function CoreComposerDock({
   const resolvedSessionKey = sessionId ?? resolvedSessionFile ?? "__draft__";
   const isStreaming = handleSnap !== null ? handleSnap.isStreaming : (sessionState?.isStreaming ?? false);
   const pendingApproval = isolated !== true && navigationState?.extensionRequest != null;
-
-  const handleSend = useCallback(
-    async (text: string, attachments?: AttachmentPayload[]): Promise<boolean> => {
-      if (handle !== null) {
-        return handle.sendMessage(text, attachments);
-      }
-      if (sessionService !== undefined) {
-        return sessionService.sendMessage(text, attachments);
-      }
-      return false;
-    },
-    [handle, sessionService],
-  );
 
   return (
     <div
@@ -268,7 +253,6 @@ export function CoreComposerDock({
           isolated,
           isStreaming,
           pendingApproval,
-          onSend: handleSend,
         },
         {
           sessionId,
