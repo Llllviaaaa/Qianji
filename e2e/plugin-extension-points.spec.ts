@@ -27,6 +27,19 @@ const PAGE_CSS = \`
   background-color: rgb(7, 193, 96);
   color: rgb(255, 255, 255);
 }
+.ext-brand-title {
+  font-size: 20px;
+  letter-spacing: 2px;
+}
+.ext-primary-btn {
+  padding: 0 12px;
+  min-height: 32px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--qj-brand-contrast, #fff);
+  background: var(--qj-brand-primary);
+}
 .ext-section-pill {
   display: inline-flex;
   padding: 4px 10px;
@@ -48,8 +61,8 @@ export function apply(ctx: Context) {
     wide: true,
     render: ({ page }) => (
       <div className="ext-settings-layout" data-testid="ext-settings-page">
-        <span>设置页内容@{page}</span>
-        <span>右侧详情</span>
+        <span className="ext-brand-title" data-testid="ext-brand-title">设置页内容@{page}</span>
+        <button type="button" className="ext-primary-btn" data-testid="ext-primary-btn">填写应用凭据</button>
       </div>
     ),
   });
@@ -127,10 +140,11 @@ test("a client plugin extends settings, menus, keybindings, file and session men
     await installPlugin(app, pluginDir);
 
     // Settings: plugin card hides duplicate inline 配置 (since it contributes a Settings page),
-    // while an 扩展 group appears in the Settings left rail alongside Builtin pages and General cards.
-    await expect(
-      app.locator('article[data-plugin-id="e2e-ext-points"]').getByRole("button", { name: "配置" }),
-    ).toHaveCount(0);
+    // while its enabled toggle switch renders with the theme brand accent (not black).
+    const extCard = app.locator('article[data-plugin-id="e2e-ext-points"]');
+    await expect(extCard.getByRole("button", { name: "配置" })).toHaveCount(0);
+    const switchBg = await extCard.locator("button.settings-switch.on").evaluate((el) => window.getComputedStyle(el).backgroundColor);
+    expect(switchBg).toBe("rgb(0, 110, 228)");
     const nav = app.locator(".settings-nav-scroll");
     await expect(nav.locator(".settings-nav-group-label")).toHaveText("扩展");
     await nav.getByRole("button", { name: "扩展点演示" }).click();
@@ -138,16 +152,26 @@ test("a client plugin extends settings, menus, keybindings, file and session men
     await expect(extPage).toContainText("设置页内容@plugin:ext-points");
     await expect(app.locator(".settings-header-sub")).toHaveText("插件贡献的设置页");
     // Scoped plugin CSS (`@layer plugin-ui { @scope ([data-qj-plugin="e2e-ext-points"]) }`)
-    // must apply inside legacy `registerSettingsPage` surfaces.
+    // must apply inside legacy `registerSettingsPage` surfaces, and legacy resets must not
+    // clobber plugin button `color`, `font-size`, `font-weight`, or `letter-spacing`.
     const pageStyle = await extPage.evaluate((el) => {
       const style = window.getComputedStyle(el);
       const scope = el.closest("[data-qj-plugin]");
+      const btn = el.querySelector<HTMLButtonElement>('[data-testid="ext-primary-btn"]');
+      const btnStyle = btn ? window.getComputedStyle(btn) : null;
+      const title = el.querySelector<HTMLElement>('[data-testid="ext-brand-title"]');
+      const titleStyle = title ? window.getComputedStyle(title) : null;
       return {
         pluginId: scope?.getAttribute("data-qj-plugin"),
         slot: scope?.getAttribute("data-qj-slot"),
         display: style.display,
         backgroundColor: style.backgroundColor,
         borderRadius: style.borderRadius,
+        btnBackground: btnStyle?.backgroundColor,
+        btnColor: btnStyle?.color,
+        btnFontSize: btnStyle?.fontSize,
+        btnFontWeight: btnStyle?.fontWeight,
+        titleLetterSpacing: titleStyle?.letterSpacing,
       };
     });
     expect(pageStyle).toEqual({
@@ -156,6 +180,11 @@ test("a client plugin extends settings, menus, keybindings, file and session men
       display: "grid",
       backgroundColor: "rgb(7, 193, 96)",
       borderRadius: "14px",
+      btnBackground: "rgb(0, 110, 228)",
+      btnColor: "rgb(255, 255, 255)",
+      btnFontSize: "12.5px",
+      btnFontWeight: "600",
+      titleLetterSpacing: "2px",
     });
     await nav.getByRole("button", { name: "通用" }).click();
     await expect(app.locator(".settings-plugin-section h2")).toHaveText("扩展点卡片");

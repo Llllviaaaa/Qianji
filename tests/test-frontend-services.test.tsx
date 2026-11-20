@@ -762,6 +762,69 @@ describe("ADR 0023 Phase 2: Frontend Cordis Service Mesh", () => {
     unsub();
   });
 
+  it("ignores legacy persisted settings.accentColor when applying palette tokens, applies font settings, and honors explicit setAccentColor", async () => {
+    const styleProps = new Map<string, string>();
+    const fakeRoot = {
+      dataset: {} as Record<string, string>,
+      style: {
+        fontFamily: "",
+        color: "",
+        background: "",
+        setProperty(name: string, value: string) {
+          styleProps.set(name, value);
+        },
+        removeProperty(name: string) {
+          styleProps.delete(name);
+        },
+      },
+    };
+    const originalDocument = globalThis.document;
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        documentElement: fakeRoot,
+        getElementById: () => null,
+      },
+    });
+    try {
+      const currentSettings = useAppStore.getState().settings;
+      useAppStore.setState({
+        settings: {
+          ...(currentSettings ?? {}),
+          theme: "light",
+          accentColor: "#111111",
+          messageFontSize: 16,
+          uiFont: "TestUI, sans-serif",
+          codeFont: "TestMono, monospace",
+        } as NonNullable<ReturnType<typeof useAppStore.getState>["settings"]>,
+      });
+
+      root.themeService.applyToDocument();
+      expect(fakeRoot.dataset.theme).toBe("light");
+      expect(styleProps.get("--qj-brand-primary")).toBe("#006ee4");
+      expect(styleProps.get("--accent")).toBe("#006ee4");
+      expect(styleProps.get("--accent-custom")).toBe("#006ee4");
+      expect(styleProps.get("--qj-brand-contrast")).toBe("#ffffff");
+      expect(styleProps.get("--dsh-content-font-size")).toBe("16px");
+      expect(styleProps.get("--code-font")).toBe("TestMono, monospace");
+      expect(fakeRoot.style.fontFamily).toBe("TestUI, sans-serif");
+
+      await root.themeService.setAccentColor("#7c5cff");
+      expect(styleProps.get("--qj-brand-primary")).toBe("#7c5cff");
+      expect(styleProps.get("--accent")).toBe("#7c5cff");
+      expect(styleProps.get("--accent-custom")).toBe("#7c5cff");
+
+      await root.themeService.setAccentColor("");
+      expect(styleProps.get("--qj-brand-primary")).toBe("#006ee4");
+      expect(styleProps.get("--accent")).toBe("#006ee4");
+    } finally {
+      Object.defineProperty(globalThis, "document", {
+        configurable: true,
+        value: originalDocument,
+      });
+    }
+  });
+
   it("enforces shortcutService priority, allowInEditable, when matcher, Safe Mode exclusion, and Fiber disposal", async () => {
     expect(isReservedShortcutChord("Ctrl+Shift+Alt+R")).toBe(true);
     expect(isReservedShortcutChord("Cmd+Alt+Shift+R")).toBe(true);

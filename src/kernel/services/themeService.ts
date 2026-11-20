@@ -51,6 +51,9 @@ export interface ThemeServiceSnapshot {
   readonly accentColor: string;
   readonly uiScale: number;
   readonly resolvedScale: number;
+  readonly messageFontSize: number;
+  readonly uiFont: string;
+  readonly codeFont: string;
   readonly transcriptDensity: TranscriptDensity;
   readonly settingsLoaded: boolean;
   readonly settingsDisplayMode: "page" | "modal";
@@ -58,6 +61,9 @@ export interface ThemeServiceSnapshot {
   readonly shortcutToggleSidebar: string;
   readonly showThinking: boolean;
 }
+
+const DEFAULT_CODE_FONT_STACK =
+  '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, Courier, monospace';
 
 export interface ThemeServiceOptions {
   registry?: ClientContributionRegistry;
@@ -84,7 +90,7 @@ interface ThemeInternalState {
   readonly registry: ClientContributionRegistry;
   systemDark: boolean;
   localThemeId: string;
-  localAccentColor: string;
+  explicitAccentColor: string;
   localUiScale: number;
   localTranscriptDensity: TranscriptDensity;
   localSettingsDisplayMode: "page" | "modal";
@@ -108,7 +114,7 @@ export class ThemeService extends Service {
       registry,
       systemDark: readSystemPrefersDark(),
       localThemeId: "system",
-      localAccentColor: "",
+      explicitAccentColor: "",
       localUiScale: 100,
       localTranscriptDensity: "normal",
       localSettingsDisplayMode: "modal",
@@ -168,8 +174,16 @@ export class ThemeService extends Service {
     const themeId = settings?.theme ?? this.internal.localThemeId;
     const activeTheme = resolveAppearanceTheme(catalog, themeId, this.internal.systemDark);
     const resolvedScheme: "light" | "dark" = activeTheme.mode === "dark" ? "dark" : "light";
-    const accentColor = settings?.accentColor ?? this.internal.localAccentColor;
+    // Legacy `settings.json` may retain retired accent defaults (e.g. `#111111`); keep
+    // the active theme palette authoritative unless `setAccentColor()` is called explicitly.
+    const accentColor = this.internal.explicitAccentColor || activeTheme.palette?.accent || "";
     const uiScale = clampUiScalePercent(settings?.uiScale ?? this.internal.localUiScale);
+    const rawMessageFontSize = Number(settings?.messageFontSize);
+    const messageFontSize = Number.isFinite(rawMessageFontSize)
+      ? Math.min(22, Math.max(10, rawMessageFontSize))
+      : 15;
+    const uiFont = settings?.uiFont?.trim() || "var(--font-ui)";
+    const codeFont = settings?.codeFont?.trim() || DEFAULT_CODE_FONT_STACK;
     const transcriptDensity = settings
       ? normalizeTranscriptDensity(settings.transcriptDensity)
       : this.internal.localTranscriptDensity;
@@ -188,6 +202,9 @@ export class ThemeService extends Service {
       accentColor,
       uiScale,
       resolvedScale: resolveUiScale(uiScale),
+      messageFontSize,
+      uiFont,
+      codeFont,
       transcriptDensity,
       settingsLoaded: settings !== null,
       settingsDisplayMode,
@@ -240,8 +257,9 @@ export class ThemeService extends Service {
   }
 
   async setAccentColor(accentColor: string): Promise<void> {
-    this.internal.localAccentColor = accentColor;
-    await this.persistSettingsPatch({ accentColor });
+    const trimmed = accentColor.trim();
+    this.internal.explicitAccentColor = trimmed;
+    await this.persistSettingsPatch({ accentColor: trimmed });
     this.publish();
     this.applyToDocument();
   }
@@ -285,11 +303,15 @@ export class ThemeService extends Service {
       for (const [name, value] of Object.entries(vars)) {
         root.style.setProperty(name, value);
       }
-      if (snap.accentColor.trim() !== "") {
-        root.style.setProperty("--qj-brand-primary", snap.accentColor);
-        root.style.setProperty("--accent", snap.accentColor);
-        root.style.setProperty("--accent-custom", snap.accentColor);
+      const explicitAccent = this.internal.explicitAccentColor.trim();
+      if (explicitAccent !== "") {
+        root.style.setProperty("--qj-brand-primary", explicitAccent);
+        root.style.setProperty("--accent", explicitAccent);
+        root.style.setProperty("--accent-custom", explicitAccent);
       }
+      root.style.setProperty("--code-font", snap.codeFont);
+      root.style.setProperty("--dsh-content-font-size", `${snap.messageFontSize}px`);
+      root.style.fontFamily = snap.uiFont;
       root.style.color = palette.text;
       root.style.background = palette.sidebar;
     }
