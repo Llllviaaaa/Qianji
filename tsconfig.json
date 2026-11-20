@@ -20,10 +20,13 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* Curated renderer declarations and unified client plugin SDK entry */
+    /* Curated renderer declarations and unified client plugin SDK & microkernel entries */
     "paths": {
       "@deepseek-ai/cordis": ["./src/types/cordis.d.ts"],
-      "@qianji/client": ["./src/sdk/index.ts"]
+      "@qianji/client": ["./src/sdk/index.ts"],
+      "@qianji/client-slots": ["./src/kernel/slots/index.ts"],
+      "@qianji/client-store": ["./src/kernel/store/index.ts"],
+      "@qianji/client-primitives": ["./src/kernel/primitives/index.ts"]
     }
   },
   "include": ["src", "plugins/*/client.tsx"],

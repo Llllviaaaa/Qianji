@@ -17,6 +17,13 @@ import {
   useClientContributions,
 } from "./clientContributions";
 import {
+  createSafeModeGatedTransport,
+  installPluginStyleGlobals,
+  safeModeController,
+  setPluginTier,
+} from "../kernel/runtime";
+import { ClientSlotsService, clientSlotsRegistry } from "../kernel/slots";
+import {
   createClientPluginRuntime,
   resolveContextPluginId,
   type ClientPluginRuntimeHandle,
@@ -268,6 +275,9 @@ export const CLIENT_MODULES: Record<string, () => Promise<unknown>> = {
   "schemastery": () => import("@deepseek-ai/schemastery"),
   "@deepseek-ai/schemastery": () => import("@deepseek-ai/schemastery"),
   "@qianji/client": async () => qianjiClientSdk,
+  "@qianji/client-slots": () => import("../kernel/slots"),
+  "@qianji/client-store": () => import("../kernel/store"),
+  // "@qianji/client-primitives" plugs in here (or via registerClientModule) once Phase 2 lands.
   "@qianji/protocol": () => import("@qianji/protocol"),
   "@pid/client": async () => qianjiClientSdk,
   "@pid/protocol": () => import("@qianji/protocol"),
@@ -276,23 +286,36 @@ export const CLIENT_MODULES: Record<string, () => Promise<unknown>> = {
   "lucide-react": () => import("lucide-react"),
 };
 
-const defaultTransport: ClientPluginTransport = {
-  list: (workspace) => pluginClient.list(workspace),
-  clientBundle: (params) => pluginClient.clientBundle(params),
-  reportClientError: (params) => pluginClient.reportClientError(params),
-  clearClientError: (params) => pluginClient.clearClientError(params),
-  onChanged: (listener) => pluginClient.onChanged((payload) => listener(payload)),
-  onTrustChanged: (listener) => pluginClient.onTrustChanged(() => listener()),
-  onHostReconnect: (listener) => {
-    let seenConnected = false;
-    return harnessRuntimes.onHostStatus((status) => {
-      if (status === "connected") {
-        if (seenConnected) listener();
-        seenConnected = true;
-      }
-    });
+/** Register an additional shared module specifier (e.g. `@qianji/client-primitives`) before runtime preload. */
+export function registerClientModule(specifier: string, loader: () => Promise<unknown>): void {
+  CLIENT_MODULES[specifier] = loader;
+}
+
+const defaultTransport: ClientPluginTransport = createSafeModeGatedTransport(
+  {
+    list: (workspace) => pluginClient.list(workspace),
+    clientBundle: (params) => pluginClient.clientBundle(params),
+    reportClientError: (params) => pluginClient.reportClientError(params),
+    clearClientError: (params) => pluginClient.clearClientError(params),
+    onChanged: (listener) => pluginClient.onChanged((payload) => listener(payload)),
+    onTrustChanged: (listener) => pluginClient.onTrustChanged(() => listener()),
+    onHostReconnect: (listener) => {
+      let seenConnected = false;
+      return harnessRuntimes.onHostStatus((status) => {
+        if (status === "connected") {
+          if (seenConnected) listener();
+          seenConnected = true;
+        }
+      });
+    },
   },
-};
+  safeModeController,
+  (plugins) => {
+    for (const item of plugins) {
+      setPluginTier(item.id, item.tier);
+    }
+  },
+);
 
 let singletonRoot: Context | undefined;
 let singletonRuntime: ClientPluginRuntimeHandle | undefined;
@@ -431,10 +454,17 @@ function mountBuiltinIntelligentUiSync(): void {
 
 export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
   if (singletonRuntime !== undefined) return singletonRuntime;
+  installPluginStyleGlobals();
+  safeModeController.install();
   const root = new Context();
+  root.plugin(ClientSlotsService, clientSlotsRegistry);
   root.plugin(ClientContributionService, clientContributions);
   root.plugin(ClientStylesService);
   root.plugin(BetterSidebarCompatService, clientContributions);
+  clientSlotsRegistry.abdication.onAbdicate((record) => {
+    const fallbackNote = record.fallbackPluginId === undefined ? "" : `，已回退至 ${record.fallbackPluginId}`;
+    useAppStore.getState().showToast(`插件 "${record.pluginId}" 槽位 ${record.slotKey} 渲染异常${fallbackNote}`, "warning");
+  });
   mountBuiltinIntelligentUiSync();
   singletonRoot = root;
   singletonRuntime = createClientPluginRuntime<Plugin>(root, {
