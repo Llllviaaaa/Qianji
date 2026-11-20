@@ -17,20 +17,47 @@ const mark = (key: string, value: string) => {
   document.documentElement.dataset[key] = value;
 };
 
+const PAGE_CSS = \`
+.ext-settings-layout {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px;
+  border-radius: 14px;
+  background-color: rgb(7, 193, 96);
+  color: rgb(255, 255, 255);
+}
+.ext-section-pill {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background-color: rgb(51, 112, 255);
+  color: rgb(255, 255, 255);
+}
+\`;
+
 export const name = "e2e-ext-points-client";
-export const inject = ["contributions"];
+export const inject = ["contributions", "styles"];
 export function apply(ctx: Context) {
+  ctx.styles.inject(PAGE_CSS, "e2e-ext-points-settings");
+
   ctx.contributions.registerSettingsPage({
     id: "ext-points",
     label: "扩展点演示",
     subtitle: "插件贡献的设置页",
-    render: ({ page }) => <div data-testid="ext-settings-page">设置页内容@{page}</div>,
+    wide: true,
+    render: ({ page }) => (
+      <div className="ext-settings-layout" data-testid="ext-settings-page">
+        <span>设置页内容@{page}</span>
+        <span>右侧详情</span>
+      </div>
+    ),
   });
   ctx.contributions.registerSettingsSection({
     id: "ext-general-card",
     page: "general",
     title: "扩展点卡片",
-    render: () => <p data-testid="ext-general-section">通用页插件卡片</p>,
+    render: () => <p className="ext-section-pill" data-testid="ext-general-section">通用页插件卡片</p>,
   });
   ctx.contributions.registerMenuItem({
     id: "ext-tools",
@@ -107,11 +134,49 @@ test("a client plugin extends settings, menus, keybindings, file and session men
     const nav = app.locator(".settings-nav-scroll");
     await expect(nav.locator(".settings-nav-group-label")).toHaveText("扩展");
     await nav.getByRole("button", { name: "扩展点演示" }).click();
-    await expect(app.getByTestId("ext-settings-page")).toHaveText("设置页内容@plugin:ext-points");
+    const extPage = app.getByTestId("ext-settings-page");
+    await expect(extPage).toContainText("设置页内容@plugin:ext-points");
     await expect(app.locator(".settings-header-sub")).toHaveText("插件贡献的设置页");
+    // Scoped plugin CSS (`@layer plugin-ui { @scope ([data-qj-plugin="e2e-ext-points"]) }`)
+    // must apply inside legacy `registerSettingsPage` surfaces.
+    const pageStyle = await extPage.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      const scope = el.closest("[data-qj-plugin]");
+      return {
+        pluginId: scope?.getAttribute("data-qj-plugin"),
+        slot: scope?.getAttribute("data-qj-slot"),
+        display: style.display,
+        backgroundColor: style.backgroundColor,
+        borderRadius: style.borderRadius,
+      };
+    });
+    expect(pageStyle).toEqual({
+      pluginId: "e2e-ext-points",
+      slot: "settings.pages",
+      display: "grid",
+      backgroundColor: "rgb(7, 193, 96)",
+      borderRadius: "14px",
+    });
     await nav.getByRole("button", { name: "通用" }).click();
     await expect(app.locator(".settings-plugin-section h2")).toHaveText("扩展点卡片");
-    await expect(app.getByTestId("ext-general-section")).toBeVisible();
+    const extSection = app.getByTestId("ext-general-section");
+    await expect(extSection).toBeVisible();
+    const sectionStyle = await extSection.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      const scope = el.closest("[data-qj-plugin]");
+      return {
+        pluginId: scope?.getAttribute("data-qj-plugin"),
+        slot: scope?.getAttribute("data-qj-slot"),
+        backgroundColor: style.backgroundColor,
+        color: style.color,
+      };
+    });
+    expect(sectionStyle).toEqual({
+      pluginId: "e2e-ext-points",
+      slot: "settings.sections",
+      backgroundColor: "rgb(51, 112, 255)",
+      color: "rgb(255, 255, 255)",
+    });
     await app.getByRole("button", { name: "返回应用" }).first().click();
     await expect(nav).toHaveCount(0);
 

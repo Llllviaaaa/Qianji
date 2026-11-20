@@ -289,7 +289,9 @@ export function CoreHomeStage(props: SlotComponentProps<CoreShellStageProps, "se
                         <div
                           key={item.id}
                           data-qj-plugin={resolvedPluginId}
+                          data-qj-slot="home.quickActions"
                           data-qj-legacy-slot="home.quickActions"
+                          data-qj-entry={item.id}
                           style={{ display: "contents" }}
                         >
                           <SlotKernelErrorBoundary

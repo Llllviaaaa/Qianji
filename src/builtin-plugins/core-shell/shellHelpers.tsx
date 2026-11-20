@@ -164,7 +164,13 @@ export function LegacyContributionHost<C>({
 }): ReactNode {
   const resolvedPluginId = pluginId ?? "builtin";
   return (
-    <div data-qj-plugin={resolvedPluginId} data-qj-legacy-slot={slotKey} style={{ display: "contents" }}>
+    <div
+      data-qj-plugin={resolvedPluginId}
+      data-qj-slot={slotKey}
+      data-qj-legacy-slot={slotKey}
+      data-qj-entry={id}
+      style={{ display: "contents" }}
+    >
       <SlotKernelErrorBoundary
         pluginId={resolvedPluginId}
         entryId={`legacy:${slotKey}:${id}`}

@@ -11,6 +11,7 @@ import {
   SlotOwnershipPanel,
   coreSettingsPlugin,
 } from "../src/builtin-plugins/core-settings";
+import { clientContributions } from "../src/lib/clientContributions";
 import {
   createSafeModeController,
   createSlotOverridesStore,
@@ -534,5 +535,54 @@ describe("core-settings plugin & SlotOwnershipPanel", () => {
     await toggleSwitch();
     expect(calls.some((c) => c.method === "plugin.enable" && c.params?.id === "demo-ext")).toBe(true);
     expect(pluginEnabled).toBe(true);
+  });
+
+  it("wraps legacy registerSettingsPage and registerSettingsSection in data-qj-plugin scope boundaries", async () => {
+    const { root, registry } = await createCoreSettingsHarness();
+    const disposePage = clientContributions.registerSettingsPage({
+      id: "im-demo",
+      pluginId: "qianji-im",
+      label: "IM机器人",
+      wide: true,
+      render: () => <section className="dim-page" data-testid="im-settings-body">IM 面板</section>,
+    });
+    const disposeSection = clientContributions.registerSettingsSection({
+      id: "im-general-card",
+      pluginId: "qianji-im",
+      page: "general",
+      title: "IM 概览",
+      render: () => <div className="dim-card" data-testid="im-section-body">已在线</div>,
+    });
+    cleanups.push(() => {
+      disposeSection();
+      disposePage();
+    });
+
+    const { container } = await mountInDom(
+      <SlotKernelProvider registry={registry} ctx={root}>
+        <SlotHost slotKey="shell.modals" kind="list" scope="root" />
+      </SlotKernelProvider>,
+    );
+
+    act(() => { root.navigationService.openSettings("plugin:im-demo"); });
+    const pageBody = container.querySelector("[data-testid='im-settings-body']");
+    expect(pageBody).not.toBeNull();
+    const pageScope = pageBody?.parentElement;
+    expect(pageScope?.getAttribute("data-qj-plugin")).toBe("qianji-im");
+    expect(pageScope?.getAttribute("data-qj-slot")).toBe("settings.pages");
+    expect(pageScope?.getAttribute("data-qj-entry")).toBe("im-demo");
+    expect(pageScope?.style.display).toBe("contents");
+    const activePageWrap = container.querySelector("[data-active-settings-page='plugin:im-demo']");
+    expect(activePageWrap?.className).toContain("is-wide");
+
+    act(() => { root.navigationService.openSettings("general"); });
+    const sectionBody = container.querySelector("[data-testid='im-section-body']");
+    expect(sectionBody).not.toBeNull();
+    const sectionScope = sectionBody?.parentElement;
+    expect(sectionScope?.getAttribute("data-qj-plugin")).toBe("qianji-im");
+    expect(sectionScope?.getAttribute("data-qj-slot")).toBe("settings.sections");
+    expect(sectionScope?.getAttribute("data-qj-entry")).toBe("im-general-card");
+    expect(sectionScope?.className).toContain("settings-soft-card");
+    expect(sectionScope?.className).toContain("settings-plugin-card");
   });
 });

@@ -68,13 +68,19 @@ function LegacyContribBox<TContext>({
   readonly className?: string;
   readonly compact?: boolean;
 }): ReactNode {
-  const ownerPlugin = pluginId ?? "legacy-plugin";
+  const ownerPlugin = pluginId ?? "builtin";
   return (
-    <span className={className} data-qj-plugin={ownerPlugin} style={className === undefined ? { display: "contents" } : undefined}>
+    <div
+      className={className}
+      data-qj-plugin={ownerPlugin}
+      data-qj-slot={slotKey}
+      data-qj-entry={id}
+      style={className === undefined ? { display: "contents" } : undefined}
+    >
       <SlotKernelErrorBoundary pluginId={ownerPlugin} entryId={id} slotKey={slotKey} compact={compact}>
         <LegacyContribRunner renderFn={renderFn} context={context} />
       </SlotKernelErrorBoundary>
-    </span>
+    </div>
   );
 }
 
@@ -275,7 +281,7 @@ export function CoreCodeBlock({
         slotKey="conversation.markdown.codeBlock"
         renderFn={legacyRenderer.render}
         context={legacyCtx}
-        className="dshc-code-block-plugin"
+        className="markdown-plugin-block dshc-code-block-plugin"
       />
     );
   }

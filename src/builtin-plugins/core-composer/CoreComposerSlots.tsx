@@ -68,9 +68,24 @@ function LegacyComposerContribBox({
   readonly className?: string;
   readonly compact?: boolean;
 }): ReactNode {
-  const ownerPlugin = pluginId ?? "legacy-plugin";
+  const ownerPlugin = pluginId ?? "builtin";
+  const resolvedSlot = legacySlotName ?? slotKey;
+  if (className === undefined) {
+    return (
+      <div
+        data-qj-plugin={ownerPlugin}
+        data-qj-slot={resolvedSlot}
+        data-qj-entry={id}
+        style={{ display: "contents" }}
+      >
+        <SlotKernelErrorBoundary pluginId={ownerPlugin} entryId={id} slotKey={slotKey} compact={compact}>
+          <LegacyComposerContribRunner renderFn={renderFn} context={context} />
+        </SlotKernelErrorBoundary>
+      </div>
+    );
+  }
   return (
-    <span className={className} data-qj-plugin={ownerPlugin} data-qj-slot={legacySlotName}>
+    <span className={className} data-qj-plugin={ownerPlugin} data-qj-slot={resolvedSlot} data-qj-entry={id}>
       <SlotKernelErrorBoundary pluginId={ownerPlugin} entryId={id} slotKey={slotKey} compact={compact}>
         <LegacyComposerContribRunner renderFn={renderFn} context={context} />
       </SlotKernelErrorBoundary>
