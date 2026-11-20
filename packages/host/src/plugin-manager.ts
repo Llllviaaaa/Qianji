@@ -479,8 +479,15 @@ export class PluginManager {
   }
 
   private isProtectedBuiltin(id: string): boolean {
-    const builtinDef = (this.options.builtins?.(this.currentTrustedWorkspace) ?? []).find((entry) => entry.id === id);
-    return builtinDef?.canDisable === false;
+    return (this.options.builtins?.(this.currentTrustedWorkspace) ?? []).some(
+      (entry) => entry.id === id && entry.canDisable === false,
+    );
+  }
+
+  private isPinnedGateway(id: string): boolean {
+    return (this.options.builtins?.(this.currentTrustedWorkspace) ?? []).some(
+      (entry) => entry.id === id && entry.canDisable === false && entry.canOverride !== true,
+    );
   }
 
   async setEnabled(id: string, enabled: boolean, options: { workspace?: string; watch?: boolean } = {}): Promise<PluginMutationResult> {
@@ -545,7 +552,7 @@ export class PluginManager {
         });
         this.activeWorkspace = ws;
       } else {
-        if (this.isProtectedBuiltin(id)) {
+        if (this.isPinnedGateway(id)) {
           throw new Error(`Plugin "${id}" is an essential host transport gateway and cannot be reconfigured`);
         }
         updatePluginsStore(this.options.dataDir, (store) => {
@@ -577,7 +584,7 @@ export class PluginManager {
         this.errors.delete(id);
         this.clientErrors.delete(id);
         this.clearLoggedClientErrorKeys(id);
-        const forceIds = this.isProtectedBuiltin(id) ? undefined : new Set([id]);
+        const forceIds = this.isPinnedGateway(id) ? undefined : new Set([id]);
         await this.syncNow({
           reason: "reloaded",
           ...(forceIds === undefined ? {} : { forceIds }),
@@ -591,9 +598,7 @@ export class PluginManager {
         this.clientErrors.clear();
         this.clearLoggedClientErrorKeys();
         const reloadableIds = new Set(
-          this.latestSnapshot
-            .filter((entry) => entry.canDisable !== false)
-            .map((entry) => entry.id),
+          this.latestSnapshot.filter((entry) => !this.isPinnedGateway(entry.id)).map((entry) => entry.id),
         );
         await this.syncNow({ reason: "reloaded", forceIds: reloadableIds, ...(workspace === undefined ? {} : { workspace }) });
       }
@@ -653,7 +658,7 @@ export class PluginManager {
 
   async remove(id: string, workspace?: string): Promise<PluginMutationResult> {
     await this.enqueue(async () => {
-      const current = this.latestSnapshot.find((entry) => entry.id === id);
+      const current = this.latestCandidates.find((entry) => entry.id === id) ?? this.latestSnapshot.find((entry) => entry.id === id);
       removeUserPluginFiles(this.options.dataDir, id, current?.tier === "user" ? current.dir : undefined);
       if (current?.dir !== undefined) this.bundles.invalidateDir(current.dir);
       this.watcherController.clearPending(id);
@@ -820,11 +825,11 @@ export class PluginManager {
         name: candidate.name,
         version: candidate.version,
         ...(candidate.description === undefined ? {} : { description: candidate.description }),
-        tier: candidate.tier,
+        tier: mounted?.tier ?? candidate.tier,
         status,
         enabled: candidate.enabled,
         ...(candidate.canDisable ? {} : { canDisable: false }),
-        overridesBuiltin: candidate.overridesBuiltin,
+        overridesBuiltin: mounted !== undefined ? (mounted.tier !== "builtin" && candidate.overridesBuiltin) : candidate.overridesBuiltin,
         removable: candidate.removable,
         hasHost: candidate.hasHost,
         hasClient: candidate.hasClient,
@@ -844,6 +849,51 @@ export class PluginManager {
         ...(clientErr === undefined ? {} : { clientError: clientErr }),
       };
     });
+  }
+
+  private resolveRollbackFiber(
+    candidate: ResolvedCandidate,
+    previous: MountedFiber | undefined,
+    replacedMounted: ReadonlyMap<string, MountedFiber>,
+  ): MountedFiber | undefined {
+    const existing = previous ?? replacedMounted.get(candidate.id);
+    if (existing?.plugin !== undefined) return existing;
+    const fb = candidate.fallbackBuiltin;
+    if (fb === undefined) return undefined;
+    return {
+      id: candidate.id,
+      tier: "builtin",
+      sourceKey: "builtin:builtin:::",
+      signature: signatureOf(fb.config),
+      plugin: fb.plugin,
+      config: fb.config,
+      ctx: this.ctx,
+      inject: fb.inject,
+      provides: fb.provides,
+    };
+  }
+
+  private async tryRestoreRollback(
+    candidate: ResolvedCandidate,
+    rollback: MountedFiber | undefined,
+    detail: string,
+    msg: string,
+    changed: string[],
+  ): Promise<boolean> {
+    if (candidate.tier === "builtin" || rollback?.plugin === undefined) return false;
+    try {
+      const restored = rollback.ctx.plugin(rollback.plugin, rollback.config);
+      await restored;
+      this.mounted.set(candidate.id, { ...rollback, fiber: restored });
+      this.errors.set(candidate.id, `HMR reload failed (rolled back): ${detail}`);
+      this.ctx.logger("plugins").error("plugin=%s failed, restored previous fiber: %s", candidate.id, detail);
+      this.notifyUserWarning(`插件 ${candidate.name} 热重载失败（已回滚旧版本）：${msg}`);
+      if (!changed.includes(candidate.id)) changed.push(candidate.id);
+      return true;
+    } catch (restoreError) {
+      this.ctx.logger("plugins").error("plugin=%s rollback failed: %s", candidate.id, errorDetailWithStack(restoreError));
+      return false;
+    }
   }
 
   private async syncNow(params: {
@@ -874,6 +924,7 @@ export class PluginManager {
       const changed: string[] = [];
       const candidateById = new Map(candidates.map((c) => [c.id, c]));
       const toUnmount: MountedFiber[] = [];
+      const replacedMounted = new Map<string, MountedFiber>();
       for (const mounted of this.mounted.values()) {
         const target = candidateById.get(mounted.id);
         const stillWanted = target !== undefined
@@ -883,6 +934,9 @@ export class PluginManager {
           && (mounted.tier !== "workspace" || mounted.workspaceKey === activeWsKey);
         if (!stillWanted) {
           toUnmount.push(mounted);
+          if (target !== undefined && target.enabled && target.tier !== mounted.tier) {
+            replacedMounted.set(mounted.id, mounted);
+          }
         }
       }
 
@@ -903,50 +957,36 @@ export class PluginManager {
       const externalNeeded = candidates.some(
         (c) => c.enabled && c.builtinPlugin === undefined && c.hasHost && c.hostEntry !== undefined,
       );
-      if (externalNeeded) {
-        await installHostModuleBridge();
-      }
+      if (externalNeeded) await installHostModuleBridge();
 
       const preparedList: PreparedCandidate[] = [];
       for (const candidate of candidates) {
         if (candidate.manifestError !== undefined) {
-          this.errors.set(candidate.id, candidate.manifestError);
+          const rollback = !candidate.canDisable ? this.resolveRollbackFiber(candidate, undefined, replacedMounted) : undefined;
+          const restored = await this.tryRestoreRollback(candidate, rollback, candidate.manifestError, redactSensitiveText(candidate.manifestError), changed);
+          if (!restored) this.errors.set(candidate.id, candidate.manifestError);
           continue;
         }
         if (!candidate.enabled) continue;
 
         const sourceKey = `${candidate.tier}:${candidate.dir ?? "builtin"}:${candidate.hostEntry ?? ""}:${candidate.clientEntry ?? ""}:${candidate.skillsDir ?? ""}`;
         const sig = signatureOf(candidate.effectiveConfig);
-        const pinnedGateway = candidate.tier === "builtin" && !candidate.canDisable;
+        const pinnedGateway = candidate.tier === "builtin" && !candidate.canDisable && !candidate.canOverride;
         const force = !pinnedGateway && params.forceIds?.has(candidate.id) === true;
-        if (this.circuitBroken.has(candidate.id) && !force) {
-          continue;
-        }
-        if (force) {
-          this.circuitBroken.delete(candidate.id);
-        }
+        if (this.circuitBroken.has(candidate.id) && !force) continue;
+        if (force) this.circuitBroken.delete(candidate.id);
         const current = this.mounted.get(candidate.id);
 
         if (current !== undefined && (pinnedGateway || (!force && current.sourceKey === sourceKey && current.signature === sig))) {
           candidate.inject = current.inject;
           candidate.provides = current.provides;
-          preparedList.push({
-            candidate,
-            sourceKey,
-            signature: sig,
-            needsMount: false,
-            skippedDueToError: false,
-          });
+          preparedList.push({ candidate, sourceKey, signature: sig, needsMount: false, skippedDueToError: false });
           continue;
         }
 
         if (candidate.builtinPlugin !== undefined || (candidate.tier === "builtin" && candidate.dir === undefined)) {
           preparedList.push({
-            candidate,
-            sourceKey,
-            signature: sig,
-            needsMount: true,
-            skippedDueToError: false,
+            candidate, sourceKey, signature: sig, needsMount: true, skippedDueToError: false,
             ...(candidate.builtinPlugin === undefined ? {} : { pluginToMount: candidate.builtinPlugin }),
           });
           continue;
@@ -955,19 +995,13 @@ export class PluginManager {
         let clientEtag: string | undefined;
         if (candidate.clientEntry !== undefined && candidate.dir !== undefined) {
           try {
-            const compiled = await this.bundles.compile(candidate.id, candidate.dir, candidate.clientEntry);
-            clientEtag = compiled.etag;
+            clientEtag = (await this.bundles.compile(candidate.id, candidate.dir, candidate.clientEntry)).etag;
           } catch (error) {
             const msg = redactSensitiveText(errorMessage(error));
             const detail = errorDetailWithStack(error);
             if (current !== undefined && force) {
-              const rollbackMsg = `Client bundle error (kept previous state): ${detail}`;
-              this.errors.set(candidate.id, rollbackMsg);
-              this.ctx.logger("plugins").error(
-                "plugin=%s client bundle compile failed (kept previous state): %s",
-                candidate.id,
-                detail,
-              );
+              this.errors.set(candidate.id, `Client bundle error (kept previous state): ${detail}`);
+              this.ctx.logger("plugins").error("plugin=%s client bundle compile failed (kept previous state): %s", candidate.id, detail);
               this.notifyUserWarning(`插件 ${candidate.name} 前端热更新失败：${msg}`);
               changed.push(candidate.id);
               candidate.inject = current.inject;
@@ -979,10 +1013,12 @@ export class PluginManager {
               await current.fiber?.dispose();
               this.mounted.delete(candidate.id);
             }
-            this.errors.set(candidate.id, detail);
-            this.ctx.logger("plugins").error("plugin=%s client bundle compile failed: %s", candidate.id, detail);
-            this.notifyUserWarning(`插件 ${candidate.name} 前端编译失败：${msg}`);
-            changed.push(candidate.id);
+            if (!(await this.tryRestoreRollback(candidate, this.resolveRollbackFiber(candidate, undefined, replacedMounted), detail, msg, changed))) {
+              this.errors.set(candidate.id, detail);
+              this.ctx.logger("plugins").error("plugin=%s client bundle compile failed: %s", candidate.id, detail);
+              this.notifyUserWarning(`插件 ${candidate.name} 前端编译失败：${msg}`);
+              changed.push(candidate.id);
+            }
             preparedList.push({ candidate, sourceKey, signature: sig, needsMount: false, skippedDueToError: true });
             continue;
           }
@@ -990,11 +1026,7 @@ export class PluginManager {
 
         if (!candidate.hasHost || candidate.hostEntry === undefined) {
           preparedList.push({
-            candidate,
-            sourceKey,
-            signature: sig,
-            needsMount: true,
-            skippedDueToError: false,
+            candidate, sourceKey, signature: sig, needsMount: true, skippedDueToError: false,
             ...(clientEtag === undefined ? {} : { clientEtag }),
           });
           continue;
@@ -1003,16 +1035,9 @@ export class PluginManager {
         let nextPlugin: Plugin;
         try {
           this.importCounter += 1;
-          const mod = await importExternalModule(
-            candidate.hostEntry,
-            `${Date.now()}-${this.importCounter}`,
-            candidate.dir,
-          );
+          const mod = await importExternalModule(candidate.hostEntry, `${Date.now()}-${this.importCounter}`, candidate.dir);
           nextPlugin = resolveCordisPluginExport(mod, candidate.id, candidate.inject);
-          const depMeta = extractPluginDependencyMeta(mod, {
-            inject: candidate.inject,
-            provides: candidate.provides,
-          });
+          const depMeta = extractPluginDependencyMeta(mod, { inject: candidate.inject, provides: candidate.provides });
           candidate.inject = depMeta.inject;
           candidate.provides = depMeta.provides;
         } catch (error) {
@@ -1020,11 +1045,7 @@ export class PluginManager {
           const detail = errorDetailWithStack(error);
           if (current !== undefined && current.plugin !== undefined) {
             this.errors.set(candidate.id, `HMR reload failed (rolled back): ${detail}`);
-            this.ctx.logger("plugins").error(
-              "plugin=%s reload import failed, keeping previous fiber: %s",
-              candidate.id,
-              detail,
-            );
+            this.ctx.logger("plugins").error("plugin=%s reload import failed, keeping previous fiber: %s", candidate.id, detail);
             this.notifyUserWarning(`插件 ${candidate.name} 热重载失败（已回滚旧版本）：${msg}`);
             changed.push(candidate.id);
             candidate.inject = current.inject;
@@ -1036,21 +1057,18 @@ export class PluginManager {
             await current.fiber?.dispose();
             this.mounted.delete(candidate.id);
           }
-          this.errors.set(candidate.id, detail);
-          this.ctx.logger("plugins").error("plugin=%s import failed: %s", candidate.id, detail);
-          this.notifyUserWarning(`插件 ${candidate.name} 加载失败：${msg}`);
-          changed.push(candidate.id);
+          if (!(await this.tryRestoreRollback(candidate, this.resolveRollbackFiber(candidate, undefined, replacedMounted), detail, msg, changed))) {
+            this.errors.set(candidate.id, detail);
+            this.ctx.logger("plugins").error("plugin=%s import failed: %s", candidate.id, detail);
+            this.notifyUserWarning(`插件 ${candidate.name} 加载失败：${msg}`);
+            changed.push(candidate.id);
+          }
           preparedList.push({ candidate, sourceKey, signature: sig, needsMount: false, skippedDueToError: true });
           continue;
         }
 
         preparedList.push({
-          candidate,
-          sourceKey,
-          signature: sig,
-          needsMount: true,
-          skippedDueToError: false,
-          pluginToMount: nextPlugin,
+          candidate, sourceKey, signature: sig, needsMount: true, skippedDueToError: false, pluginToMount: nextPlugin,
           ...(clientEtag === undefined ? {} : { clientEtag }),
         });
       }
@@ -1063,9 +1081,7 @@ export class PluginManager {
 
       for (const orderedCandidate of ordered) {
         const prepared = preparedById.get(orderedCandidate.id);
-        if (prepared === undefined || !prepared.needsMount || prepared.skippedDueToError) {
-          continue;
-        }
+        if (prepared === undefined || !prepared.needsMount || prepared.skippedDueToError) continue;
 
         const { candidate, sourceKey, signature: sig, pluginToMount, clientEtag } = prepared;
         const previous = this.mounted.get(candidate.id);
@@ -1074,9 +1090,7 @@ export class PluginManager {
           : this.ctx;
 
         if (!candidate.hasHost || pluginToMount === undefined) {
-          if (previous !== undefined) {
-            await previous.fiber?.dispose();
-          }
+          if (previous !== undefined) await previous.fiber?.dispose();
           this.mounted.set(candidate.id, {
             id: candidate.id,
             tier: candidate.tier,
@@ -1135,33 +1149,12 @@ export class PluginManager {
           const msg = redactSensitiveText(errorMessage(error));
           const detail = errorDetailWithStack(error);
           await nextFiber?.dispose();
-          if (candidate.tier !== "builtin" && previous?.plugin !== undefined) {
-            try {
-              const restored = previous.ctx.plugin(previous.plugin, previous.config);
-              await restored;
-              this.mounted.set(candidate.id, { ...previous, fiber: restored });
-              this.errors.set(candidate.id, `HMR reload failed (rolled back): ${detail}`);
-              this.ctx.logger("plugins").error(
-                "plugin=%s apply failed, restored previous fiber: %s",
-                candidate.id,
-                detail,
-              );
-              this.notifyUserWarning(`插件 ${candidate.name} 热重载失败（已回滚旧版本）：${msg}`);
-              if (!changed.includes(candidate.id)) changed.push(candidate.id);
-              continue;
-            } catch (restoreError) {
-              this.ctx.logger("plugins").error(
-                "plugin=%s rollback failed: %s",
-                candidate.id,
-                errorDetailWithStack(restoreError),
-              );
-            }
+          if (await this.tryRestoreRollback(candidate, this.resolveRollbackFiber(candidate, previous, replacedMounted), detail, msg, changed)) {
+            continue;
           }
           this.errors.set(candidate.id, detail);
           this.ctx.logger("plugins").error("plugin=%s apply failed: %s", candidate.id, detail);
-          if (candidate.tier !== "builtin") {
-            this.notifyUserWarning(`插件 ${candidate.name} 启动失败：${msg}`);
-          }
+          if (candidate.tier !== "builtin") this.notifyUserWarning(`插件 ${candidate.name} 启动失败：${msg}`);
           if (!changed.includes(candidate.id)) changed.push(candidate.id);
         }
       }

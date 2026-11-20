@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { Context, Service } from "@deepseek-ai/cordis";
+import { AgentLoop } from "@qianji/agent-loop";
 import type { PluginInfo } from "@qianji/protocol";
 import type { RpcHandler, RpcService } from "@qianji/rpc";
 import { corePlugins } from "../packages/host/src/agent-plugins.ts";
@@ -248,7 +249,7 @@ describe("Official bundled feature plugins suite", () => {
     const host = createHost({
       version: "0.0.0-test",
       dataDir,
-      plugins: [...corePlugins(), [TestRpcService]],
+      plugins: [...corePlugins(), [AgentLoop], [TestRpcService]],
     });
     await host.start();
     const manager = new PluginManager(host.ctx, {
