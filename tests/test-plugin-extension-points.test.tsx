@@ -719,5 +719,5 @@ export function apply(ctx: Context) {
     } finally {
       rmSync(tempBase, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 90_000);
 });
