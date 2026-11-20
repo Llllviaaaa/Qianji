@@ -76,7 +76,7 @@ export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
         }
       })
       .catch(() => undefined);
-    const offChanged = rpcService?.onNotification("plugin.changed", () => {
+    const offChanged = rpcService?.onNotification("plugin/changed", () => {
       if (!cancelled) void loadPlugins();
     }, { eagerConnect: false });
     return () => {

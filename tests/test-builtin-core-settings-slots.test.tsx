@@ -474,8 +474,9 @@ describe("core-settings plugin & SlotOwnershipPanel", () => {
     expect(root.navigationService.getSnapshot().settingsOpen).toBe(false);
   });
 
-  it("loads and toggles plugins via Host RPC plugin.list, plugin.disable, and plugin.enable", async () => {
+  it("loads and toggles plugins via Host RPC plugin.list, plugin.disable, plugin.enable, and plugin/changed", async () => {
     const calls: Array<{ readonly method: string; readonly params?: Record<string, unknown> }> = [];
+    const notifListeners = new Map<string, Set<(params: unknown) => void>>();
     let pluginEnabled = true;
     const makePlugin = (): PluginInfo => ({
       id: "demo-ext", name: "Demo Extension", version: "1.0.0", description: "demo",
@@ -490,7 +491,12 @@ describe("core-settings plugin & SlotOwnershipPanel", () => {
         if (method === "plugin.enable") { pluginEnabled = true; return { ok: true, plugins: [makePlugin()] } as T; }
         throw new Error(`Unexpected RPC method: ${method}`);
       },
-      onNotification: () => () => undefined,
+      onNotification: (method, listener) => {
+        const set = notifListeners.get(method) ?? new Set();
+        set.add(listener);
+        notifListeners.set(method, set);
+        return () => { set.delete(listener); };
+      },
       onHostStatus: () => () => undefined,
       reconnectNow: () => undefined,
     };
@@ -504,7 +510,15 @@ describe("core-settings plugin & SlotOwnershipPanel", () => {
     await act(async () => { root.navigationService.openSettings("plugins"); await Promise.resolve(); });
 
     expect(calls[0]?.method).toBe("plugin.list");
+    expect(notifListeners.get("plugin/changed")?.size).toBe(1);
     expect(container.querySelector("[data-testid='settings-plugin-row-demo-ext']")?.textContent).toContain("Demo Extension");
+
+    const listCallsBefore = calls.filter((c) => c.method === "plugin.list").length;
+    await act(async () => {
+      for (const fn of notifListeners.get("plugin/changed") ?? []) fn({ reason: "reload" });
+      await Promise.resolve();
+    });
+    expect(calls.filter((c) => c.method === "plugin.list").length).toBeGreaterThan(listCallsBefore);
 
     const toggleSwitch = async () => {
       await act(async () => {
