@@ -2,16 +2,15 @@
  * Plugins settings page and the convenience `settings.sections` shortcut card
  * on `"plugins"` linking directly to `"slots"` via `openSettingsPage("slots")`.
  */
-import { useCallback, useMemo, useSyncExternalStore, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactElement } from "react";
 import { ArrowRight, Layers, RefreshCw, ShieldAlert } from "lucide-react";
-import type { PluginInfo } from "@qianji/protocol";
+import type { PluginInfo, PluginListResult, PluginMutationResult, PluginToggleParams } from "@qianji/protocol";
 import {
   callHostRpc,
   openSettingsPage,
   useClientContext,
   useClientContributions,
   useFrontendService,
-  useHostRpcQuery,
   useRpcState,
   useSafeMode,
   useSlotOverrides,
@@ -31,31 +30,72 @@ import { buildSlotOwnershipRows } from "./slotCatalogMetadata";
 type PageCompProps = SlotComponentProps<SettingsPageSlotProps, "root">;
 type SectionCompProps = SlotComponentProps<SettingsSectionSlotProps, "root">;
 
+function buildWorkspaceParams(workspace: string): Record<string, unknown> {
+  const trimmed = workspace.trim();
+  return trimmed !== "" ? { workspace: trimmed } : {};
+}
+
 export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactElement {
   const workspaceState = useWorkspaceState(ctx);
   const rpcState = useRpcState(ctx);
+  const rpcService = useFrontendService("rpcService", ctx);
   const safeMode = useSafeMode();
   const contributions = useClientContributions();
   const hostConnected = rpcState?.hostStatus === "connected" || workspaceState?.hostConnected === true;
   const effectiveCwd = workspaceState?.cwd || cwd || "";
 
-  const pluginsQuery = useHostRpcQuery<PluginInfo[]>(
-    "plugins/list",
-    effectiveCwd !== "" ? { workspace: effectiveCwd } : undefined,
-    { enabled: hostConnected },
+  const [plugins, setPlugins] = useState<readonly PluginInfo[]>([]);
+
+  const invokeRpc = useCallback(
+    async <T,>(method: string, params?: Record<string, unknown>): Promise<T> => {
+      if (rpcService !== undefined) {
+        return rpcService.call<T>(method, params);
+      }
+      return callHostRpc<T>(method, params);
+    },
+    [rpcService],
   );
-  const plugins = pluginsQuery.data ?? [];
+
+  const loadPlugins = useCallback(async (): Promise<void> => {
+    if (!hostConnected) return;
+    try {
+      const result = await invokeRpc<PluginListResult>("plugin.list", buildWorkspaceParams(effectiveCwd));
+      setPlugins(Array.isArray(result?.plugins) ? result.plugins : []);
+    } catch {
+      // Keep last known snapshot when Host RPC is unavailable or offline.
+    }
+  }, [effectiveCwd, hostConnected, invokeRpc]);
+
+  useEffect(() => {
+    if (!hostConnected) return undefined;
+    let cancelled = false;
+    void invokeRpc<PluginListResult>("plugin.list", buildWorkspaceParams(effectiveCwd))
+      .then((result) => {
+        if (!cancelled) {
+          setPlugins(Array.isArray(result?.plugins) ? result.plugins : []);
+        }
+      })
+      .catch(() => undefined);
+    const offChanged = rpcService?.onNotification("plugin.changed", () => {
+      if (!cancelled) void loadPlugins();
+    }, { eagerConnect: false });
+    return () => {
+      cancelled = true;
+      offChanged?.();
+    };
+  }, [effectiveCwd, hostConnected, invokeRpc, loadPlugins, rpcService]);
 
   const handleTogglePlugin = useCallback(
     async (plugin: PluginInfo, nextEnabled: boolean): Promise<void> => {
-      await callHostRpc("plugins/setEnabled", {
+      const method = nextEnabled ? "plugin.enable" : "plugin.disable";
+      const params: PluginToggleParams = {
         id: plugin.id,
-        enabled: nextEnabled,
-        ...(effectiveCwd !== "" ? { workspace: effectiveCwd } : {}),
-      });
-      await pluginsQuery.refetch();
+        ...(effectiveCwd.trim() !== "" ? { workspace: effectiveCwd.trim() } : {}),
+      };
+      await invokeRpc<PluginMutationResult>(method, { ...params });
+      await loadPlugins();
     },
-    [effectiveCwd, pluginsQuery],
+    [effectiveCwd, invokeRpc, loadPlugins],
   );
 
   return (
@@ -80,7 +120,7 @@ export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
             <Badge variant="neutral">动态主题 {contributions.themes.length}</Badge>
           </div>
           {hostConnected && (
-            <Button type="button" size="sm" variant="secondary" onClick={() => void pluginsQuery.refetch()}>
+            <Button type="button" size="sm" variant="secondary" onClick={() => void loadPlugins()}>
               <RefreshCw size={12} />
               <span>刷新列表</span>
             </Button>
@@ -89,9 +129,9 @@ export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
       </Card>
 
       {plugins.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <div data-testid="settings-plugins-list" style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {plugins.map((plugin) => (
-            <Card key={plugin.id} variant="default" padding="sm">
+            <Card key={plugin.id} variant="default" padding="sm" data-testid={`settings-plugin-row-${plugin.id}`}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
@@ -106,6 +146,7 @@ export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
                   )}
                 </div>
                 <Switch
+                  data-testid={`settings-plugin-toggle-${plugin.id}`}
                   aria-label={`启用或停用插件 ${plugin.id}`}
                   checked={plugin.enabled !== false && plugin.status !== "disabled"}
                   disabled={plugin.canDisable === false}

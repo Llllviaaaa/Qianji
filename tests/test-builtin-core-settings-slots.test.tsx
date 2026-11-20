@@ -16,7 +16,8 @@ import {
   createSlotOverridesStore,
   safeModeController,
 } from "../src/kernel/runtime";
-import { registerFrontendServices } from "../src/kernel/services";
+import { registerFrontendServices, type RpcTransport } from "../src/kernel/services";
+import type { PluginInfo } from "@qianji/protocol";
 import {
   ClientSlotsService,
   CORE_SLOT_SPECS,
@@ -235,12 +236,8 @@ function setControlValue(el: MiniElement | null, nextValue: string): void {
   const descriptor = Object.getOwnPropertyDescriptor(MiniElement.prototype, "value");
   act(() => {
     descriptor?.set?.call(el, nextValue);
-    if (el.tagName === "SELECT") {
-      el.dispatchEvent(new MiniEvent("change", { bubbles: true, cancelable: true }));
-    } else {
-      el.dispatchEvent(new MiniEvent("input", { bubbles: true, cancelable: true }));
-      el.dispatchEvent(new MiniEvent("change", { bubbles: true, cancelable: true }));
-    }
+    if (el.tagName === "SELECT") el.dispatchEvent(new MiniEvent("change", { bubbles: true, cancelable: true }));
+    else { el.dispatchEvent(new MiniEvent("input", { bubbles: true, cancelable: true })); el.dispatchEvent(new MiniEvent("change", { bubbles: true, cancelable: true })); }
   });
 }
 
@@ -264,38 +261,28 @@ async function mountInDom(node: ReactNode) {
   cleanups.push(() => {
     win.clearAllTimers();
     act(() => { root?.unmount(); });
-    for (const key of keys) {
-      if (saved[key] === undefined) delete g[key];
-      else g[key] = saved[key];
-    }
+    for (const key of keys) { if (saved[key] === undefined) delete g[key]; else g[key] = saved[key]; }
   });
   return { doc, win, container };
 }
 
-async function createCoreSettingsHarness() {
-  const storage = createMemoryStorage();
-  const overrides = createSlotOverridesStore({ storage });
+async function createCoreSettingsHarness(rpcTransport?: RpcTransport) {
+  const overrides = createSlotOverridesStore({ storage: createMemoryStorage() });
   const registry = new SlotRegistry({ overrides });
   registry.defineSlot("shell.modals", CORE_SLOT_SPECS["shell.modals"]);
   registry.defineSlot("shell.sidebar", CORE_SLOT_SPECS["shell.sidebar"]);
   registry.defineSlot("shell.topbar", CORE_SLOT_SPECS["shell.topbar"]);
   const root = new Context();
   await root.plugin(ClientSlotsService, registry);
-  await registerFrontendServices(root, { shortcutTarget: null });
+  await registerFrontendServices(root, { shortcutTarget: null, ...(rpcTransport === undefined ? {} : { rpcTransport }) });
   const settingsFiber = await root.plugin(coreSettingsPlugin);
-  cleanups.push(async () => {
-    await Promise.resolve(settingsFiber.dispose()).catch(() => undefined);
-    registry.dispose();
-  });
+  cleanups.push(async () => { await Promise.resolve(settingsFiber.dispose()).catch(() => undefined); registry.dispose(); });
   return { root, registry, overrides, settingsFiber };
 }
 
 afterEach(async () => {
   safeModeController.disable();
-  while (cleanups.length > 0) {
-    const fn = cleanups.pop();
-    if (fn !== undefined) await fn();
-  }
+  while (cleanups.length > 0) { const fn = cleanups.pop(); if (fn !== undefined) await fn(); }
 });
 
 describe("core-settings plugin & SlotOwnershipPanel", () => {
@@ -485,5 +472,53 @@ describe("core-settings plugin & SlotOwnershipPanel", () => {
     act(() => { root.navigationService.openSettings("general"); });
     act(() => { container.querySelector("[data-testid='core-settings-backdrop']")?.dispatchEvent(new MiniEvent("mousedown", { bubbles: true, cancelable: true })); });
     expect(root.navigationService.getSnapshot().settingsOpen).toBe(false);
+  });
+
+  it("loads and toggles plugins via Host RPC plugin.list, plugin.disable, and plugin.enable", async () => {
+    const calls: Array<{ readonly method: string; readonly params?: Record<string, unknown> }> = [];
+    let pluginEnabled = true;
+    const makePlugin = (): PluginInfo => ({
+      id: "demo-ext", name: "Demo Extension", version: "1.0.0", description: "demo",
+      tier: "user", status: pluginEnabled ? "active" : "disabled", enabled: pluginEnabled,
+      canDisable: true, overridesBuiltin: false, removable: true, hasHost: true, hasClient: true, watch: false,
+    });
+    const mockTransport: RpcTransport = {
+      async call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+        calls.push({ method, ...(params === undefined ? {} : { params }) });
+        if (method === "plugin.list") return { plugins: [makePlugin()] } as T;
+        if (method === "plugin.disable") { pluginEnabled = false; return { ok: true, plugins: [makePlugin()] } as T; }
+        if (method === "plugin.enable") { pluginEnabled = true; return { ok: true, plugins: [makePlugin()] } as T; }
+        throw new Error(`Unexpected RPC method: ${method}`);
+      },
+      onNotification: () => () => undefined,
+      onHostStatus: () => () => undefined,
+      reconnectNow: () => undefined,
+    };
+
+    const { root, registry } = await createCoreSettingsHarness(mockTransport);
+    const { container } = await mountInDom(
+      <SlotKernelProvider registry={registry} ctx={root}>
+        <SlotHost slotKey="shell.modals" kind="list" scope="root" />
+      </SlotKernelProvider>,
+    );
+    await act(async () => { root.navigationService.openSettings("plugins"); await Promise.resolve(); });
+
+    expect(calls[0]?.method).toBe("plugin.list");
+    expect(container.querySelector("[data-testid='settings-plugin-row-demo-ext']")?.textContent).toContain("Demo Extension");
+
+    const toggleSwitch = async () => {
+      await act(async () => {
+        container.querySelector("[data-testid='settings-plugin-toggle-demo-ext']")?.dispatchEvent(new MiniEvent("click", { bubbles: true, cancelable: true }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+    await toggleSwitch();
+    expect(calls.some((c) => c.method === "plugin.disable" && c.params?.id === "demo-ext")).toBe(true);
+    expect(pluginEnabled).toBe(false);
+
+    await toggleSwitch();
+    expect(calls.some((c) => c.method === "plugin.enable" && c.params?.id === "demo-ext")).toBe(true);
+    expect(pluginEnabled).toBe(true);
   });
 });
