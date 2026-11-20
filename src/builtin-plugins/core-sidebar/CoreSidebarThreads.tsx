@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ChevronDown,
-  ChevronRight,
   Folder,
   MoreHorizontal,
-  Plus,
+  SquarePen,
 } from "lucide-react";
 import {
   useFrontendService,
@@ -361,36 +360,70 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
             const visibleChats = expanded ? chats : chats.slice(0, VISIBLE_THREADS_PER_PROJECT);
             const hiddenCount = Math.max(0, chats.length - visibleChats.length);
             const isCurrentWorkspace = sameLocalPath(workspace, activeCwd);
+            const isMenuOpen = projectMenu !== null && sameLocalPath(projectMenu.workspace, workspace);
+            const projectName = repoName(workspace);
 
             return (
-              <section key={workspace} className={`project-group${isCurrentWorkspace ? " active" : ""}`}>
-                <div className="project-header">
+              <section
+                key={workspace}
+                className={`project-block${isCurrentWorkspace ? " is-current" : ""}${isMenuOpen ? " is-menu-open" : ""}`}
+                data-workspace={workspace}
+              >
+                <div className="project-header-row">
+                  {chats.length > 0 ? (
+                    <button
+                      type="button"
+                      className={`project-collapse-toggle${collapsed ? " is-collapsed" : ""}`}
+                      title={collapsed ? "展开会话" : "折叠会话"}
+                      aria-label={`${collapsed ? "展开" : "折叠"} ${projectName} 的会话`}
+                      aria-expanded={!collapsed}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleCollapsedProject(workspace);
+                      }}
+                    >
+                      <Folder className="project-folder-glyph" size={14} strokeWidth={1.75} aria-hidden="true" />
+                      <ChevronDown className="project-chevron-glyph" size={13.5} strokeWidth={1.9} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <span className="project-folder-static" aria-hidden="true">
+                      <Folder size={14} strokeWidth={1.75} />
+                    </span>
+                  )}
                   <button
                     type="button"
-                    className="project-toggle"
-                    onClick={() => toggleCollapsedProject(workspace)}
-                    aria-expanded={!collapsed}
+                    className="project-header"
+                    title={workspace}
+                    onClick={() => {
+                      setProjectMenu(null);
+                      setThreadMenu(null);
+                      if (collapsed) toggleCollapsedProject(workspace);
+                      workspaceService?.selectWorkspace(workspace);
+                      navigationService?.navigate({ kind: "home", workspace });
+                    }}
                   >
-                    {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                    <Folder size={13} />
-                    <span className="project-name">{repoName(workspace)}</span>
+                    <span className="project-name">{projectName}</span>
+                    {collapsed && chats.length > 0 && <span className="project-count">{chats.length}</span>}
                   </button>
                   <div className="project-actions">
                     <button
                       type="button"
-                      title="在此项目中新建会话"
-                      aria-label="在此项目中新建会话"
-                      onClick={() => {
+                      title="在此项目中新建对话"
+                      aria-label={`在 ${projectName} 中新建对话`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setProjectMenu(null);
+                        setThreadMenu(null);
                         workspaceService?.selectWorkspace(workspace);
                         navigationService?.navigate({ kind: "home", workspace });
                       }}
                     >
-                      <Plus size={13} />
+                      <SquarePen size={13.5} />
                     </button>
                     <button
                       type="button"
                       title="项目操作"
-                      aria-label="项目操作"
+                      aria-label={`${projectName} 项目操作`}
                       onClick={(event) => {
                         event.stopPropagation();
                         setThreadMenu(null);
@@ -401,12 +434,12 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
                         );
                       }}
                     >
-                      <MoreHorizontal size={13} />
+                      <MoreHorizontal size={14} />
                     </button>
                   </div>
                 </div>
 
-                {!collapsed && (
+                {!collapsed && chats.length > 0 && (
                   <div className="thread-list">
                     {visibleChats.map((session) => renderSessionRow(session))}
                     {hiddenCount > 0 && (

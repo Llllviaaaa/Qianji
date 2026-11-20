@@ -133,7 +133,7 @@
   margin: 0;
 }
 
-.codex-shot .dsh-claude-home-composer-wrap > .composer-area.codex-composer.task-start-composer {
+.codex-shot .dsh-claude-home-composer-wrap .composer-area.codex-composer.task-start-composer {
   width: 100%;
   max-width: none;
   display: flex;
@@ -285,11 +285,16 @@
   display: none !important;
 }
 
-.codex-shot .main-stage > .composer-dock > .composer-area.codex-composer,
-.codex-shot .main-stage .core-conversation-stage > .composer-dock > .composer-area.codex-composer {
+.codex-shot .main-stage .composer-dock .composer-area.codex-composer {
   width: 100%;
   max-width: var(--chat-reading-width, 760px);
   margin: 0 auto;
+}
+
+.codex-shot .side-chat-composer-dock .composer-area.codex-composer {
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 
 /* Quiet Ghost Context Strip below the hero card */
