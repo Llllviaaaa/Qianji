@@ -649,6 +649,15 @@ describe("ADR 0023 Phase 2: Frontend Cordis Service Mesh", () => {
     root.navigationService.openSettings("appearance");
     expect(root.navigationService.getSnapshot().settingsOpen).toBe(true);
     expect(root.navigationService.getSnapshot().settingsPage).toBe("appearance");
+
+    // Re-opening the same active plugin page while Settings is open must close Settings and emit.
+    const countBeforeSamePage = routes.length;
+    expect(root.navigationService.openPluginPage("my-analytics")).toBe(true);
+    expect(root.navigationService.getSnapshot().settingsOpen).toBe(false);
+    expect(routes.length).toBe(countBeforeSamePage + 1);
+
+    root.navigationService.openSettings("appearance");
+    expect(root.navigationService.getSnapshot().settingsOpen).toBe(true);
     root.navigationService.closeSettings();
     expect(root.navigationService.getSnapshot().settingsOpen).toBe(false);
 

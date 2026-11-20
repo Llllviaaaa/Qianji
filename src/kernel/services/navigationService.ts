@@ -295,6 +295,7 @@ export class NavigationService extends Service {
     if (cleanId === "") return false;
     this.internal.settingsOpen = false;
     this.navigate({ kind: "plugin-page", pageId: cleanId });
+    this.publish();
     if (!this.internal.forwardingShellBridge) {
       this.internal.forwardingShellBridge = true;
       try {
