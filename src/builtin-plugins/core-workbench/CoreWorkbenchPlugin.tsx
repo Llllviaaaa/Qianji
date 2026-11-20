@@ -28,7 +28,7 @@ export const coreWorkbenchPlugin: Plugin = {
   inject: ["slots", "workbenchService", "workspaceService", "sessionService"],
   apply(ctx: Context): void {
     // Define `workbench.topbarControls` spec without claiming cross-parent ownership
-    // (`core-shell`'s `shell.topbar` owns `workbench.topbarControls` in full shell boots).
+    // (`core-shell`'s `shell.menubar` owns `workbench.topbarControls` in full shell boots).
     ctx.slots.defineSlot("workbench.topbarControls", CORE_SLOT_SPECS["workbench.topbarControls"]);
 
     // 1. Right workbench container (`shell.workbench.right`)

@@ -15,6 +15,10 @@ test("primary sidebar stretches full height, pins Settings footer at bottom, and
     const scroll = document.querySelector(".sidebar-scroll") as HTMLElement | null;
     const footer = document.querySelector(".sidebar-footer.codex-footer") as HTMLElement | null;
     const composer = document.querySelector(".dsh-claude-home-composer-wrap .composer-area.codex-composer") as HTMLElement | null;
+    const menubar = document.querySelector(".window-menubar") as HTMLElement | null;
+    const wbControls = document.querySelector(".window-menubar .window-menubar-right .pid-wb-topbar-controls") as HTMLElement | null;
+    const winControls = document.querySelector(".window-menubar .window-menubar-right .window-controls") as HTMLElement | null;
+    const topbarInHome = document.querySelector("header.topbar") as HTMLElement | null;
     return {
       vh,
       panelHeight: panel?.getBoundingClientRect().height ?? 0,
@@ -23,6 +27,10 @@ test("primary sidebar stretches full height, pins Settings footer at bottom, and
       footerTop: footer?.getBoundingClientRect().top ?? 0,
       footerBottom: footer?.getBoundingClientRect().bottom ?? 0,
       composerWidth: composer?.getBoundingClientRect().width ?? 0,
+      menubarBottom: menubar?.getBoundingClientRect().bottom ?? 0,
+      wbControlsRect: wbControls ? wbControls.getBoundingClientRect().toJSON() : null,
+      winControlsLeft: winControls?.getBoundingClientRect().left ?? 0,
+      hasTopbarInHome: topbarInHome !== null,
     };
   });
 
@@ -32,6 +40,10 @@ test("primary sidebar stretches full height, pins Settings footer at bottom, and
   expect(homeMetrics.footerTop).toBeGreaterThanOrEqual(homeMetrics.vh - 90);
   expect(homeMetrics.footerBottom).toBeLessThanOrEqual(homeMetrics.vh + 2);
   expect(homeMetrics.composerWidth).toBeGreaterThanOrEqual(520);
+  expect(homeMetrics.hasTopbarInHome).toBe(false);
+  expect(homeMetrics.wbControlsRect).not.toBeNull();
+  expect(homeMetrics.wbControlsRect.bottom).toBeLessThanOrEqual(homeMetrics.menubarBottom + 1);
+  expect(homeMetrics.wbControlsRect.right).toBeLessThanOrEqual(homeMetrics.winControlsLeft + 1);
 
   // Trigger a conversation so we verify project-block / project-header-row and conversation composer layout too.
   const input = app.locator("textarea").first();
@@ -61,4 +73,22 @@ test("primary sidebar stretches full height, pins Settings footer at bottom, and
   expect(threadMetrics.threadRowHeight).toBeGreaterThanOrEqual(26);
   expect(threadMetrics.footerTop).toBeGreaterThanOrEqual(threadMetrics.vh - 90);
   expect(threadMetrics.composerWidth).toBeGreaterThanOrEqual(520);
+
+  // Opening the right workbench must keep workbench toggles anchored in the top window menubar (never inside .topbar).
+  await app.locator('.window-menubar-right .pid-wb-topbar-controls [data-wb-tab="summary"]').click();
+  await expect(app.locator(".pid-right-workbench")).toBeVisible();
+  const wbPosition = await app.evaluate(() => {
+    const inMenubar = document.querySelector(".window-menubar .window-menubar-right .pid-wb-topbar-controls") as HTMLElement | null;
+    const inStageTopbar = document.querySelector("header.topbar .pid-wb-topbar-controls") as HTMLElement | null;
+    const menubar = document.querySelector(".window-menubar") as HTMLElement | null;
+    return {
+      hasInMenubar: inMenubar !== null,
+      hasInStageTopbar: inStageTopbar !== null,
+      controlsBottom: inMenubar?.getBoundingClientRect().bottom ?? 999,
+      menubarBottom: menubar?.getBoundingClientRect().bottom ?? 0,
+    };
+  });
+  expect(wbPosition.hasInMenubar).toBe(true);
+  expect(wbPosition.hasInStageTopbar).toBe(false);
+  expect(wbPosition.controlsBottom).toBeLessThanOrEqual(wbPosition.menubarBottom + 1);
 });

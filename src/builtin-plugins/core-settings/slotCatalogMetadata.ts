@@ -57,7 +57,7 @@ export const CORE_SLOT_METADATA_MAP: Readonly<Record<CoreSlotKey, CoreSlotDescri
   "composer.input": { defaultOwner: "core-composer", description: "富文本/多行输入框与斜杠命令补全控件" },
   "composer.toolbar": { defaultOwner: "core-composer", description: "输入栏左下角工具按钮与快捷能力列表" },
   "composer.status": { defaultOwner: "core-composer", description: "输入栏右下角模型选择器两侧状态微件列表" },
-  "workbench.topbarControls": { defaultOwner: "core-workbench", description: "主舞台右上角工作台控制与扩展操作按钮列表" },
+  "workbench.topbarControls": { defaultOwner: "core-workbench", description: "窗口顶部菜单栏右侧的工作台面板开关与扩展按钮列表" },
   "workbench.tilingGrid": { defaultOwner: "core-workbench", description: "右侧工作台可拆分拖拽平铺布局网格" },
   "workbench.panes": { defaultOwner: "core-workbench", description: "按 paneId 路由的右侧工作台功能面板集合" },
   "workbench.fileViewer": { defaultOwner: "core-workbench", description: "按文件扩展名或 MIME 类型路由的文件预览器" },
