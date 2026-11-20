@@ -89,8 +89,8 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
     const indexCss = readFileSync(join(REPO_ROOT, "src/styles/index.css"), "utf8");
     assert.match(
       indexCss,
-      /@layer\s+theme,\s*base,\s*plugin-ui,\s*legacy,\s*skin,\s*components,\s*utilities\s*;/,
-      "src/styles/index.css must declare the authoritative @layer order with plugin-ui strictly before legacy/skin/components/utilities",
+      /@layer\s+theme,\s*base,\s*plugin-ui,\s*legacy,\s*skin,\s*components,\s*plugin-skin,\s*utilities\s*;/,
+      "src/styles/index.css must declare the authoritative @layer order with plugin-ui before legacy/skin/components and plugin-skin between components and utilities",
     );
   });
 

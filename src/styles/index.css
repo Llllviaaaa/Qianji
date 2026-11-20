@@ -7,7 +7,7 @@
  * Tailwind's preflight is left out on purpose: the legacy panels still rely
  * on browser defaults for lists, headings and form controls.
  */
-@layer theme, base, plugin-ui, legacy, skin, components, utilities;
+@layer theme, base, plugin-ui, legacy, skin, components, plugin-skin, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
