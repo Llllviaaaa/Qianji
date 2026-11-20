@@ -97,12 +97,6 @@
 * { box-sizing: border-box; }
 
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-button, input, textarea, select { font: inherit; }
-button { color: inherit; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-custom) 70%, transparent);
-  outline-offset: 1px;
-}
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -5342,27 +5336,15 @@ body,
   line-height: 1.5;
 }
 
-.codex-shot *,
-.settings-center * { letter-spacing: 0; }
+.codex-shot :not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *),
+.settings-center :not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *) { letter-spacing: 0; }
 
-.codex-shot button,
-.codex-shot input,
-.codex-shot textarea,
-.codex-shot select,
-.settings-center button,
-.settings-center input,
-.settings-center textarea,
-.settings-center select {
+:is(.codex-shot, .settings-center) :is(button, input, textarea, select):not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *) {
   font-family: inherit;
   font-weight: inherit;
 }
 
-.codex-shot code,
-.codex-shot pre,
-.codex-shot kbd,
-.settings-center code,
-.settings-center pre,
-.settings-center kbd { font-family: var(--code-font); }
+:is(.codex-shot, .settings-center) :is(code, pre, kbd):not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *) { font-family: var(--code-font); }
 
 /* Window chrome, navigation and thread list. */
 .codex-shot .app-menu-trigger,

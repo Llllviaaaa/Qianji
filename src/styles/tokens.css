@@ -241,6 +241,27 @@
   border: 0 solid;
 }
 
+/* Base form control resets live in `@layer base` (below `@layer plugin-ui`)
+   so scoped plugin buttons/inputs can style `color` and `font` cleanly. */
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-custom) 70%, transparent);
+  outline-offset: 1px;
+}
+
 /* Precision Signal selection */
 ::selection {
   background-color: var(--qj-brand-primary) !important;
