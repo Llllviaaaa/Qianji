@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Context, Service } from "@deepseek-ai/cordis";
+import { AgentLoop } from "@qianji/agent-loop";
 import type { LlmRequest, StreamChunk } from "@qianji/llm";
 import type { RpcHandler, RpcService } from "@qianji/rpc";
 import { ScriptedProvider, textReply, toolReply, useScriptedProvider, type ScriptedReply } from "@qianji/testkit";
@@ -217,7 +218,7 @@ async function setupGoalHost(options?: {
   }
 
   const provider = new ScriptedProvider(options?.replies ?? []);
-  const hostPlugins: PluginEntry[] = [...corePlugins(), [TestRpcService]];
+  const hostPlugins: PluginEntry[] = [...corePlugins(), [AgentLoop], [TestRpcService]];
   if (options?.replies !== undefined) {
     hostPlugins.push([
       {

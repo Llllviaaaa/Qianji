@@ -300,7 +300,14 @@ fn recreate_main_window_blocking(app: &AppHandle) -> bool {
         return false;
     };
 
-    match tauri::WebviewWindowBuilder::from_config(app, cfg).and_then(|builder| builder.build()) {
+    let builder_res = tauri::WebviewWindowBuilder::from_config(app, cfg).map(|builder| {
+        if crate::is_safe_mode_enabled() {
+            builder.initialization_script(crate::SAFE_MODE_INIT_SCRIPT)
+        } else {
+            builder
+        }
+    });
+    match builder_res.and_then(|builder| builder.build()) {
         Ok(window) => {
             log_line!("[webview] recreated main window after WebView2 failure");
             #[cfg(all(windows, not(debug_assertions)))]

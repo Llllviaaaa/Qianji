@@ -13,6 +13,13 @@ import { pathComparisonKey, readPluginManifest, scanPluginsDirectory, type Disco
 import { readPluginsStore, resolveWorkspacePluginsDir, workspacePluginKey } from "./plugin-store.ts";
 import { errorMessage, isRecord } from "./plugin-util.ts";
 
+export interface BuiltinFallbackSpec {
+  plugin: Plugin;
+  config?: unknown;
+  inject: string[];
+  provides: string[];
+}
+
 export interface ResolvedCandidate {
   id: string;
   name: string;
@@ -21,6 +28,7 @@ export interface ResolvedCandidate {
   tier: PluginTier;
   enabled: boolean;
   canDisable: boolean;
+  canOverride: boolean;
   overridesBuiltin: boolean;
   removable: boolean;
   hasHost: boolean;
@@ -36,6 +44,7 @@ export interface ResolvedCandidate {
   assetsDir?: string;
   origin?: PluginInstallOrigin;
   builtinPlugin?: Plugin;
+  fallbackBuiltin?: BuiltinFallbackSpec;
   effectiveConfig?: unknown;
   publicConfig?: Record<string, unknown>;
   configSchema?: Record<string, unknown>;
@@ -125,11 +134,21 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
   const candidates: ResolvedCandidate[] = [];
   for (const id of allIds) {
     const protectedBuiltin = builtinsById.get(id);
-    if (protectedBuiltin !== undefined && protectedBuiltin.canDisable === false) {
-      const depMeta = extractPluginDependencyMeta(protectedBuiltin.plugin, {
-        ...(protectedBuiltin.inject === undefined ? {} : { inject: protectedBuiltin.inject }),
-        ...(protectedBuiltin.provides === undefined ? {} : { provides: protectedBuiltin.provides }),
-      });
+    const builtinDepMeta = protectedBuiltin === undefined
+      ? undefined
+      : extractPluginDependencyMeta(protectedBuiltin.plugin, {
+          ...(protectedBuiltin.inject === undefined ? {} : { inject: protectedBuiltin.inject }),
+          ...(protectedBuiltin.provides === undefined ? {} : { provides: protectedBuiltin.provides }),
+        });
+    const fallbackBuiltin: BuiltinFallbackSpec | undefined = protectedBuiltin !== undefined && builtinDepMeta !== undefined
+      ? {
+          plugin: protectedBuiltin.plugin,
+          ...(protectedBuiltin.config === undefined ? {} : { config: protectedBuiltin.config }),
+          inject: builtinDepMeta.inject,
+          provides: builtinDepMeta.provides,
+        }
+      : undefined;
+    if (protectedBuiltin !== undefined && protectedBuiltin.canDisable === false && protectedBuiltin.canOverride !== true) {
       candidates.push({
         id: protectedBuiltin.id,
         name: protectedBuiltin.name,
@@ -138,6 +157,7 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         tier: "builtin",
         enabled: true,
         canDisable: false,
+        canOverride: false,
         overridesBuiltin: false,
         removable: false,
         hasHost: protectedBuiltin.hasHost,
@@ -145,12 +165,13 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         watch: false,
         builtinPlugin: protectedBuiltin.plugin,
         effectiveConfig: protectedBuiltin.config,
-        inject: depMeta.inject,
-        provides: depMeta.provides,
+        inject: builtinDepMeta?.inject ?? [],
+        provides: builtinDepMeta?.provides ?? [],
       });
       continue;
     }
 
+    const builtinCanDisable = protectedBuiltin?.canDisable !== false;
     const wsManifest = workspaceById.get(id);
     if (wsManifest !== undefined && wsManifest.workspace !== undefined) {
       const wsPatch = store.workspacePlugins[workspacePluginKey(wsManifest.workspace, id)];
@@ -161,8 +182,9 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         version: wsManifest.version,
         ...(wsManifest.description === undefined ? {} : { description: wsManifest.description }),
         tier: "workspace",
-        enabled: wsPatch?.enabled !== false,
-        canDisable: true,
+        enabled: builtinCanDisable ? wsPatch?.enabled !== false : true,
+        canDisable: builtinCanDisable,
+        canOverride: true,
         overridesBuiltin: hasBuiltinId(id),
         removable: false,
         hasHost: wsManifest.hostEntry !== undefined,
@@ -176,6 +198,7 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         ...(wsManifest.clientEntry === undefined ? {} : { clientEntry: wsManifest.clientEntry }),
         ...(wsManifest.skillsDir === undefined ? {} : { skillsDir: wsManifest.skillsDir }),
         ...(wsManifest.assetsDir === undefined ? {} : { assetsDir: wsManifest.assetsDir }),
+        ...(fallbackBuiltin === undefined ? {} : { fallbackBuiltin }),
         effectiveConfig: mergedConfig,
         publicConfig: mergedConfig,
         ...(wsManifest.configSchema === undefined ? {} : { configSchema: wsManifest.configSchema }),
@@ -195,8 +218,9 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         version: userManifest.version,
         ...(userManifest.description === undefined ? {} : { description: userManifest.description }),
         tier: "user",
-        enabled: patch?.enabled !== false,
-        canDisable: true,
+        enabled: builtinCanDisable ? patch?.enabled !== false : true,
+        canDisable: builtinCanDisable,
+        canOverride: true,
         overridesBuiltin: hasBuiltinId(id),
         removable: true,
         hasHost: userManifest.hostEntry !== undefined,
@@ -208,6 +232,7 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         ...(userManifest.clientEntry === undefined ? {} : { clientEntry: userManifest.clientEntry }),
         ...(userManifest.skillsDir === undefined ? {} : { skillsDir: userManifest.skillsDir }),
         ...(userManifest.assetsDir === undefined ? {} : { assetsDir: userManifest.assetsDir }),
+        ...(fallbackBuiltin === undefined ? {} : { fallbackBuiltin }),
         ...(patch?.origin === undefined ? {} : { origin: patch.origin }),
         effectiveConfig: mergedConfig,
         publicConfig: mergedConfig,
@@ -226,14 +251,16 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         name: id,
         version: "0.0.0",
         tier: broken.tier,
-        enabled: patch?.enabled !== false,
-        canDisable: true,
+        enabled: builtinCanDisable ? patch?.enabled !== false : true,
+        canDisable: builtinCanDisable,
+        canOverride: true,
         overridesBuiltin: hasBuiltinId(id),
         removable: true,
         hasHost: false,
         hasClient: false,
         watch: patch?.watch === true,
         dir: broken.dir,
+        ...(fallbackBuiltin === undefined ? {} : { fallbackBuiltin }),
         ...(patch?.origin === undefined ? {} : { origin: patch.origin }),
         manifestError: broken.message,
         inject: [],
@@ -246,11 +273,12 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
     if (builtin !== undefined) {
       const patch = store.plugins[id];
       const canDisable = builtin.canDisable !== false;
+      const canOverride = builtin.canOverride ?? canDisable;
       const enabled = canDisable ? (patch?.enabled ?? builtin.enabled) : true;
       const effectiveConfig = patch?.config !== undefined
         ? (isRecord(builtin.config) ? { ...builtin.config, ...patch.config } : patch.config)
         : builtin.config;
-      const depMeta = extractPluginDependencyMeta(builtin.plugin, {
+      const depMeta = builtinDepMeta ?? extractPluginDependencyMeta(builtin.plugin, {
         ...(builtin.inject === undefined ? {} : { inject: builtin.inject }),
         ...(builtin.provides === undefined ? {} : { provides: builtin.provides }),
       });
@@ -262,6 +290,7 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         tier: "builtin",
         enabled,
         canDisable,
+        canOverride,
         overridesBuiltin: false,
         removable: patch !== undefined,
         hasHost: builtin.hasHost,
@@ -288,6 +317,7 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         tier: "builtin",
         enabled: patch?.enabled !== false,
         canDisable: true,
+        canOverride: true,
         overridesBuiltin: false,
         removable: patch !== undefined,
         hasHost: bundledManifest.hostEntry !== undefined,
