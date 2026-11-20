@@ -26,6 +26,7 @@ V2 重构（[REFACTOR_V2_PLAN.md](../archive/REFACTOR_V2_PLAN.md)）期间的架
 | [0020](0020-tool-guards.md) | 工具调用的时限与重复提醒 | 已接受 |
 | [0021](0021-powershell-fallback.md) | Windows 上没有 Git Bash 时改用 PowerShell | 已接受 |
 | [0022](0022-agent-capability-enhancements.md) | Agent 核心能力五向演进（Hashline 编辑、隔离 Subagent、滑动压缩与分支摘要、受管后台进程、渐进式记忆索引） | 已接受 |
+| [0023](0023-frontend-microkernel-and-core-pluginization.md) | 前端微内核化、强类型槽位树与全栈核心插件化 | 提议 |
 
 ## 旧名对照
 
