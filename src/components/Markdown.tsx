@@ -187,12 +187,13 @@ function MarkdownPre({
     );
   }
   if (hasSlotEntry) {
+    const normalizedLang = language.trim().toLowerCase() || "text";
     return (
       <SlotHost
         slotKey="conversation.markdown.codeBlock"
         kind="keyed"
-        routeKey={language.toLowerCase()}
-        props={{ cwd, sessionFile, language, code: text, isStreaming }}
+        routeKey={normalizedLang}
+        props={{ cwd, sessionFile, language: normalizedLang, code: text, isStreaming }}
         fallback={<CodeFence>{children}</CodeFence>}
       />
     );

@@ -5,6 +5,7 @@
  * `kind`, `scope`, and typed owner props so Wave 2B built-in plugins and
  * external user/workspace plugins share a single strongly-typed contract.
  */
+import type { ReactNode } from "react";
 import type {
   AttachmentPayload,
   ExtensionUIRequest,
@@ -162,6 +163,7 @@ export interface ConversationTurnSlotProps {
   readonly assistantMessages: readonly UiMessage[];
   readonly isStreaming: boolean;
   readonly isLastTurn: boolean;
+  readonly isLastUserTurn?: boolean;
 }
 
 export interface ConversationMessageSlotProps {
@@ -170,6 +172,9 @@ export interface ConversationMessageSlotProps {
   readonly message: UiMessage;
   readonly isStreaming?: boolean;
   readonly isLast?: boolean;
+  readonly isLastUserTurn?: boolean;
+  readonly turnStartedAt?: number;
+  readonly footer?: ReactNode;
   readonly compact?: boolean;
   readonly onRewind?: (message: UiMessage) => void;
   readonly onEditAndResend?: (entryId: string, text: string) => void;

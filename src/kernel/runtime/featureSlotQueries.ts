@@ -7,8 +7,9 @@
  * `clientSlotsRegistry` (plus legacy `clientContributions`). Before boot (e.g.
  * isolated legacy component unit tests), sensible built-in defaults apply.
  */
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useContext, useSyncExternalStore } from "react";
 import { clientContributions } from "../../lib/clientContributions";
+import { SlotKernelContext } from "../slots/boundaries";
 import { clientSlotsRegistry, type SlotRegistry } from "../slots/registry";
 
 const DEFAULT_PREBOOT_PANES: ReadonlySet<string> = new Set([
@@ -102,25 +103,34 @@ export function hasCodeBlockSlotEntry(
   return registry.getKeyedCandidates("conversation.markdown.codeBlock", normalized).length > 0;
 }
 
+const DEFAULT_CODE_BLOCK_ENTRY_ID = "core-conversation:codeBlock";
+
 /**
- * Reactive check for whether built-in fallback diagram rendering should run when
- * no explicit `conversation.markdown.codeBlock` slot or legacy renderer matched.
- * Returns `false` once the microkernel coordinator has booted (because `diagram-viewer`
- * owns diagram rendering via real slot registration and unmounts cleanly when disabled).
+ * Reactive check for whether a custom/feature `conversation.markdown.codeBlock`
+ * slot entry (or wrapper) matches `language`, and whether built-in fallback
+ * diagram rendering should run before coordinator boot.
+ *
+ * Excludes `core-conversation`'s generic wildcard fallback (`core-conversation:codeBlock`)
+ * so regular syntax-highlighted code fences render through `<CodeFence>` with
+ * `rehype-highlight` unless a feature/external plugin overrides that language.
  */
 export function useCodeBlockSlotStatus(
   language: string,
-  registry: SlotRegistry = clientSlotsRegistry,
+  explicitRegistry?: SlotRegistry,
 ): { readonly hasSlotEntry: boolean; readonly allowPrebootDiagramFallback: boolean } {
+  const kernel = useContext(SlotKernelContext);
+  const registry = explicitRegistry ?? kernel.registry ?? clientSlotsRegistry;
   const normalized = language.trim().toLowerCase();
   const subscribe = useCallback(
     (listener: () => void) => registry.subscribe(listener),
     [registry],
   );
-  const getHasEntry = useCallback(
-    () => (normalized === "" ? false : registry.getKeyedCandidates("conversation.markdown.codeBlock", normalized).length > 0),
-    [normalized, registry],
-  );
+  const getHasEntry = useCallback(() => {
+    if (registry.getWrappers("conversation.markdown.codeBlock").length > 0) return true;
+    const key = normalized === "" ? "text" : normalized;
+    const candidates = registry.getKeyedCandidates("conversation.markdown.codeBlock", key);
+    return candidates.some((entry) => entry.id !== DEFAULT_CODE_BLOCK_ENTRY_ID);
+  }, [normalized, registry]);
   const hasSlotEntry = useSyncExternalStore(subscribe, getHasEntry, getHasEntry);
   const allowPrebootDiagramFallback =
     !hasSlotEntry &&

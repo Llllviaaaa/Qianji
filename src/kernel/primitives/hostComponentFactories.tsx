@@ -8,7 +8,7 @@
  * core/feature plugins via `renderFactory(...)` with zero ESLint boundary
  * violations and full user-plugin override support.
  */
-import { createElement, useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { createElement, useCallback, useMemo, useState, type ReactElement } from "react";
 import type {
   ClientSlotsService,
   SlotComponentProps,
@@ -16,9 +16,6 @@ import type {
   SlotRegistry,
 } from "@qianji/client-slots";
 import { IntelligentUiCard } from "../../components/IntelligentUiCard";
-import { IconChevronDown } from "../../components/DshIcons";
-import { ProcessGroup, ReasoningRow } from "../../components/message/MessageProcessBlocks";
-import { buildProcessSummary, summarizeProcessGroup } from "../../components/message/messageHelpers";
 import { ModelPicker } from "../../components/ModelPicker";
 import { ModelsPage } from "../../components/ModelsPage";
 import { PluginsSettingsPanel } from "../../components/PluginsSettingsPanel";
@@ -41,6 +38,20 @@ import { useWorkbenchStore } from "../../stores/workbenchStore";
 import type { AppSettings, ModelInfo, UiMessage, UiToolCall } from "../../types";
 import { isWorkbenchPaneAvailable } from "../runtime/featureSlotQueries";
 import type { SessionHandle } from "../services/sessionHandle";
+import {
+  registerHostConversationFactories,
+  type HostAssistantMessageFactoryProps,
+  type HostProcessGroupFactoryProps,
+  type HostToolCallFactoryProps,
+  type HostUserMessageFactoryProps,
+} from "./hostConversationFactories";
+
+export type {
+  HostAssistantMessageFactoryProps,
+  HostProcessGroupFactoryProps,
+  HostToolCallFactoryProps,
+  HostUserMessageFactoryProps,
+};
 
 export interface HostSettingsPageFactoryProps {
   readonly cwd?: string;
@@ -73,13 +84,6 @@ export interface HostIntelligentUiInlineFactoryProps {
   readonly messageId?: string;
 }
 
-export interface HostProcessGroupFactoryProps {
-  readonly message: UiMessage;
-  readonly thinking: string;
-  readonly working: boolean;
-  readonly toolNodes?: ReactNode;
-}
-
 declare module "@qianji/client-slots" {
   interface SlotFactoryMap {
     "host.settings.general": SlotFactorySpec<HostSettingsPageFactoryProps, "root">;
@@ -92,7 +96,6 @@ declare module "@qianji/client-slots" {
     "host.workbench.sideChat": SlotFactorySpec<HostSideChatFactoryProps, "root">;
     "host.intelligentUi.inlineCard": SlotFactorySpec<HostIntelligentUiInlineFactoryProps, "root">;
     "host.intelligentUi.canvas": SlotFactorySpec<Record<string, never>, "root">;
-    "host.conversation.processGroup": SlotFactorySpec<HostProcessGroupFactoryProps, "root">;
   }
 }
 
@@ -292,53 +295,6 @@ function HostIntelligentUiCanvasFactory(): ReactElement {
   return createElement(HostIntelligentUiCanvasTab);
 }
 
-function HostProcessGroupFactory(
-  props: SlotComponentProps<HostProcessGroupFactoryProps, "root">,
-): ReactElement | null {
-  const { message, thinking, working, toolNodes } = props;
-  const [processOpen, setProcessOpen] = useState<boolean | null>(null);
-  const hasThinking = thinking.trim() !== "";
-  const toolCalls = (message.toolCalls ?? []).filter(
-    (call) => call.name !== "render_ui" && call.name !== "update_ui",
-  );
-  if (!hasThinking && toolCalls.length === 0) return null;
-
-  const isExpanded = processOpen ?? working;
-  const summary = buildProcessSummary(hasThinking ? 1 : 0, 0, toolCalls.length);
-  const groupTitle = summarizeProcessGroup(hasThinking ? 1 : 0, toolCalls);
-
-  return (
-    <div className="dshc-process-wrap">
-      {!working && (
-        <button
-          type="button"
-          className="dshc-turn-process"
-          data-open={isExpanded || undefined}
-          aria-expanded={isExpanded}
-          onClick={() => setProcessOpen(!isExpanded)}
-        >
-          <span className="dshc-turn-process-label">{summary || "查看处理过程"}</span>
-          <IconChevronDown />
-        </button>
-      )}
-      {isExpanded && (
-        <ProcessGroup
-          grouped
-          live={working}
-          autoOpen={working}
-          summary={groupTitle}
-          activity={hasThinking ? "thinking" : "shell"}
-        >
-          {hasThinking && (
-            <ReasoningRow text={thinking} running={working && toolCalls.length === 0} settledPreview={!working} />
-          )}
-          {toolNodes}
-        </ProcessGroup>
-      )}
-    </div>
-  );
-}
-
 /**
  * Subscribe synchronously to `useAppStore` so live streaming HTML `render_ui`
  * widgets auto-open Right Workbench Canvas (`intelligent-ui-canvas`) while
@@ -480,14 +436,7 @@ export function registerHostComponentFactories(
       scope: "root",
       component: HostIntelligentUiCanvasFactory,
     }),
-    target.registerFactory("host.conversation.processGroup", {
-      id: `${HOST_FACTORIES_PLUGIN_ID}:conversation-process-group`,
-      pluginId: HOST_FACTORIES_PLUGIN_ID,
-      tier: "builtin",
-      priority: 0,
-      scope: "root",
-      component: HostProcessGroupFactory,
-    }),
+    ...registerHostConversationFactories(target),
   ];
 
   let disposed = false;

@@ -2,7 +2,7 @@
  * Core conversation stage (`shell.stage`) and reusable multi-session
  * `<SessionConversationSurface>` component (ADR 0023 `core-conversation`).
  */
-import { useCallback, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode, type UIEvent } from "react";
 import {
   useFrontendService,
   useNavigationState,
@@ -18,6 +18,47 @@ import {
   type CoreShellStageProps,
   type SlotComponentProps,
 } from "@qianji/client-slots";
+
+function useConversationAutoFollow(
+  scrollRef: { readonly current: HTMLDivElement | null },
+  sessionKey: string,
+  messages: readonly unknown[],
+  isStreaming: boolean,
+): (event: UIEvent<HTMLDivElement>) => void {
+  const autoFollowRef = useRef(true);
+  const lastAutoScrollAtRef = useRef(0);
+  const trackedSessionRef = useRef(sessionKey);
+
+  const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const scroller = event.currentTarget;
+    autoFollowRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+  }, []);
+
+  useEffect(() => {
+    if (trackedSessionRef.current !== sessionKey) {
+      trackedSessionRef.current = sessionKey;
+      autoFollowRef.current = true;
+    }
+    if (!autoFollowRef.current) return;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (isStreaming && now - lastAutoScrollAtRef.current < 80) return;
+    lastAutoScrollAtRef.current = now;
+    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
+    const frame = window.requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      if (scroller !== null) {
+        scroller.scrollTop = scroller.scrollHeight;
+      }
+    });
+    return () => {
+      if (typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, [isStreaming, messages, scrollRef, sessionKey]);
+
+  return handleScroll;
+}
 
 export function CoreConversationStage({
   cwd: ownerCwd,
@@ -44,6 +85,15 @@ export function CoreConversationStage({
   const density = themeState?.transcriptDensity ?? "normal";
   const extensionWidgets = navigationState?.extensionWidgets ?? {};
   const extensionRequest = navigationState?.extensionRequest ?? null;
+  const messages = sessionState?.messages ?? [];
+  const isStreaming = sessionState?.isStreaming ?? false;
+
+  const handleScroll = useConversationAutoFollow(
+    scrollRef,
+    `${activeSessionId}:${resolvedSessionFile ?? "new"}`,
+    messages,
+    isStreaming,
+  );
 
   const handleAnswerExtension = useCallback(
     (_requestId: string, response: unknown) => {
@@ -77,7 +127,7 @@ export function CoreConversationStage({
           sessionFile: resolvedSessionFile,
         })}
 
-        <div ref={scrollRef} className="conversation-scroll">
+        <div ref={scrollRef} className="conversation-scroll" onScroll={handleScroll}>
           <div className={`conversation density-${density}`}>
             {renderSlot("conversation.transcript", {
               cwd: resolvedCwd,
@@ -138,7 +188,9 @@ export function SessionConversationSurface({
   className,
 }: SessionConversationSurfaceProps): ReactNode {
   const inheritedScope = useSlotScope();
+  const sessionState = useSessionState();
   const themeState = useThemeState();
+  const scrollRef = useRef<HTMLDivElement>(null);
   const density = themeState?.transcriptDensity ?? "normal";
   const resolvedSessionId =
     sessionId !== undefined && sessionId !== null && sessionId !== ""
@@ -151,6 +203,18 @@ export function SessionConversationSurface({
   const { snapshot: isolatedSnap } = useSessionHandle(
     isolated ? resolvedSessionId : null,
     isolatedHandleOptions,
+  );
+  const surfaceMessages = isolated
+    ? (isolatedSnap?.messages ?? [])
+    : (sessionState?.messages ?? []);
+  const surfaceStreaming = isolated
+    ? (isolatedSnap?.isStreaming ?? false)
+    : (sessionState?.isStreaming ?? false);
+  const handleScroll = useConversationAutoFollow(
+    scrollRef,
+    `${resolvedSessionId ?? "surface"}:${sessionFile ?? "new"}`,
+    surfaceMessages,
+    surfaceStreaming,
   );
 
   return (
@@ -167,7 +231,7 @@ export function SessionConversationSurface({
             props={{ cwd, sessionFile }}
           />
         )}
-        <div className="conversation-scroll">
+        <div ref={scrollRef} className="conversation-scroll" onScroll={handleScroll}>
           <div className={`conversation density-${density}`}>
             <SlotHost
               slotKey="conversation.transcript"

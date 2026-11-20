@@ -45,6 +45,7 @@ import {
   installSessionScopeAdapter,
   registerFrontendServices,
 } from "../src/kernel/services";
+import { registerHostComponentFactories } from "../src/kernel/primitives/hostComponentFactories";
 import { ClientContributionRegistry } from "../src/lib/clientContributions";
 import { bindClientRootContext } from "../src/sdk/rootContext";
 import { useAppStore } from "../src/store";
@@ -274,8 +275,14 @@ class MiniNode extends MiniEventTarget {
 class MiniElement extends MiniNode {
   readonly tagName: string;
   readonly attributes = new Map<string, string>();
-  readonly style: Record<string, string> = {};
+  readonly style: Record<string, unknown> = {
+    setProperty: () => undefined,
+    removeProperty: () => undefined,
+  };
   readonly dataset: Record<string, string> = {};
+  scrollHeight = 20;
+  clientHeight = 20;
+  scrollTop = 0;
   disabled = false;
   oninput: unknown = null;
   onchange: unknown = null;
@@ -321,6 +328,14 @@ class MiniElement extends MiniNode {
 
   focus(): void {
     if (this.ownerDocument !== null) this.ownerDocument.activeElement = this;
+  }
+
+  closest(_selector: string): MiniElement | null {
+    return null;
+  }
+
+  getBoundingClientRect(): { top: number; bottom: number; left: number; right: number; width: number; height: number } {
+    return { top: 0, bottom: 20, left: 0, right: 200, width: 200, height: 20 };
   }
 
   attachEvent(): void {}
@@ -408,8 +423,31 @@ class MiniWindow extends MiniEventTarget {
   readonly Element = MiniElement;
   readonly Node = MiniNode;
   readonly Event = MiniEvent;
+  private readonly activeIntervals = new Set<ReturnType<typeof setInterval>>();
   setTimeout = globalThis.setTimeout.bind(globalThis);
   clearTimeout = globalThis.clearTimeout.bind(globalThis);
+  setInterval = (cb: () => void, ms?: number): ReturnType<typeof setInterval> => {
+    const id = globalThis.setInterval(cb, ms);
+    this.activeIntervals.add(id);
+    return id;
+  };
+  clearInterval = (id: ReturnType<typeof setInterval>): void => {
+    this.activeIntervals.delete(id);
+    globalThis.clearInterval(id);
+  };
+  clearAllIntervals(): void {
+    for (const id of this.activeIntervals) globalThis.clearInterval(id);
+    this.activeIntervals.clear();
+  }
+  matchMedia = () => ({
+    matches: true,
+    media: "",
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+  });
+  getComputedStyle = () => ({ lineHeight: "22px", fontSize: "14px" });
   requestAnimationFrame = (cb: () => void) => {
     cb();
     return 1;
@@ -502,6 +540,7 @@ function mountDom(node: ReactNode): {
   const unmount = () => {
     if (disposed) return;
     disposed = true;
+    doc.defaultView.clearAllIntervals();
     act(() => {
       root?.unmount();
     });
@@ -1208,6 +1247,199 @@ describe("ADR 0023 Wave 2B: core-conversation & core-composer built-in plugins",
       mounted.unmount();
     } finally {
       useAppStore.setState({ sendMessage: origSendMessage, isStreaming: false });
+      await env.dispose();
+    }
+  });
+
+  it("merges multi-step assistant turns into one unified turn with production ProcessGroup, ToolCall, CodeFence, and live slot overrides", async () => {
+    const multiStepMessages: UiMessage[] = [
+      {
+        id: "u-multi",
+        entryId: "e-multi-u",
+        role: "user",
+        content: "帮我看看 Magpie 是怎么接入插件的",
+        timestamp: 1700001000000,
+      },
+      {
+        id: "a-step-1",
+        role: "assistant",
+        thinking: "先定位 Magpie 源码目录和插件接口",
+        content: "我先摸清 Magpie 里 Pi / OMP 是怎么接入的。",
+        toolCalls: [
+          { id: "tc-r1", name: "read", args: { path: "src/plugins.ts" }, result: "export {}", running: false },
+          { id: "tc-g1", name: "grep", args: { pattern: "registerPlugin" }, result: "src/plugins.ts:1", running: false },
+        ],
+        timestamp: 1700001002000,
+      },
+      {
+        id: "a-step-2",
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "tc-b1", name: "bash", args: { command: "ls -la" }, result: "package.json", running: false },
+          { id: "tc-r2", name: "read", args: { path: "package.json" }, result: "{}", running: false },
+        ],
+        timestamp: 1700001005000,
+      },
+      {
+        id: "a-step-3",
+        role: "assistant",
+        content: "Magpie 源码和本地配置都在，我接着核对插件协议。",
+        toolCalls: [
+          { id: "tc-s1", name: "sqlite_query", args: { sql: "SELECT 1" }, result: "1", running: false },
+        ],
+        timestamp: 1700001008000,
+      },
+      {
+        id: "a-final",
+        role: "assistant",
+        content: "已经梳理完成：\n```ts\nexport const adapter = true;\n```",
+        durationMs: 12000,
+        timestamp: 1700001012000,
+      },
+    ];
+
+    useAppStore.setState({
+      messages: multiStepMessages,
+      isStreaming: false,
+    });
+
+    const env = await bootCoreChatKernel();
+    const disposeHostFactories = registerHostComponentFactories(env.registry);
+    try {
+      const renderStage = () =>
+        createElement(
+          SlotKernelProvider,
+          { registry: env.registry, ctx: env.root },
+          createElement(SlotHost, {
+            slotKey: "shell.stage",
+            kind: "chain",
+            scope: "session-maybe",
+            props: { cwd: "/repo/core-chat", sessionFile: "harness:sess-main-1", hubView: null, draftMode: false },
+            registry: env.registry,
+            rootCtx: env.root,
+          }),
+        );
+
+      const mounted = mountDom(renderStage());
+
+      // 1. All 4 consecutive assistant messages merge into ONE `.dshc-turn` article (not 4 stacked pills).
+      const assistantTurns = mounted.container.findAll(
+        (el) => el.getAttribute("data-chat-flow-kind") === "assistant",
+      );
+      expect(assistantTurns).toHaveLength(1);
+
+      const turnProcessButtons = mounted.container.findAll(
+        (el) => el.className.split(/\s+/).includes("dshc-turn-process"),
+      );
+      expect(turnProcessButtons).toHaveLength(1);
+      expect(turnProcessButtons[0]?.textContent).toContain("已完成，用时");
+
+      // Intermediate narration stays collapsed inside the turn process; final answer & syntax-highlighted CodeFence are visible.
+      expect(mounted.container.textContent).toContain("已经梳理完成：");
+      expect(mounted.container.textContent).toContain("export const adapter = true;");
+      expect(mounted.container.textContent).not.toContain("我先摸清 Magpie");
+      expect(mounted.container.textContent).not.toContain("Magpie 源码和本地配置都在");
+      expect(
+        mounted.container.findOne((el) => el.className.split(/\s+/).includes("markdown-code")),
+      ).toBeDefined();
+
+      // 2. Expanding `.dshc-turn-process` reveals grouped ProcessGroup segments + intermediate narrations.
+      act(() => {
+        turnProcessButtons[0]?.dispatchEvent(new MiniEvent("click", { bubbles: true }));
+      });
+      const expandedText = mounted.container.textContent;
+      expect(expandedText).toContain("我先摸清 Magpie");
+      expect(expandedText).toContain("Magpie 源码和本地配置都在");
+      expect(expandedText).toContain("读取 2 个文件，搜索 1 次，运行 1 条命令");
+
+      // 3. External plugin overrides on conversation.toolCall & conversation.markdown.codeBlock still work with host factories active!
+      let extFiber: Awaited<ReturnType<typeof env.root.plugin>> | undefined;
+      await act(async () => {
+        extFiber = await env.root.plugin({
+          name: "ext-host-factory-override",
+          inject: ["slots"],
+          apply(ctx: Context) {
+            ctx.slots.register("conversation.toolCall", {
+              id: "ext-sqlite-override",
+              pluginId: "ext-host-factory-override",
+              tier: "user",
+              key: ["sqlite_*"],
+              component: ({ call }) =>
+                createElement("div", { "data-testid": "ext-sqlite-host" }, `HostOverride:${call.name}`),
+            });
+            ctx.slots.register("conversation.markdown.codeBlock", {
+              id: "ext-ts-override",
+              pluginId: "ext-host-factory-override",
+              tier: "user",
+              key: ["ts"],
+              component: ({ code }) =>
+                createElement("div", { "data-testid": "ext-ts-host" }, `CustomTS:${code.trim()}`),
+            });
+          },
+        });
+      });
+
+      // Open each collapsed process group inside the expanded turn to inspect tool rows
+      const groupButtons = mounted.container.findAll(
+        (el) => el.className.split(/\s+/).includes("dshc-group-title"),
+      );
+      expect(groupButtons.length).toBeGreaterThanOrEqual(2);
+      for (const btn of groupButtons) {
+        act(() => {
+          btn.dispatchEvent(new MiniEvent("click", { bubbles: true }));
+        });
+      }
+      expect(mounted.container.textContent).toContain("HostOverride:sqlite_query");
+      expect(mounted.container.textContent).toContain("CustomTS:export const adapter = true;");
+
+      await act(async () => {
+        await extFiber?.dispose();
+      });
+      expect(mounted.container.textContent).not.toContain("HostOverride:");
+      expect(mounted.container.textContent).not.toContain("CustomTS:");
+      expect(mounted.container.textContent).toContain("export const adapter = true;");
+
+      // 4. Live streaming multi-step turn renders ZERO collapsed `.dshc-turn-process` pills, showing live ProcessGroup + RunningRow instead!
+      act(() => {
+        useAppStore.setState({
+          isStreaming: true,
+          messages: [
+            multiStepMessages[0] as UiMessage,
+            multiStepMessages[1] as UiMessage,
+            multiStepMessages[2] as UiMessage,
+            {
+              id: "a-live-step",
+              role: "assistant",
+              content: "",
+              isStreaming: true,
+              toolCalls: [
+                { id: "tc-live", name: "read", args: { path: "src/live.ts" }, running: true },
+              ],
+              timestamp: 1700001015000,
+            },
+          ],
+        });
+      });
+
+      expect(
+        mounted.container.findAll((el) => el.getAttribute("data-chat-flow-kind") === "assistant"),
+      ).toHaveLength(1);
+      expect(
+        mounted.container.findAll((el) => el.className.split(/\s+/).includes("dshc-turn-process")),
+      ).toHaveLength(0);
+      expect(
+        mounted.container.findOne((el) => el.className.split(/\s+/).includes("dshc-running")),
+      ).toBeDefined();
+      expect(mounted.container.textContent).toContain("正在读取");
+
+      act(() => {
+        useAppStore.setState({ isStreaming: false, messages: [] });
+      });
+      mounted.unmount();
+    } finally {
+      disposeHostFactories();
+      useAppStore.setState({ isStreaming: false, messages: [] });
       await env.dispose();
     }
   });

@@ -316,3 +316,42 @@ test("requireCtrlEnter toggle switches Enter and Ctrl+Enter across composer and 
   await expect(userBubble(app, "edited 1\nedited 2")).toBeVisible();
   await expect(answer(app, "Edited reply.")).toBeVisible();
 });
+
+test("multi-step tool turn collapses into one unified turn with rich ProcessGroup and syntax-highlighted code", async ({ app, harness }) => {
+  harness.provider.push(
+    [
+      { type: "thinking-delta", index: 0, text: "先读取 notes.txt 确认内容。" },
+      { type: "text-delta", index: 1, text: "我先检查工作区里的 notes.txt。" },
+      { type: "tool-call-start", index: 2, id: "r1", name: "read" },
+      { type: "tool-call-delta", index: 2, argumentsDelta: JSON.stringify({ path: "notes.txt" }) },
+      { type: "finish", reason: "tool-use" },
+    ],
+    toolReply(
+      [{ id: "g1", name: "glob", args: { pattern: "*.txt" } }],
+      "再列出工作区文件确认没有遗漏。",
+    ),
+    textReply("已经核对完成：\n```ts\nexport const verified = true;\n```"),
+  );
+
+  await send(app, "检查一下工作区");
+  await expect(answer(app, "已经核对完成：")).toBeVisible();
+  await settled(app);
+
+  // All 3 assistant steps merge into ONE unified `.dshc-turn` with ONE `.dshc-turn-process` pill.
+  await expect(app.locator(".dshc-turn")).toHaveCount(1);
+  await expect(app.locator(".dshc-turn-process")).toHaveCount(1);
+  await expect(app.locator(".dshc-turn-process")).toContainText("已完成");
+
+  // Intermediate narrations stay folded inside the process timeline until expanded; syntax-highlighted CodeFence renders.
+  await expect(app.locator(".dshc-process-text")).toHaveCount(0);
+  await expect(app.locator(".markdown-code")).toHaveCount(1);
+  await expect(app.locator(".markdown-code")).toContainText("export const verified = true;");
+
+  // Clicking `.dshc-turn-process` reveals rich ProcessGroup headers and intermediate narrations.
+  await app.locator(".dshc-turn-process").click();
+  await expect(app.locator(".dshc-process-text")).toHaveCount(2);
+  await expect(app.locator(".dshc-group-title")).toHaveCount(3);
+  await expect(app.locator(".dshc-group-title").nth(0)).toContainText("执行 1 次思考");
+  await expect(app.locator(".dshc-group-title").nth(1)).toContainText("读取 1 个文件");
+  await expect(app.locator(".dshc-group-title").nth(2)).toContainText("搜索 1 次");
+});

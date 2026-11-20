@@ -2,7 +2,7 @@
  * Built-in `conversation.turn` and `conversation.transcript` slot components
  * (ADR 0023 `core-conversation`).
  */
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronUp } from "lucide-react";
 import {
   useFrontendService,
@@ -30,6 +30,7 @@ export function CoreConversationTurn({
   assistantMessages,
   isStreaming,
   isLastTurn,
+  isLastUserTurn = isLastTurn,
   sessionId,
   renderSlot,
   renderSlotChain,
@@ -65,8 +66,24 @@ export function CoreConversationTurn({
     [handle, sessionService],
   );
 
-  const lastAssistant = assistantMessages[assistantMessages.length - 1];
+  let lastAssistantIdx = -1;
+  for (let i = assistantMessages.length - 1; i >= 0; i -= 1) {
+    if (assistantMessages[i]?.role === "assistant") {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  const lastAssistant = lastAssistantIdx >= 0 ? assistantMessages[lastAssistantIdx] : undefined;
   const footerMessage = lastAssistant ?? userMessage;
+  const turnFooterNode =
+    isLastTurn && !isStreaming && footerMessage !== undefined
+      ? renderSlot("conversation.turnFooter", {
+          cwd,
+          sessionFile,
+          message: footerMessage,
+          ...(footerMessage.durationMs === undefined ? {} : { durationMs: footerMessage.durationMs }),
+        })
+      : undefined;
 
   return (
     <div
@@ -82,6 +99,7 @@ export function CoreConversationTurn({
           message: userMessage,
           isStreaming: false,
           isLast: isLastTurn && assistantMessages.length === 0,
+          isLastUserTurn,
           onRewind: handleRewind,
           onEditAndResend: handleEditAndResend,
         })}
@@ -92,21 +110,16 @@ export function CoreConversationTurn({
             cwd,
             sessionFile,
             message: msg,
-            isStreaming: isStreaming && isLastTurn && idx === assistantMessages.length - 1,
-            isLast: isLastTurn && idx === assistantMessages.length - 1,
+            isStreaming: isStreaming && isLastTurn && idx === lastAssistantIdx,
+            isLast: isLastTurn && idx === lastAssistantIdx,
+            ...(userMessage === undefined ? {} : { turnStartedAt: userMessage.timestamp }),
+            ...(idx === lastAssistantIdx && turnFooterNode !== undefined ? { footer: turnFooterNode } : {}),
           })}
         </div>
       ))}
 
-      {isLastTurn && !isStreaming && footerMessage !== undefined && (
-        <div className="dshc-turn-footer">
-          {renderSlot("conversation.turnFooter", {
-            cwd,
-            sessionFile,
-            message: footerMessage,
-            ...(footerMessage.durationMs === undefined ? {} : { durationMs: footerMessage.durationMs }),
-          })}
-        </div>
+      {lastAssistantIdx < 0 && turnFooterNode !== undefined && (
+        <div className="dshc-turn-footer">{turnFooterNode}</div>
       )}
     </div>
   );
@@ -127,6 +140,8 @@ export function CoreConversationTranscript({
   const workspaceState = useWorkspaceState();
   const themeState = useThemeState();
   const { snapshot: handleSnap } = useSessionHandle(sessionId);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const landedTimerRef = useRef<number | null>(null);
 
   const matchesActiveMain =
     sessionState !== undefined &&
@@ -189,10 +204,123 @@ export function CoreConversationTranscript({
     () => visibleTurns.filter((turn) => turn.userMessage !== undefined),
     [visibleTurns],
   );
+  const lastUserTurnId = userTurns[userTurns.length - 1]?.userMessage?.id ?? null;
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [turnNavOpen, setTurnNavOpen] = useState(false);
+
+  // Track which user turn is currently in view for the turn rail.
+  useEffect(() => {
+    if (compact || typeof window === "undefined" || typeof document === "undefined") return;
+    const scroller = rootRef.current?.closest?.(".conversation-scroll");
+    if (scroller == null || userTurns.length === 0) return;
+
+    let rafId: number | null = null;
+    const updateCurrentTurn = () => {
+      rafId = null;
+      if (typeof scroller.getBoundingClientRect !== "function") return;
+      const scrollerRect = scroller.getBoundingClientRect();
+      const threshold = scrollerRect.top + scrollerRect.height * 0.35;
+      let current = userTurns[0]?.userMessage?.id ?? null;
+      for (const turn of userTurns) {
+        const userId = turn.userMessage?.id;
+        if (userId === undefined) continue;
+        const el = document.getElementById(`message-${userId}`);
+        if (el === null || typeof el.getBoundingClientRect !== "function") continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= threshold) current = userId;
+        else break;
+      }
+      setActiveTurnId((prev) => (prev === current ? prev : current));
+    };
+    const scheduleUpdate = () => {
+      if (rafId !== null || typeof window.requestAnimationFrame !== "function") return;
+      rafId = window.requestAnimationFrame(updateCurrentTurn);
+    };
+    scheduleUpdate();
+    scroller.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      if (rafId !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(rafId);
+      }
+      scroller.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [compact, userTurns]);
+
+  const jumpToTurn = useCallback((turnId: string) => {
+    if (typeof document === "undefined") return;
+    const el = document.getElementById(`message-${turnId}`);
+    if (el === null) return;
+    if (typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    setActiveTurnId(turnId);
+    setTurnNavOpen(false);
+    if (typeof document.querySelectorAll === "function") {
+      document.querySelectorAll("[data-dsh-claude-turn-nav-landed]").forEach((node) => {
+        node.removeAttribute("data-dsh-claude-turn-nav-landed");
+      });
+    }
+    el.setAttribute("data-dsh-claude-turn-nav-landed", "");
+    if (typeof window !== "undefined") {
+      if (landedTimerRef.current !== null) window.clearTimeout(landedTimerRef.current);
+      landedTimerRef.current = window.setTimeout(() => {
+        el.removeAttribute("data-dsh-claude-turn-nav-landed");
+        landedTimerRef.current = null;
+      }, 1450);
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (landedTimerRef.current !== null && typeof window !== "undefined") {
+        window.clearTimeout(landedTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  // Alt+Up / Alt+Down turn navigation
+  useEffect(() => {
+    if (compact || typeof window === "undefined" || typeof document === "undefined" || userTurns.length < 2) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      const activeEl = document.activeElement;
+      if (activeEl instanceof HTMLTextAreaElement || activeEl instanceof HTMLInputElement) {
+        if (activeEl.value.trim().length > 0) return;
+      }
+      event.preventDefault();
+      const currentIndex = userTurns.findIndex((turn) => turn.userMessage?.id === activeTurnId);
+      const baseIndex = currentIndex >= 0 ? currentIndex : userTurns.length - 1;
+      const nextIndex =
+        event.key === "ArrowUp"
+          ? Math.max(0, baseIndex - 1)
+          : Math.min(userTurns.length - 1, baseIndex + 1);
+      const targetId = userTurns[nextIndex]?.userMessage?.id;
+      if (targetId !== undefined) jumpToTurn(targetId);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeTurnId, compact, jumpToTurn, userTurns]);
+
+  const revealEarlier = () => {
+    const scroller = rootRef.current?.closest?.(".conversation-scroll") ?? null;
+    const previousHeight = scroller?.scrollHeight ?? 0;
+    setVisibleCount((count) => count + INITIAL_VISIBLE_TURNS);
+    if (scroller !== null && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => {
+        scroller.scrollTop += scroller.scrollHeight - previousHeight;
+      });
+    }
+  };
 
   return (
     <div
+      ref={rootRef}
       className={`conversation-transcript${compact ? " is-compact" : ""}`}
       data-slot="conversation.transcript"
       data-session-id={sessionId}
@@ -202,7 +330,7 @@ export function CoreConversationTranscript({
         <button
           type="button"
           className="load-earlier-messages"
-          onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_TURNS)}
+          onClick={revealEarlier}
         >
           <ChevronUp size={14} strokeWidth={1.8} />
           更早的 {Math.min(INITIAL_VISIBLE_TURNS, firstVisibleTurnIndex)} 轮对话
@@ -219,6 +347,8 @@ export function CoreConversationTranscript({
             assistantMessages: turn.assistantMessages,
             isStreaming,
             isLastTurn: turn.isLastTurn,
+            isLastUserTurn:
+              turn.userMessage !== undefined && turn.userMessage.id === lastUserTurnId,
           })}
         </div>
       ))}
@@ -247,22 +377,46 @@ export function CoreConversationTranscript({
             {userTurns.map((turn, index) => {
               const userMsg = turn.userMessage;
               if (userMsg === undefined) return null;
+              const isCurrent = (activeTurnId ?? lastUserTurnId) === userMsg.id;
               return (
                 <button
                   key={userMsg.id}
                   type="button"
                   className="dsh-claude-turn-rail-mark"
+                  data-current={isCurrent || undefined}
                   title={`第 ${index + 1} 轮：${singleLineExcerpt(userMsg.content, 60)}`}
                   aria-label={`跳到第 ${index + 1} 轮`}
-                  onClick={() => {
-                    if (typeof document !== "undefined") {
-                      document.getElementById(`message-${userMsg.id}`)?.scrollIntoView({ behavior: "smooth" });
-                    }
-                  }}
+                  onClick={() => jumpToTurn(userMsg.id)}
                 />
               );
             })}
           </div>
+          {turnNavOpen && (
+            <div className="dsh-claude-turn-nav dsh-claude-popover-card" data-open="true" role="menu">
+              <div className="dsh-claude-turn-nav-list">
+                {userTurns.map((turn) => {
+                  const userMsg = turn.userMessage;
+                  if (userMsg === undefined) return null;
+                  const isCurrent = (activeTurnId ?? lastUserTurnId) === userMsg.id;
+                  return (
+                    <button
+                      key={userMsg.id}
+                      type="button"
+                      role="menuitem"
+                      className="dsh-claude-turn-nav-row"
+                      data-current={isCurrent || undefined}
+                      onClick={() => jumpToTurn(userMsg.id)}
+                    >
+                      <span className="dsh-claude-turn-nav-text">
+                        {singleLineExcerpt(userMsg.content)}
+                      </span>
+                      <span className="dsh-claude-turn-nav-dash" aria-hidden="true" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </nav>
       )}
     </div>

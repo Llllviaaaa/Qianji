@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowUp, ChevronDown, ChevronUp, LoaderCircle, Pencil, RotateCcw } from "lucide-react";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
@@ -48,6 +48,9 @@ export interface UserMessageRowProps {
   requireCtrlEnter: boolean;
   slotCwd: string;
   slotSessionFile: string | null;
+  sessionId?: string;
+  actionsReveal?: "hover" | "always";
+  extraSlotActions?: ReactNode;
   onEdit?: (message: UiMessage) => void;
   onRewind?: (message: UiMessage) => Promise<boolean>;
   onCancelEdit?: () => void;
@@ -60,6 +63,9 @@ export function UserMessageRow({
   requireCtrlEnter,
   slotCwd,
   slotSessionFile,
+  sessionId,
+  actionsReveal,
+  extraSlotActions,
   onEdit,
   onRewind,
   onCancelEdit,
@@ -163,7 +169,13 @@ export function UserMessageRow({
 
   if (editing) {
     return (
-      <article className="dshc-flow dshc-user-row is-editing" data-chat-flow-kind="user" id={`message-${message.id}`}>
+      <article
+        className="dshc-flow dshc-user-row is-editing"
+        data-chat-flow-kind="user"
+        data-session-id={sessionId}
+        data-message-id={message.id}
+        id={`message-${message.id}`}
+      >
         <div className="message-edit-card">
           {message.images && message.images.length > 0 && (
             <div className="dshc-attachment-row">
@@ -253,7 +265,14 @@ export function UserMessageRow({
     : message.content;
 
   return (
-    <article className="dshc-flow dshc-user-row" data-chat-flow-kind="user" id={`message-${message.id}`}>
+    <article
+      className="dshc-flow dshc-user-row"
+      data-chat-flow-kind="user"
+      data-actions-reveal={actionsReveal}
+      data-session-id={sessionId}
+      data-message-id={message.id}
+      id={`message-${message.id}`}
+    >
       <motion.div
         className="dshc-user-stack"
         initial={userBubbleEntering && !reduceMotion ? USER_BUBBLE_HIDDEN : false}
@@ -328,16 +347,20 @@ export function UserMessageRow({
                   {rewinding ? <LoaderCircle className="spin" size={15} strokeWidth={1.25} /> : <RotateCcw size={15} strokeWidth={1.25} />}
                 </button>
               )}
-              <PluginSlot
-                name="message.actions"
-                messageRole="user"
-                context={{
-                  cwd: slotCwd,
-                  sessionFile: slotSessionFile,
-                  message,
-                  contentText: message.content,
-                }}
-              />
+              {extraSlotActions !== undefined ? (
+                extraSlotActions
+              ) : (
+                <PluginSlot
+                  name="message.actions"
+                  messageRole="user"
+                  context={{
+                    cwd: slotCwd,
+                    sessionFile: slotSessionFile,
+                    message,
+                    contentText: message.content,
+                  }}
+                />
+              )}
             </>
           )}
         />
