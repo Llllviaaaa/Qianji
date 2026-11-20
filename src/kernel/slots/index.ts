@@ -83,6 +83,7 @@ export { ClientSlotsService } from "./service";
 
 export {
   createBoundRenderers,
+  createResourceCell,
   resolveChainItems,
   SessionArea,
   SessionProvider,
@@ -94,6 +95,8 @@ export {
   useResource,
   useSlotScope,
   WrapperErrorBoundary,
+  type ResourceCell,
+  type ResourceServiceLike,
   type SessionAreaProps,
   type SlotFactoryHostProps,
   type SlotHostProps,

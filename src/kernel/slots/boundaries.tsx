@@ -42,7 +42,6 @@ export const SlotScopeContext = createContext<SlotScopeContextValue>({
 });
 
 const NOOP_UNSUB = (): void => undefined;
-const NOOP_SUBSCRIBE = (_listener: () => void): (() => void) => NOOP_UNSUB;
 const NULL_SESSION = (): string | null => null;
 
 export interface SlotKernelProviderProps {
@@ -104,25 +103,96 @@ export function useSlotScope(): SlotScopeContextValue {
   return useContext(SlotScopeContext);
 }
 
+export interface ResourceServiceLike {
+  subscribe?(uri: string, listener: (value: unknown) => void): () => void;
+  read?(uri: string): unknown;
+}
+
+export interface ResourceCell {
+  subscribe(onStoreChange: () => void): () => void;
+  getSnapshot(): unknown;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
+/**
+ * External-store adapter bridging `resourcesService.subscribe(uri, (value) => void)`
+ * and async/sync `resourcesService.read(uri)` into a stable cached snapshot for
+ * `useSyncExternalStore` (never returning a `Promise` or triggering `setState` in effects).
+ */
+export function createResourceCell(
+  service: ResourceServiceLike | undefined,
+  address: string,
+): ResourceCell {
+  let cached: unknown = undefined;
+  let hasValue = false;
+
+  return {
+    getSnapshot: () => cached,
+    subscribe(onStoreChange: () => void): () => void {
+      if (service === undefined) return NOOP_UNSUB;
+      let active = true;
+      let receivedFromSubscribe = false;
+
+      const commit = (next: unknown): void => {
+        if (!active || isPromiseLike(next)) return;
+        if (hasValue && Object.is(cached, next)) return;
+        cached = next;
+        hasValue = true;
+        onStoreChange();
+      };
+
+      const offSub =
+        typeof service.subscribe === "function"
+          ? service.subscribe(address, (value) => {
+              receivedFromSubscribe = true;
+              commit(value);
+            })
+          : undefined;
+
+      if (!receivedFromSubscribe && typeof service.read === "function") {
+        try {
+          const readResult = service.read(address);
+          if (isPromiseLike(readResult)) {
+            void readResult.then(
+              (resolved) => {
+                if (!receivedFromSubscribe) {
+                  commit(resolved);
+                }
+              },
+              () => undefined,
+            );
+          } else {
+            commit(readResult);
+          }
+        } catch {
+          // Ignore read errors; subscription or subsequent reads may recover.
+        }
+      }
+
+      return () => {
+        active = false;
+        if (typeof offSub === "function") offSub();
+      };
+    },
+  };
+}
+
 /** Reserved resource protocol hook (`useResource<P>(address)`, ADR 0023 §2.5). */
 export function useResource<P extends string = string>(address: string): ResourceValueOf<P> | undefined {
   const { rootCtx } = useContext(SlotKernelContext);
   const service = (rootCtx as { get?(name: string): unknown } | undefined)?.get?.("resourcesService") as
-    | { subscribe?(uri: string, listener: () => void): () => void; read?(uri: string): unknown }
+    | ResourceServiceLike
     | undefined;
 
-  const subscribe = useMemo(
-    () =>
-      typeof service?.subscribe === "function"
-        ? (listener: () => void) => service.subscribe?.(address, listener) ?? NOOP_UNSUB
-        : NOOP_SUBSCRIBE,
-    [service, address],
-  );
-  const getSnapshot = useMemo(
-    () => () => (typeof service?.read === "function" ? service.read(address) : undefined),
-    [service, address],
-  );
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot) as ResourceValueOf<P> | undefined;
+  const cell = useMemo(() => createResourceCell(service, address), [service, address]);
+  return useSyncExternalStore(cell.subscribe, cell.getSnapshot, cell.getSnapshot) as ResourceValueOf<P> | undefined;
 }
 
 export function useResolvedScopeTarget(

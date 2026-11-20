@@ -8,6 +8,7 @@
 import { useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import {
+  createResourceCell,
   resolveTranslator,
   SessionArea,
   SessionProvider,
@@ -18,6 +19,8 @@ import {
   useResource,
   useSlotScope,
   WrapperErrorBoundary,
+  type ResourceCell,
+  type ResourceServiceLike,
   type SessionAreaProps,
   type SlotKernelErrorBoundaryProps,
   type SlotKernelProviderProps,
@@ -45,6 +48,7 @@ import {
 } from "./types";
 
 export {
+  createResourceCell,
   resolveChainItems,
   SessionArea,
   SessionProvider,
@@ -55,6 +59,8 @@ export {
   useSlotScope,
   WrapperErrorBoundary,
   type ResolvedChainItem,
+  type ResourceCell,
+  type ResourceServiceLike,
   type SessionAreaProps,
   type SlotFactoryHostProps,
   type SlotKernelErrorBoundaryProps,
@@ -145,6 +151,7 @@ function buildBoundRenderersOrFallback(
   registry: SlotRegistry,
   entryId: string,
   rootCtx?: Context,
+  _registeredSeq?: number,
 ): {
   readonly renderSlot: BoundRenderSlotFn;
   readonly renderSlotChain: BoundRenderSlotChainFn;
@@ -183,8 +190,8 @@ function EntryInvokeBody({
   readonly selected?: unknown;
 }): ReactNode {
   const bound = useMemo(
-    () => buildBoundRenderersOrFallback(registry, entry.id, rootCtx),
-    [registry, entry.id, rootCtx],
+    () => buildBoundRenderersOrFallback(registry, entry.id, rootCtx, entry.registeredSeq),
+    [registry, entry.id, rootCtx, entry.registeredSeq],
   );
   const store = entry.hasStore
     ? registry.stores.storeOf(entry.id, scopeTarget.scopeKey, ownerProps)

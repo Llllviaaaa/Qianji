@@ -166,6 +166,7 @@ export class SlotRegistry {
         }
         if (claimSet.size === 0) this.childClaims.delete(childKey);
       }
+      this.stores.disposeEntry(entryId);
     }
 
     const authorization = new SlotAuthorization(entryId, slotKey, children, callerCtx);
@@ -201,8 +202,9 @@ export class SlotRegistry {
     return () => {
       if (disposed) return;
       disposed = true;
+      const isCurrent = this.authorizations.get(entryId) === authorization;
       authorization.markDisposed();
-      if (this.authorizations.get(entryId) === authorization) this.authorizations.delete(entryId);
+      if (isCurrent) this.authorizations.delete(entryId);
       for (const { childSlotKey, claim } of addedClaims) {
         const set = this.childClaims.get(childSlotKey);
         if (set !== undefined) {
@@ -216,8 +218,10 @@ export class SlotRegistry {
         if (idx >= 0) entries.splice(idx, 1);
         if (entries.length === 0) this.entriesBySlot.delete(slotKey);
       }
-      disposeStore?.();
-      this.stores.disposeEntry(entryId);
+      if (isCurrent) {
+        disposeStore?.();
+        this.stores.disposeEntry(entryId);
+      }
       this.emit();
     };
   }

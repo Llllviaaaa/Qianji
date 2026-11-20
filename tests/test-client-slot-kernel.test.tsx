@@ -40,6 +40,7 @@ import {
   AbdicationTracker,
   ClientSlotsService,
   createBoundRenderers,
+  createResourceCell,
   resolveChainItems,
   SessionArea,
   SlotFactoryHost,
@@ -50,6 +51,7 @@ import {
   SlotRegistry,
   SlotRoot,
   StaleAuthorizationError,
+  useResource,
   WrapperErrorBoundary,
   type AbdicationCycle,
   type AbdicationRecord,
@@ -437,6 +439,50 @@ describe("ADR 0023 Phase 1: Typed Client Slot Kernel, Store, Runtime & Guardrail
     expect(() => capturedRenderSlot?.("shell.sidebar")).toThrow(StaleAuthorizationError);
     expect(() => capturedRenderChain?.("composer.main")).toThrow(StaleAuthorizationError);
     expect(() => capturedRenderFactory?.("any.factory")).toThrow(StaleAuthorizationError);
+
+    // Also verify same-entryId HMR re-registration replaces the old authorization cleanly
+    // while bumping registeredSeq so EntryInvokeBody refreshes its memoized bound renderers
+    let hmrBoundV1: ((slotKey: string) => ReactNode) | undefined;
+    let hmrBoundV2: ((slotKey: string) => ReactNode) | undefined;
+    const disposeChild = registry.register("hmr.child", {
+      id: "hmr-child-impl",
+      component: () => createElement("span", null, "hmr-child-ok"),
+    });
+    const disposeV1 = registry.register("root", {
+      id: "hmr-shell",
+      children: { "hmr.child": { kind: "single", scope: "root" } },
+      component: ({ renderSlot }) => {
+        hmrBoundV1 = renderSlot as (slotKey: string) => ReactNode;
+        return createElement("div", null, "v1:", renderSlot("hmr.child"));
+      },
+    });
+    const seqV1 = registry.getEntries("root").find((e) => e.id === "hmr-shell")?.registeredSeq ?? 0;
+    expect(renderToStaticMarkup(createElement(SlotRoot, { registry, ctx: root }))).toContain("hmr-child-ok");
+
+    // Re-register with the EXACT SAME entryId (simulating hot-swap without prior explicit dispose)
+    const disposeV2 = registry.register("root", {
+      id: "hmr-shell",
+      children: { "hmr.child": { kind: "single", scope: "root" } },
+      component: ({ renderSlot }) => {
+        hmrBoundV2 = renderSlot as (slotKey: string) => ReactNode;
+        return createElement("div", null, "v2:", renderSlot("hmr.child"));
+      },
+    });
+    const seqV2 = registry.getEntries("root").find((e) => e.id === "hmr-shell")?.registeredSeq ?? 0;
+    expect(seqV2).toBeGreaterThan(seqV1);
+    // Prior handle from v1 is now stale
+    expect(() => hmrBoundV1?.("hmr.child")).toThrow(StaleAuthorizationError);
+    // Live v2 renders cleanly with a fresh authorization handle
+    const v2Html = renderToStaticMarkup(createElement(SlotRoot, { registry, ctx: root }));
+    expect(v2Html).toContain("v2:");
+    expect(v2Html).toContain("hmr-child-ok");
+    expect(hmrBoundV2).toBeDefined();
+    expect(hmrBoundV2).not.toBe(hmrBoundV1);
+    disposeV1();
+    // Disposing the superseded v1 disposer must NOT tear down live v2
+    expect(renderToStaticMarkup(createElement(SlotRoot, { registry, ctx: root }))).toContain("v2:");
+    disposeV2();
+    disposeChild();
 
     // Also verify createBoundRenderers directly on a live then disposed authorization
     const directDispose = registry.register("root", {
@@ -1096,5 +1142,92 @@ describe("ADR 0023 Phase 1: Typed Client Slot Kernel, Store, Runtime & Guardrail
         `Expected ESLint no-restricted-imports error for snippet: ${snippet}`,
       ).toBe(true);
     }
+  });
+
+  it("handles async read(uri) and value-pushing subscribe(uri, cb) safely in useResource / createResourceCell", async () => {
+    // 1. Async read(uri) only: getSnapshot never returns a Promise, caches cleanly, and updates once settled
+    let resolveRead: ((val: unknown) => void) | undefined;
+    const asyncOnlyService = {
+      read: () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        }),
+    };
+    const asyncCell = createResourceCell(asyncOnlyService, "doc://readme");
+    expect(asyncCell.getSnapshot()).toBeUndefined();
+    let asyncChangeCount = 0;
+    const offAsync = asyncCell.subscribe(() => {
+      asyncChangeCount += 1;
+    });
+    // Still undefined while pending (never a Promise!)
+    expect(asyncCell.getSnapshot()).toBeUndefined();
+    const payload = { title: "Hello ADR 0023" };
+    resolveRead?.(payload);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(asyncChangeCount).toBe(1);
+    expect(asyncCell.getSnapshot()).toBe(payload);
+    // Repeated getSnapshot calls return identical cached reference
+    expect(asyncCell.getSnapshot()).toBe(asyncCell.getSnapshot());
+    offAsync();
+
+    // 2. Value-pushing subscribe(uri, (value) => void) + slower async read(uri):
+    // pushed values win and stale async read never clobbers newer pushed state
+    const pushedListeners = new Set<(val: unknown) => void>();
+    let resolveSlowRead: ((val: unknown) => void) | undefined;
+    let subDisposed = false;
+    const liveService = {
+      read: () =>
+        new Promise((resolve) => {
+          resolveSlowRead = resolve;
+        }),
+      subscribe: (_uri: string, listener: (val: unknown) => void) => {
+        pushedListeners.add(listener);
+        return () => {
+          subDisposed = true;
+          pushedListeners.delete(listener);
+        };
+      },
+    };
+    const liveCell = createResourceCell(liveService, "git://status");
+    let liveChanges = 0;
+    const offLive = liveCell.subscribe(() => {
+      liveChanges += 1;
+    });
+    for (const cb of pushedListeners) cb("dirty");
+    expect(liveCell.getSnapshot()).toBe("dirty");
+    expect(liveChanges).toBe(1);
+
+    // Duplicate value does not notify redundantly
+    for (const cb of pushedListeners) cb("dirty");
+    expect(liveChanges).toBe(1);
+
+    // Stale async read resolving later MUST NOT overwrite fresher pushed value
+    resolveSlowRead?.("stale-clean");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(liveCell.getSnapshot()).toBe("dirty");
+    expect(liveChanges).toBe(1);
+
+    // Subsequent push updates snapshot
+    for (const cb of pushedListeners) cb("clean");
+    expect(liveCell.getSnapshot()).toBe("clean");
+    expect(liveChanges).toBe(2);
+
+    // Unsubscribe disposes underlying subscription and ignores further pushes
+    offLive();
+    expect(subDisposed).toBe(true);
+
+    // 3. Rendering useResource inside React with an async resourcesService never returns a Promise or throws
+    const root = new Context();
+    root.provide("resourcesService" as never, liveService as never);
+    function ResourceConsumer() {
+      const val = useResource<string>("git://status");
+      return createElement("span", null, val === undefined ? "pending" : String(val));
+    }
+    const html = renderToStaticMarkup(
+      createElement(SlotKernelProvider, { ctx: root }, createElement(ResourceConsumer)),
+    );
+    expect(html).toBe("<span>pending</span>");
   });
 });
