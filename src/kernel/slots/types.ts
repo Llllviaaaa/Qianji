@@ -5,6 +5,14 @@
 import type { ComponentType, ReactNode } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import type { StoreDecl } from "../store";
+import type {
+  LocaleNamespaceMap,
+  ResourceProtocolMap,
+  SlotFactoryMap,
+  SlotMap,
+} from "./index";
+
+export type { LocaleNamespaceMap, ResourceProtocolMap, SlotFactoryMap, SlotMap };
 
 export type SlotKind = "single" | "list" | "keyed" | "chain";
 export type SlotScope = "root" | "session-maybe" | "session";
@@ -29,24 +37,6 @@ export interface SlotFactorySpec<
   readonly props: TProps;
   readonly scope?: TScope;
 }
-
-/* eslint-disable @typescript-eslint/no-empty-object-type --
-   Declaration-merged registries intentionally start empty so builtin and
-   external plugins augment them via `declare module "@qianji/client-slots"`. */
-
-/** Declaration-merged map of typed slot keys to their `SlotSpec` definitions. */
-export interface SlotMap {}
-
-/** Declaration-merged map of reusable component factories (`registerFactory` / `renderFactory`). */
-export interface SlotFactoryMap {}
-
-/** Declaration-merged map of optional i18n locale namespaces and message keys. */
-export interface LocaleNamespaceMap {}
-
-/** Declaration-merged map of optional resource URI schemes to resolved payload types. */
-export interface ResourceProtocolMap {}
-
-/* eslint-enable @typescript-eslint/no-empty-object-type */
 
 export type KnownSlotKey = Extract<keyof SlotMap, string>;
 export type AnySlotKey = KnownSlotKey | (string & {});

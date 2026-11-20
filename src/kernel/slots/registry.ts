@@ -413,6 +413,7 @@ export class SlotRegistry {
   getVersion = (): number => this.version;
 
   subscribe = (listener: () => void): (() => void) => {
+    this.abdication.ensureErrorSubscription();
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);

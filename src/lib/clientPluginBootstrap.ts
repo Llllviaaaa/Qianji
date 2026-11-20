@@ -16,12 +16,14 @@ import {
   clientContributions,
   useClientContributions,
 } from "./clientContributions";
+import { registerCorePrimitiveFactories } from "../kernel/primitives/factories";
 import {
   createSafeModeGatedTransport,
   installPluginStyleGlobals,
   safeModeController,
   setPluginTier,
 } from "../kernel/runtime";
+import { installSessionScopeAdapter, registerFrontendServices } from "../kernel/services";
 import { ClientSlotsService, clientSlotsRegistry } from "../kernel/slots";
 import {
   createClientPluginRuntime,
@@ -42,6 +44,7 @@ import { groupTranscriptMessages } from "./transcriptTurns";
 import { IntelligentUiCanvasTab } from "../components/workbench/IntelligentUiCanvasTab";
 import { DiagramBlock } from "../components/DiagramBlock";
 import { qianjiClientSdk } from "../sdk";
+import { bindClientRootContext } from "../sdk/rootContext";
 import { useAppStore } from "../store";
 import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
@@ -277,7 +280,7 @@ export const CLIENT_MODULES: Record<string, () => Promise<unknown>> = {
   "@qianji/client": async () => qianjiClientSdk,
   "@qianji/client-slots": () => import("../kernel/slots"),
   "@qianji/client-store": () => import("../kernel/store"),
-  // "@qianji/client-primitives" plugs in here (or via registerClientModule) once Phase 2 lands.
+  "@qianji/client-primitives": () => import("../kernel/primitives"),
   "@qianji/protocol": () => import("@qianji/protocol"),
   "@pid/client": async () => qianjiClientSdk,
   "@pid/protocol": () => import("@qianji/protocol"),
@@ -319,6 +322,7 @@ const defaultTransport: ClientPluginTransport = createSafeModeGatedTransport(
 
 let singletonRoot: Context | undefined;
 let singletonRuntime: ClientPluginRuntimeHandle | undefined;
+let singletonServicesReady: Promise<void> | undefined;
 
 function mountBuiltinIntelligentUiSync(): void {
   let mountedDisposers: Array<() => void> = [];
@@ -457,10 +461,17 @@ export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
   installPluginStyleGlobals();
   safeModeController.install();
   const root = new Context();
-  root.plugin(ClientSlotsService, clientSlotsRegistry);
-  root.plugin(ClientContributionService, clientContributions);
-  root.plugin(ClientStylesService);
-  root.plugin(BetterSidebarCompatService, clientContributions);
+  bindClientRootContext(root);
+  const coreFibers = [
+    root.plugin(ClientSlotsService, clientSlotsRegistry),
+    root.plugin(ClientContributionService, clientContributions),
+    root.plugin(ClientStylesService),
+    root.plugin(BetterSidebarCompatService, clientContributions),
+  ];
+  const frontendServicesReady = registerFrontendServices(root, { contributionRegistry: clientContributions });
+  installSessionScopeAdapter(root);
+  registerCorePrimitiveFactories(clientSlotsRegistry);
+  singletonServicesReady = Promise.all([...coreFibers, frontendServicesReady]).then(() => undefined);
   clientSlotsRegistry.abdication.onAbdicate((record) => {
     const fallbackNote = record.fallbackPluginId === undefined ? "" : `，已回退至 ${record.fallbackPluginId}`;
     useAppStore.getState().showToast(`插件 "${record.pluginId}" 槽位 ${record.slotKey} 渲染异常${fallbackNote}`, "warning");
@@ -476,4 +487,8 @@ export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
 
 export function getClientRootContext(): Context | undefined {
   return singletonRoot;
+}
+
+export function whenClientPluginServicesReady(): Promise<void> {
+  return singletonServicesReady ?? Promise.resolve();
 }

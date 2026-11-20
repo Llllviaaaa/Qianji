@@ -19,7 +19,10 @@
     "noFallthroughCasesInSwitch": true,
 
     "paths": {
-      "@qianji/client": ["./src/sdk/index.ts"]
+      "@qianji/client": ["./src/sdk/index.ts"],
+      "@qianji/client-slots": ["./src/kernel/slots/index.ts"],
+      "@qianji/client-store": ["./src/kernel/store/index.ts"],
+      "@qianji/client-primitives": ["./src/kernel/primitives/index.ts"]
     }
   },
   "//include": "The two ambient declaration files come from src/ because the .tsx scripts render components that rely on them.",

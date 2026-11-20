@@ -114,6 +114,8 @@ export const CLIENT_PRIMITIVES_EXPORTS = [
 
 export type ClientPrimitiveExportName = (typeof CLIENT_PRIMITIVES_EXPORTS)[number];
 
+export type { CorePrimitiveFactoryKey } from "./factories";
+
 export type {
   BadgeProps,
   BadgeVariant,

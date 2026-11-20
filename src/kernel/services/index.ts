@@ -121,6 +121,11 @@ export type {
   TranslateParams,
 } from "./localeAndResources";
 
+export {
+  createSessionScopeAdapter,
+  installSessionScopeAdapter,
+} from "./sessionScopeAdapter";
+
 export const FRONTEND_SERVICE_NAMES = [
   "sessionService",
   "workspaceService",

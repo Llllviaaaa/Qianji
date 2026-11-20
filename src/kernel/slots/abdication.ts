@@ -89,18 +89,31 @@ export class AbdicationTracker {
   private readonly getCycle: AbdicationCycleProvider;
   private readonly recordError: (pluginId: string | undefined, slotId: string, error: unknown) => void;
   private readonly getLockout: (pluginId: string | undefined, slotId: string) => { locked: boolean; message?: string };
+  private readonly subscribeErrorsFn: (listener: () => void) => () => void;
   private readonly records = new Map<string, AbdicationRecord>();
   private readonly abdicateListeners = new Set<AbdicationListener>();
   private readonly stateListeners = new Set<() => void>();
-  private readonly offClientErrors: (() => void) | undefined;
+  private offClientErrors: (() => void) | undefined;
+  private disposed = false;
   private recordsSnapshot: readonly AbdicationRecord[] = [];
 
   constructor(options: AbdicationTrackerOptions = {}) {
     this.getCycle = options.getCycle ?? resolveDefaultPluginCycle;
     this.recordError = options.recordError ?? recordClientRenderError;
     this.getLockout = options.getLockout ?? getClientSlotLockout;
-    const subscribeErrors = options.subscribeErrors ?? subscribeClientPluginErrors;
-    this.offClientErrors = subscribeErrors(() => {
+    this.subscribeErrorsFn = options.subscribeErrors ?? subscribeClientPluginErrors;
+    // Defer subscribing to the default `clientPluginState` store until first runtime use
+    // so module-evaluation cycles (e.g. `clientPluginRuntime -> clientPluginState -> store ->
+    // clientContributions -> clientSlotsRegistry`) never hit TDZ on `clientErrorListeners`.
+    if (options.subscribeErrors !== undefined) {
+      this.ensureErrorSubscription();
+    }
+  }
+
+  /** Lazily attach the `clientPluginState` listener once modules have finished initializing. */
+  ensureErrorSubscription(): void {
+    if (this.disposed || this.offClientErrors !== undefined) return;
+    this.offClientErrors = this.subscribeErrorsFn(() => {
       this.pruneExpiredRecords();
       this.emitState();
     });
@@ -111,6 +124,7 @@ export class AbdicationTracker {
    * cycle, record client error state, invoke `onAbdicate` listeners, and notify renderers.
    */
   abdicate(params: AbdicateParams): AbdicationRecord {
+    this.ensureErrorSubscription();
     const key = abdicationMapKey(params.slotKey, params.entryId);
     const cycle = params.cycle ?? this.getCycle(params.pluginId);
     const errObj = params.error instanceof Error ? params.error : new Error(String(params.error));
@@ -164,6 +178,7 @@ export class AbdicationTracker {
    * a plugin reloads, updates config, or receives a new HMR bundle ETag.
    */
   isAbdicated(slotKey: string, entryId: string, pluginId: string): boolean {
+    this.ensureErrorSubscription();
     const key = abdicationMapKey(slotKey, entryId);
     const currentCycle = this.getCycle(pluginId);
     const existing = this.records.get(key);
@@ -224,6 +239,7 @@ export class AbdicationTracker {
   getRecords = (): readonly AbdicationRecord[] => this.recordsSnapshot;
 
   onAbdicate(listener: AbdicationListener): () => void {
+    this.ensureErrorSubscription();
     this.abdicateListeners.add(listener);
     return () => {
       this.abdicateListeners.delete(listener);
@@ -265,7 +281,9 @@ export class AbdicationTracker {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.offClientErrors?.();
+    this.offClientErrors = undefined;
     this.abdicateListeners.clear();
     this.stateListeners.clear();
   }

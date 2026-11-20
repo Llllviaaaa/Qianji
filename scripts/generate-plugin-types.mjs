@@ -7,6 +7,13 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  CLIENT_FRONTEND_SERVICE_HOOKS_DTS,
+  CLIENT_PRIMITIVES_DTS,
+  CLIENT_SLOTS_DTS,
+  CLIENT_STORE_DTS,
+  CORDIS_CLIENT_KERNEL_AUGMENTATION,
+} from "./plugin-types-client-kernel.mjs";
 
 const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -82,6 +89,7 @@ export type ComponentType<P = {}> = ((props: P) => ReactNode) | (new (props: P) 
 export interface RefObject<T> {
   readonly current: T | null;
 }
+export type Ref<T> = ((instance: T | null) => void) | RefObject<T> | null | undefined;
 
 export interface HTMLAttributes<T = Element> {
   id?: string;
@@ -552,7 +560,7 @@ export function generatePluginTypes({
 
   // 2. Emit `@deepseek-ai/cordis` & `cordis` with merged Host + Client Context services.
   const baseCordisDts = readFileSync(join(repoRoot, "src", "types", "cordis.d.ts"), "utf8");
-  const fullCordisDts = `${baseCordisDts}\n${CORDIS_HOST_AND_CLIENT_AUGMENTATION}\n`;
+  const fullCordisDts = `${baseCordisDts}\n${CORDIS_HOST_AND_CLIENT_AUGMENTATION}\n${CORDIS_CLIENT_KERNEL_AUGMENTATION}\n`;
   writePkgDts(targetDir, "@deepseek-ai/cordis", fullCordisDts);
   writePkgDts(targetDir, "cordis", 'export * from "@deepseek-ai/cordis";\n');
 
@@ -934,6 +942,7 @@ export interface ClientContributionService {
 
 export interface ClientStylesService {
   inject(css: string, key?: string): () => void;
+  injectGlobal(css: string, key?: string): () => void;
 }
 
 export interface ActiveSessionModelSummary {
@@ -1089,9 +1098,12 @@ export declare function messageImagesToAttachments(
 export declare const rewindController: RewindControllerApi;
 
 export type ClientPluginApply<C = Record<string, unknown>> = (ctx: Context, config: C) => void;
-`;
+${CLIENT_FRONTEND_SERVICE_HOOKS_DTS}`;
   writePkgDts(targetDir, "@qianji/client", clientSdkDts);
   writePkgDts(targetDir, "@pid/client", 'export * from "@qianji/client";\n');
+  writePkgDts(targetDir, "@qianji/client-store", CLIENT_STORE_DTS);
+  writePkgDts(targetDir, "@qianji/client-slots", CLIENT_SLOTS_DTS);
+  writePkgDts(targetDir, "@qianji/client-primitives", CLIENT_PRIMITIVES_DTS);
 
   // 4. Emit zero-dependency React, JSX runtime, Lucide icons, and dsh-better-sidebar shim types.
   writePkgDts(targetDir, "react", REACT_INDEX_DTS);

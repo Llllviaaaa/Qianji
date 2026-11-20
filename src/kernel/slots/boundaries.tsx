@@ -187,11 +187,12 @@ export function createResourceCell(
 /** Reserved resource protocol hook (`useResource<P>(address)`, ADR 0023 §2.5). */
 export function useResource<P extends string = string>(address: string): ResourceValueOf<P> | undefined {
   const { rootCtx } = useContext(SlotKernelContext);
-  const service = (rootCtx as { get?(name: string): unknown } | undefined)?.get?.("resourcesService") as
-    | ResourceServiceLike
-    | undefined;
-
-  const cell = useMemo(() => createResourceCell(service, address), [service, address]);
+  const cell = useMemo(() => {
+    const service = (rootCtx as { get?(name: string): unknown } | undefined)?.get?.("resourcesService") as
+      | ResourceServiceLike
+      | undefined;
+    return createResourceCell(service, address);
+  }, [rootCtx, address]);
   return useSyncExternalStore(cell.subscribe, cell.getSnapshot, cell.getSnapshot) as ResourceValueOf<P> | undefined;
 }
 
