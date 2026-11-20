@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Menu } from "lucide-react";
 import {
   useClientContributions,
@@ -11,10 +11,8 @@ import {
 import type { CoreShellTopbarProps, SlotComponentProps } from "@qianji/client-slots";
 import { aggregateDiffStats, LegacyContributionHost, resolveActiveSessionTitle } from "./shellHelpers";
 
-const NOOP_UNSUB = (): void => undefined;
-
 export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, "root">) {
-  const { renderSlot, ctx } = props;
+  const { ctx } = props;
   const navigationService = useFrontendService("navigationService", ctx);
   const sessionService = useFrontendService("sessionService", ctx);
   const workspaceService = useFrontendService("workspaceService", ctx);
@@ -26,19 +24,6 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
   const workspaceSnap = useWorkspaceState(ctx);
   useMenusState(ctx);
   const contributions = useClientContributions();
-
-  const slotsRegistry = ctx?.slots?.registry;
-  const subscribeSlots = useCallback(
-    (listener: () => void) => (slotsRegistry === undefined ? NOOP_UNSUB : slotsRegistry.subscribe(listener)),
-    [slotsRegistry],
-  );
-  const getSlotsVersion = useCallback(
-    () => (slotsRegistry === undefined ? 0 : slotsRegistry.getVersion()),
-    [slotsRegistry],
-  );
-  useSyncExternalStore(subscribeSlots, getSlotsVersion, getSlotsVersion);
-
-  const hasWorkbenchControls = (slotsRegistry?.getEntries("workbench.topbarControls").length ?? 0) > 0;
 
   const [moreOpen, setMoreOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -91,7 +76,7 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
   const gitDiffStats = useMemo(() => aggregateDiffStats(git?.diff), [git?.diff]);
   const threadMoreItems = menuService?.getItems("thread.more", { cwd, sessionFile }) ?? [];
 
-  const hasHomeChrome = !sidebarVisible || contributions.topbarActions.length > 0 || hasWorkbenchControls;
+  const hasHomeChrome = !sidebarVisible || contributions.topbarActions.length > 0;
   if (newTask && hubView === null && !hasHomeChrome) {
     return null;
   }
@@ -298,12 +283,6 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
                   {gitDiffStats.deletions > 0 && <b>−{gitDiffStats.deletions.toLocaleString()}</b>}
                   {gitDiffStats.additions === 0 && gitDiffStats.deletions === 0 && <span>{reviewFileCount} 个文件</span>}
                 </button>
-              </div>
-            )}
-
-            {hasWorkbenchControls && (
-              <div className="pid-wb-topbar-controls" role="toolbar" aria-label="工作区面板开关">
-                {renderSlot("workbench.topbarControls", { cwd, sessionFile })}
               </div>
             )}
 

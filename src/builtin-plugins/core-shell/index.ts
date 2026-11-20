@@ -47,6 +47,9 @@ export const coreShellPlugin: Plugin.Object = {
       pluginId: CORE_SHELL_PLUGIN_ID,
       tier: "builtin",
       priority: 0,
+      children: {
+        "workbench.topbarControls": CORE_SLOT_SPECS["workbench.topbarControls"],
+      },
       component: CoreShellMenubar,
     });
 
@@ -55,9 +58,6 @@ export const coreShellPlugin: Plugin.Object = {
       pluginId: CORE_SHELL_PLUGIN_ID,
       tier: "builtin",
       priority: 0,
-      children: {
-        "workbench.topbarControls": CORE_SLOT_SPECS["workbench.topbarControls"],
-      },
       component: CoreShellTopbar,
     });
 

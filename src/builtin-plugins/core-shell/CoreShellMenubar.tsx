@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Minus, Square, X } from "lucide-react";
 import {
@@ -17,6 +17,8 @@ import {
   TRANSCRIPT_DENSITY_LABELS,
   TRANSCRIPT_DENSITY_ORDER,
 } from "./shellHelpers";
+
+const NOOP_UNSUB = (): void => undefined;
 
 type AppMenuKey = "file" | "edit" | "view" | "help" | "tools";
 
@@ -71,6 +73,18 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
   const workspaceSnap = useWorkspaceState(props.ctx);
   const themeSnap = useThemeState(props.ctx);
   useMenusState(props.ctx);
+
+  const slotsRegistry = props.ctx?.slots?.registry;
+  const subscribeSlots = useCallback(
+    (listener: () => void) => (slotsRegistry === undefined ? NOOP_UNSUB : slotsRegistry.subscribe(listener)),
+    [slotsRegistry],
+  );
+  const getSlotsVersion = useCallback(
+    () => (slotsRegistry === undefined ? 0 : slotsRegistry.getVersion()),
+    [slotsRegistry],
+  );
+  useSyncExternalStore(subscribeSlots, getSlotsVersion, getSlotsVersion);
+  const hasWorkbenchControls = (slotsRegistry?.getEntries("workbench.topbarControls").length ?? 0) > 0;
 
   const [appMenu, setAppMenu] = useState<AppMenuKey | null>(null);
 
@@ -368,6 +382,21 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
       </div>
 
       <div className="window-menubar-right" data-tauri-drag-region="">
+        {hasWorkbenchControls && (
+          <div
+            className="pid-wb-topbar-controls"
+            role="toolbar"
+            aria-label="工作区面板开关"
+            onClickCapture={() => {
+              if (settingsOpen) navigationService?.closeSettings();
+              if (navSnap?.hubView !== null && navSnap?.hubView !== undefined) {
+                navigationService?.setHubView(null);
+              }
+            }}
+          >
+            {props.renderSlot("workbench.topbarControls", { cwd, sessionFile })}
+          </div>
+        )}
         <div className="window-controls">
           <button
             type="button"
