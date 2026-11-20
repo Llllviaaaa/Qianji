@@ -337,6 +337,7 @@ export function LegacyContributionHost<TCtx>({
     {
       "data-qj-plugin": pluginId,
       "data-qj-slot": slotKey,
+      "data-qj-entry": entryId,
       style: { display: "contents" },
     },
     createElement(SlotKernelErrorBoundary, {

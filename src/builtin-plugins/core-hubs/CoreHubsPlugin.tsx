@@ -76,7 +76,13 @@ export function CoreHubsStage(
       const resolvedPluginId = legacyPage.pluginId ?? "builtin";
       return (
         <div className="pid-plugin-page-stage" data-core-plugin="core-hubs" data-hub-page={targetPageId}>
-          <div data-qj-plugin={resolvedPluginId} data-qj-legacy-slot="pages" style={{ display: "contents" }}>
+          <div
+            data-qj-plugin={resolvedPluginId}
+            data-qj-slot="pages"
+            data-qj-legacy-slot="pages"
+            data-qj-entry={legacyPage.id}
+            style={{ display: "contents" }}
+          >
             <SlotKernelErrorBoundary
               pluginId={resolvedPluginId}
               entryId={`legacy:pages:${legacyPage.id}`}

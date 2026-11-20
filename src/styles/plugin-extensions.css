@@ -29,6 +29,14 @@
   color: var(--qj-text-primary);
 }
 
+.pid-plugin-page-stage {
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+}
+
 .markdown-plugin-block {
   margin: 0.6em 0;
   min-width: 0;

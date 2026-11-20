@@ -128,17 +128,27 @@ function LegacyContributionHost({
   pluginId,
   entryId,
   slotKey,
+  className,
 }: {
   readonly render: (ctx: SettingsSlotContext) => ReactNode;
   readonly context: SettingsSlotContext;
   readonly pluginId: string;
   readonly entryId: string;
   readonly slotKey: string;
+  readonly className?: string;
 }): ReactElement {
   return (
-    <SlotKernelErrorBoundary pluginId={pluginId} entryId={entryId} slotKey={slotKey}>
-      <LegacyRenderBridge render={render} context={context} />
-    </SlotKernelErrorBoundary>
+    <div
+      data-qj-plugin={pluginId}
+      data-qj-slot={slotKey}
+      data-qj-entry={entryId}
+      className={className}
+      style={className === undefined ? { display: "contents" } : undefined}
+    >
+      <SlotKernelErrorBoundary pluginId={pluginId} entryId={entryId} slotKey={slotKey}>
+        <LegacyRenderBridge render={render} context={context} />
+      </SlotKernelErrorBoundary>
+    </div>
   );
 }
 
@@ -378,15 +388,14 @@ export function CoreSettingsShell({
               {activeLegacySections.map((section) => (
                 <section key={section.id} className="settings-layered-section settings-plugin-section">
                   {section.title !== undefined && section.title !== "" && <h2>{section.title}</h2>}
-                  <div className="settings-soft-card settings-plugin-card">
-                    <LegacyContributionHost
-                      render={section.render}
-                      context={slotContext}
-                      pluginId={section.pluginId ?? "builtin"}
-                      entryId={section.id}
-                      slotKey="settings.sections"
-                    />
-                  </div>
+                  <LegacyContributionHost
+                    render={section.render}
+                    context={slotContext}
+                    pluginId={section.pluginId ?? "builtin"}
+                    entryId={section.id}
+                    slotKey="settings.sections"
+                    className="settings-soft-card settings-plugin-card"
+                  />
                 </section>
               ))}
             </div>

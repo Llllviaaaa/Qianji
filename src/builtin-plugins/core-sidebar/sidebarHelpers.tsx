@@ -249,7 +249,13 @@ export function LegacySidebarSectionHost<C>({
 }): ReactNode {
   const resolvedPluginId = pluginId ?? "builtin";
   return (
-    <div data-qj-plugin={resolvedPluginId} data-qj-legacy-slot="leftSidebar" style={{ display: "contents" }}>
+    <div
+      data-qj-plugin={resolvedPluginId}
+      data-qj-slot="leftSidebar"
+      data-qj-legacy-slot="leftSidebar"
+      data-qj-entry={id}
+      style={{ display: "contents" }}
+    >
       <SlotKernelErrorBoundary
         pluginId={resolvedPluginId}
         entryId={`legacy:leftSidebar:${id}`}
