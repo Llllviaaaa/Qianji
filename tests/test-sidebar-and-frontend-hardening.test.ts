@@ -87,8 +87,9 @@ describe("Sidebar Persistence, Minimize Guard & Reversible Narrow Viewport", () 
     expect(motionCss).toContain('.codex-shot .primary-sidebar-panel[data-sidebar-panel-state="pinned"]');
     expect(motionCss).toContain('.codex-shot .primary-sidebar-panel:not([data-sidebar-panel-state="pinned"])');
     expect(skinShellCss).toMatch(
-      /\.codex-shot\s+\.primary-sidebar-panel\s*>\s*\.sidebar\.codex-sidebar\s*\{[^}]*position:\s*relative;[^}]*inset:\s*auto;/s,
+      /\.codex-shot\s+\.primary-sidebar-panel\s+\.sidebar\.codex-sidebar\s*\{[^}]*position:\s*relative;[^}]*inset:\s*auto;[^}]*flex:\s*1 1 0%;[^}]*height:\s*100%;/s,
     );
+    expect(skinShellCss).not.toMatch(/\.primary-sidebar-panel\s*>\s*\.sidebar\.codex-sidebar/);
   });
 
   it("keeps tauri unstable multiwebview disabled in Cargo.toml and capabilities so Windows minimize preserves WebView2 bounds", () => {

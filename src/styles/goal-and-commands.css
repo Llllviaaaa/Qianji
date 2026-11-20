@@ -107,7 +107,7 @@
 }
 
 .composer-dock-banners:empty,
-.composer-dock-banners:not(:has([data-qj-slot="composerBanners"]:not(:empty))) {
+.composer-dock-banners:not(:has([data-qj-slot="composerBanners"]:not(:empty), [data-qj-slot="composer.banners"]:not(:empty))) {
   display: none;
   margin: 0;
 }
@@ -118,7 +118,7 @@
 }
 
 .composer-dock-banners .composer-plugin-banner:empty,
-.composer-dock-banners .composer-plugin-banner:not(:has(> [data-qj-slot="composerBanners"]:not(:empty))) {
+.composer-dock-banners .composer-plugin-banner:not(:has([data-qj-slot="composerBanners"]:not(:empty), [data-qj-slot="composer.banners"]:not(:empty))) {
   display: none;
 }
 
