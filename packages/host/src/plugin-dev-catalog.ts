@@ -186,9 +186,16 @@ export const HOST_SERVICE_CATALOG: readonly HostServiceCatalogEntry[] = [
     autoDispose: true,
   },
   {
+    name: "slots",
+    plane: "client",
+    methods: ["defineSlot(slotKey, spec)", "register(slotKey, input)", "registerFactory(factoryKey, input)", "wrap(slotKey, input)", "inspectSlot(slotKey)", "inspectAllSlots()"],
+    autoDispose: true,
+    notes: ["Typed ADR 0023 core slot tree service (`@qianji/client-slots`); call `qianji_inspect(topic: \"slot_tree\")` for the full catalog."],
+  },
+  {
     name: "styles",
     plane: "client",
-    methods: ["inject(css, key?)"],
+    methods: ["inject(css, key?)", "injectGlobal(css, key?)"],
     autoDispose: true,
   },
   {
@@ -224,9 +231,27 @@ export const CORDIS_EVENTS_CATALOG: readonly CordisEventCatalogEntry[] = [
   { name: "schedule/run", mode: "emit", signature: "(run: ScheduledRun) => void", description: "A scheduled task run was recorded." },
 ];
 
+export const INSPECT_TOPICS = [
+  "all",
+  "services",
+  "events",
+  "rpc_methods",
+  "shared_modules",
+  "client_slots",
+  "slot_tree",
+  "frontend_services",
+  "slot_owners",
+  "primitives",
+  "theme_tokens",
+  "plugins",
+] as const;
+
+export type InspectTopic = (typeof INSPECT_TOPICS)[number];
+
 export const THEME_TOKENS_CATALOG = {
-  cascadeLayers: "@layer theme, base, plugin-ui, legacy, skin, components, utilities;",
+  cascadeLayers: "@layer theme, base, plugin-ui, legacy, skin, components, plugin-skin, utilities;",
   scopingRule: "Use `ctx.styles.inject(css, key?)` or `import './style.css'`; rules are automatically wrapped in `@layer plugin-ui { @scope ([data-qj-plugin=\"<id>\"]) { ... } }`.",
+  globalSkinRule: "Use `ctx.styles.injectGlobal(css, key?)` or `import './skin.global.css'`; rules are wrapped in unscoped `@layer plugin-skin { ... }` (above host legacy/skin/components, below Tailwind utilities) and cleaned up automatically on HMR or plugin unload.",
   tokens: {
     backgrounds: [
       "--qj-bg-app",

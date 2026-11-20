@@ -24,11 +24,25 @@ import { HOST_SHARED_MODULES } from "./plugin-bridge.ts";
 import {
   CORDIS_EVENTS_CATALOG,
   HOST_SERVICE_CATALOG,
+  INSPECT_TOPICS,
   THEME_TOKENS_CATALOG,
+  type InspectTopic,
 } from "./plugin-dev-catalog.ts";
+import {
+  buildCoreTopicsSummary,
+  buildFrontendServicesInspection,
+  buildPrimitivesInspection,
+  buildSlotOwnersInspection,
+  buildSlotTreeInspection,
+} from "./plugin-inspect-core.ts";
 import { canonicalPath } from "./plugin-manifest.ts";
 import type { PluginManager } from "./plugin-manager.ts";
-import { scaffoldPluginFiles, slugifyPluginFolder } from "./plugin-scaffold.ts";
+import {
+  isPluginTemplateKind,
+  PLUGIN_TEMPLATE_KINDS,
+  scaffoldPluginFiles,
+  slugifyPluginFolder,
+} from "./plugin-scaffold.ts";
 import { errorMessage } from "./plugin-util.ts";
 import { verifyPluginDirectory } from "./plugin-verify.ts";
 import "./rpc.ts";
@@ -36,20 +50,11 @@ import "./rpc.ts";
 export const name = "qianji-plugin-dev-tools";
 export const inject = ["tools", "sessions", "ui"];
 
-export type InspectTopic =
-  | "all"
-  | "services"
-  | "events"
-  | "rpc_methods"
-  | "shared_modules"
-  | "client_slots"
-  | "theme_tokens"
-  | "plugins";
-
+export type { InspectTopic };
 export type { PluginTemplateKind } from "./plugin-scaffold.ts";
-export { scaffoldPluginFiles } from "./plugin-scaffold.ts";
+export { PLUGIN_TEMPLATE_KINDS, scaffoldPluginFiles } from "./plugin-scaffold.ts";
 export { verifyPluginDirectory, type PluginVerifyReport } from "./plugin-verify.ts";
-export { CORDIS_EVENTS_CATALOG, HOST_SERVICE_CATALOG, THEME_TOKENS_CATALOG };
+export { CORDIS_EVENTS_CATALOG, HOST_SERVICE_CATALOG, INSPECT_TOPICS, THEME_TOKENS_CATALOG };
 
 export interface PluginDevToolsConfig {
   manager: () => PluginManager | undefined;
@@ -117,15 +122,14 @@ export function apply(ctx: Context, config: PluginDevToolsConfig): void {
   ctx.tools.register({
     name: "qianji_inspect",
     description:
-      "Read-only runtime introspection of Qianji's plugin architecture: active Host/Client Cordis services, events, live JSON-RPC methods, externalized shared modules, `<PluginSlot>` extension slots & `@qianji/client` SDK exports, `--qj-*` CSS theme tokens, and live plugin states (including frontend `clientError` stacks).",
+      "Read-only runtime introspection of Qianji's plugin architecture: active Host/Client Cordis services, events, live JSON-RPC methods, shared modules, legacy `<PluginSlot>` & hierarchical `slot_tree`, `frontend_services`, `slot_owners` & Safe Mode rules, `@qianji/client-primitives`, `--qj-*` CSS tokens, and live plugin states.",
     readOnly: true,
     parameters: {
       type: "object",
       properties: {
         topic: {
           type: "string",
-          description:
-            'Inspection topic: "all" | "services" | "events" | "rpc_methods" | "shared_modules" | "client_slots" | "theme_tokens" | "plugins"',
+          description: `Inspection topic: ${INSPECT_TOPICS.map((item) => `"${item}"`).join(" | ")}`,
         },
         pluginId: {
           type: "string",
@@ -135,19 +139,10 @@ export function apply(ctx: Context, config: PluginDevToolsConfig): void {
     },
     async execute(args, env) {
       const rawTopic = typeof args.topic === "string" && args.topic.trim() !== "" ? args.topic.trim() : "all";
-      const validTopics = new Set<InspectTopic>([
-        "all",
-        "services",
-        "events",
-        "rpc_methods",
-        "shared_modules",
-        "client_slots",
-        "theme_tokens",
-        "plugins",
-      ]);
+      const validTopics = new Set<InspectTopic>(INSPECT_TOPICS);
       if (!validTopics.has(rawTopic as InspectTopic)) {
         return textOutput(
-          `Unknown topic "${rawTopic}". Expected one of: ${[...validTopics].join(", ")}.`,
+          `Unknown topic "${rawTopic}". Expected one of: ${INSPECT_TOPICS.join(", ")}.`,
           true,
         );
       }
@@ -168,16 +163,11 @@ export function apply(ctx: Context, config: PluginDevToolsConfig): void {
           registeredToolsCount: ctx.tools.listDefinitions().length,
         };
       }
-
-      if (topic === "all" || topic === "events") {
-        payload.events = CORDIS_EVENTS_CATALOG;
-      }
-
+      if (topic === "all" || topic === "events") payload.events = CORDIS_EVENTS_CATALOG;
       if (topic === "all" || topic === "rpc_methods") {
         const rpc = ctx.get("rpc");
         payload.rpcMethods = rpc !== undefined ? rpc.methods() : [];
       }
-
       if (topic === "all" || topic === "shared_modules") {
         payload.sharedModules = {
           host: Object.keys(HOST_SHARED_MODULES).sort(),
@@ -185,27 +175,34 @@ export function apply(ctx: Context, config: PluginDevToolsConfig): void {
           pluginTypesDir: resolvePluginTypesDir(config) ?? null,
         };
       }
-
       if (topic === "all" || topic === "client_slots") {
-        payload.clientSlots = {
-          slots: CLIENT_SLOT_CATALOG,
-          sdk: CLIENT_SDK_EXPORTS,
-        };
+        payload.clientSlots = { slots: CLIENT_SLOT_CATALOG, sdk: CLIENT_SDK_EXPORTS };
       }
+      if (topic === "slot_tree") payload.slotTree = buildSlotTreeInspection();
+      if (topic === "frontend_services") payload.frontendServices = buildFrontendServicesInspection();
+      if (topic === "primitives") payload.primitives = buildPrimitivesInspection();
+      if (topic === "all" || topic === "theme_tokens") payload.themeTokens = THEME_TOKENS_CATALOG;
 
-      if (topic === "all" || topic === "theme_tokens") {
-        payload.themeTokens = THEME_TOKENS_CATALOG;
+      const needsPluginList = topic === "all" || topic === "plugins" || topic === "slot_owners";
+      const manager = needsPluginList ? config.manager() : undefined;
+      const listedPlugins = manager !== undefined ? await manager.list(env.cwd) : undefined;
+      const externalClients = (listedPlugins ?? [])
+        .filter((item) => item.tier !== "builtin" && item.hasClient && item.enabled)
+        .map(summarizePluginInfo);
+
+      if (topic === "slot_owners") {
+        payload.slotOwners = buildSlotOwnersInspection(externalClients);
+      } else if (topic === "all") {
+        Object.assign(payload, buildCoreTopicsSummary(externalClients));
       }
 
       if (topic === "all" || topic === "plugins") {
-        const manager = config.manager();
-        if (manager === undefined) {
+        if (listedPlugins === undefined) {
           payload.plugins = { available: false, items: [] };
         } else {
-          const allPlugins = await manager.list(env.cwd);
           const filtered = pluginIdFilter === undefined
-            ? allPlugins
-            : allPlugins.filter((item) => item.id === pluginIdFilter);
+            ? listedPlugins
+            : listedPlugins.filter((item) => item.id === pluginIdFilter);
           payload.plugins = {
             available: true,
             count: filtered.length,
@@ -214,7 +211,8 @@ export function apply(ctx: Context, config: PluginDevToolsConfig): void {
         }
       }
 
-      return textOutput(JSON.stringify(payload, null, 2));
+      const pretty = JSON.stringify(payload, null, 2);
+      return textOutput(pretty.length > 45_000 ? JSON.stringify(payload) : pretty);
     },
   });
 
@@ -255,7 +253,7 @@ export function apply(ctx: Context, config: PluginDevToolsConfig): void {
         },
         template: {
           type: "string",
-          description: 'Scaffold template: "tool-only" | "ui-slot-widget" | "fullstack-panel" (default "fullstack-panel")',
+          description: `Scaffold template: ${PLUGIN_TEMPLATE_KINDS.map((item) => `"${item}"`).join(" | ")} (default "fullstack-panel")`,
         },
         name: {
           type: "string",
@@ -315,9 +313,9 @@ export function apply(ctx: Context, config: PluginDevToolsConfig): void {
         const rawTemplate = typeof args.template === "string" && args.template.trim() !== ""
           ? args.template.trim()
           : "fullstack-panel";
-        if (rawTemplate !== "tool-only" && rawTemplate !== "ui-slot-widget" && rawTemplate !== "fullstack-panel") {
+        if (!isPluginTemplateKind(rawTemplate)) {
           return textOutput(
-            `Invalid template "${rawTemplate}". Expected "tool-only", "ui-slot-widget", or "fullstack-panel".`,
+            `Invalid template "${rawTemplate}". Expected one of: ${PLUGIN_TEMPLATE_KINDS.join(", ")}.`,
             true,
           );
         }
