@@ -460,6 +460,23 @@ describe("ADR 0023 Phase 2: Frontend Cordis Service Mesh", () => {
     expect(trust.trusted).toBe(true);
     expect(trust.pluginIds).toEqual(["local-ext"]);
 
+    // Preserve trust banner metadata when Host canonicalizes symlinks or Windows 8.3 short paths.
+    root.workspaceService.selectWorkspace("C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\ws");
+    vi.spyOn(pluginClient, "trustList").mockResolvedValueOnce({
+      trusted: [],
+      current: {
+        workspace: "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\ws",
+        trusted: false,
+        hasProjectPlugins: true,
+        hasProjectConfig: false,
+        pluginIds: ["repo-local-ui"],
+      },
+    });
+    await root.workspaceService.refreshTrust("C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\ws");
+    expect(root.workspaceService.getSnapshot().trust.hasProjectPlugins).toBe(true);
+    expect(root.workspaceService.getSnapshot().trust.pluginIds).toEqual(["repo-local-ui"]);
+    root.workspaceService.selectWorkspace("/repo/alpha");
+
     const gitSnap = { isRepository: true, branch: "main", files: [], diff: "" };
     const gitSpy = vi.spyOn(agent, "gitSnapshot").mockResolvedValue(gitSnap);
     const restoreSpy = vi.spyOn(agent, "gitRestoreFiles").mockResolvedValue(undefined);

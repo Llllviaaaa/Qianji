@@ -103,19 +103,30 @@ function defaultTrustStatus(workspace: string, trustedList: readonly WorkspaceTr
   };
 }
 
-function trustFromListResult(workspace: string, result: WorkspaceTrustListResult): WorkspaceTrustStatus {
+function trustFromListResult(
+  workspace: string,
+  result: WorkspaceTrustListResult,
+): { readonly status: WorkspaceTrustStatus; readonly canonicalWorkspace: string } {
   const current = result.current;
-  if (current !== undefined && (workspace === "" || sameLocalPath(current.workspace, workspace))) {
+  if (current !== undefined) {
     return {
-      workspace: current.workspace,
-      trusted: current.trusted,
-      hasProjectPlugins: current.hasProjectPlugins,
-      hasProjectConfig: current.hasProjectConfig,
-      pluginIds: [...current.pluginIds],
-      trustedList: [...result.trusted],
+      status: {
+        // Keep the caller's workspace string so snapshot lookup stays aligned even when
+        // Host canonicalizes symlinks or Windows 8.3 short paths (`RUNNER~1` -> `runneradmin`).
+        workspace: workspace !== "" ? workspace : current.workspace,
+        trusted: current.trusted,
+        hasProjectPlugins: current.hasProjectPlugins,
+        hasProjectConfig: current.hasProjectConfig,
+        pluginIds: [...current.pluginIds],
+        trustedList: [...result.trusted],
+      },
+      canonicalWorkspace: current.workspace,
     };
   }
-  return defaultTrustStatus(workspace, result.trusted);
+  return {
+    status: defaultTrustStatus(workspace, result.trusted),
+    canonicalWorkspace: workspace,
+  };
 }
 
 interface WorkspaceInternalState {
@@ -123,6 +134,8 @@ interface WorkspaceInternalState {
   projects: readonly ProjectConfig[];
   overrideGit: { cwd: string; snapshot: GitSnapshot | null } | null;
   trust: WorkspaceTrustStatus;
+  trustCanonicalWorkspace: string;
+  trustSeq: number;
   snapshot: WorkspaceServiceSnapshot;
   readonly emitter: ServiceEmitter;
 }
@@ -140,6 +153,8 @@ export class WorkspaceService extends Service {
       projects: [],
       overrideGit: null,
       trust: defaultTrustStatus(initialCwd),
+      trustCanonicalWorkspace: initialCwd,
+      trustSeq: 0,
       snapshot: null as unknown as WorkspaceServiceSnapshot,
       emitter: new ServiceEmitter("workspaceService"),
     };
@@ -165,8 +180,13 @@ export class WorkspaceService extends Service {
 
     const offStore = useAppStore.subscribe(() => {
       const storeCwd = useAppStore.getState().cwd;
-      if (storeCwd && !sameLocalPath(this.internal.trust.workspace, storeCwd)) {
+      if (
+        storeCwd
+        && !sameLocalPath(this.internal.trust.workspace, storeCwd)
+        && !sameLocalPath(this.internal.trustCanonicalWorkspace, storeCwd)
+      ) {
         this.internal.trust = defaultTrustStatus(storeCwd, this.internal.trust.trustedList);
+        this.internal.trustCanonicalWorkspace = storeCwd;
       }
       syncSnapshot();
     });
@@ -178,15 +198,21 @@ export class WorkspaceService extends Service {
         if (!payload || typeof payload !== "object") return;
         const activeCwd = this.effectiveCwd();
         const trustedList = Array.isArray(payload.trustedList) ? payload.trustedList : this.internal.trust.trustedList;
-        if (activeCwd && sameLocalPath(payload.workspace, activeCwd)) {
+        const matchesActive =
+          activeCwd !== ""
+          && (sameLocalPath(payload.workspace, activeCwd)
+            || sameLocalPath(payload.workspace, this.internal.trustCanonicalWorkspace));
+        if (matchesActive) {
           this.internal.trust = {
             ...this.internal.trust,
             workspace: activeCwd,
             trusted: payload.trusted === true,
             trustedList: [...trustedList],
           };
+          this.internal.trustCanonicalWorkspace = payload.workspace;
         } else {
           this.internal.trust = defaultTrustStatus(activeCwd, trustedList);
+          this.internal.trustCanonicalWorkspace = activeCwd;
         }
         syncSnapshot();
       },
@@ -228,7 +254,10 @@ export class WorkspaceService extends Service {
       ?? (this.internal.overrideGit !== null && sameLocalPath(this.internal.overrideGit.cwd, cwd)
         ? this.internal.overrideGit.snapshot
         : null);
-    const trust = sameLocalPath(this.internal.trust.workspace, cwd)
+    const trustMatchesCwd =
+      sameLocalPath(this.internal.trust.workspace, cwd)
+      || sameLocalPath(this.internal.trustCanonicalWorkspace, cwd);
+    const trust = trustMatchesCwd
       ? this.internal.trust
       : defaultTrustStatus(cwd, this.internal.trust.trustedList);
 
@@ -276,8 +305,12 @@ export class WorkspaceService extends Service {
     if (trimmed === "") return;
     this.internal.draftWorkspace = trimmed;
     writeStoredWorkspace(trimmed);
-    if (!sameLocalPath(this.internal.trust.workspace, trimmed)) {
+    if (
+      !sameLocalPath(this.internal.trust.workspace, trimmed)
+      && !sameLocalPath(this.internal.trustCanonicalWorkspace, trimmed)
+    ) {
       this.internal.trust = defaultTrustStatus(trimmed, this.internal.trust.trustedList);
+      this.internal.trustCanonicalWorkspace = trimmed;
     }
     this.publish();
     if (isTauriEnvironment()) {
@@ -314,17 +347,27 @@ export class WorkspaceService extends Service {
 
   async refreshTrust(workspace?: string): Promise<WorkspaceTrustStatus> {
     const target = (workspace ?? this.effectiveCwd()).trim();
+    const seq = ++this.internal.trustSeq;
     const result = await pluginClient.trustList(target || undefined);
-    this.internal.trust = trustFromListResult(target, result);
-    this.publish();
+    const resolved = trustFromListResult(target, result);
+    if (seq === this.internal.trustSeq) {
+      this.internal.trust = resolved.status;
+      this.internal.trustCanonicalWorkspace = resolved.canonicalWorkspace;
+      this.publish();
+    }
     return this.internal.trust;
   }
 
   async setWorkspaceTrust(workspace: string, trusted: boolean): Promise<WorkspaceTrustStatus> {
     const target = workspace.trim();
+    const seq = ++this.internal.trustSeq;
     const result = await pluginClient.setTrust({ workspace: target, trusted });
-    this.internal.trust = trustFromListResult(target, result);
-    this.publish();
+    const resolved = trustFromListResult(target, result);
+    if (seq === this.internal.trustSeq) {
+      this.internal.trust = resolved.status;
+      this.internal.trustCanonicalWorkspace = resolved.canonicalWorkspace;
+      this.publish();
+    }
     return this.internal.trust;
   }
 

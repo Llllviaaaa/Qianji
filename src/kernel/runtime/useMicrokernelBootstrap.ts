@@ -175,6 +175,7 @@ export function useMicrokernelBootstrap(): MicrokernelBootstrapResult {
   }, [isTauri]);
 
   // Keep client plugin runtime and workspace metadata aligned with the active workspace.
+  const hostConnected = wsSnap?.hostConnected === true;
   useEffect(() => {
     ensureClientPluginRuntime().setWorkspace(effectiveWorkspace || undefined);
     if (!isTauri || effectiveWorkspace === "") return;
@@ -182,7 +183,7 @@ export function useMicrokernelBootstrap(): MicrokernelBootstrapResult {
     if (connection !== "running") {
       void root.workspaceService?.refreshGit(effectiveWorkspace).catch(() => undefined);
     }
-  }, [connection, effectiveWorkspace, isTauri, root]);
+  }, [connection, effectiveWorkspace, hostConnected, isTauri, root]);
 
   useEffect(() => {
     if (!isTauri || !runtimeRecoveryDone) return;
