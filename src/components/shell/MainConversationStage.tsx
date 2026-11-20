@@ -4,7 +4,7 @@ import type { ClientContributionsSnapshot } from "../../lib/clientContributions"
 import type { CodeReviewScope } from "../../lib/codeReview";
 import type { TranscriptDensity } from "../../lib/transcriptDensity";
 import { useAppStore } from "../../store";
-import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchPaneAvailable } from "../../kernel/runtime/featureSlotQueries";
 import type { UiSlice } from "../../store/types";
 import type {
   AppSettings,
@@ -117,7 +117,7 @@ export function MainConversationStage({
   layoutScale,
   contributions,
 }: MainConversationStageProps) {
-  const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
+  const codeReviewEnabled = useWorkbenchPaneAvailable("review");
   return (
     <>
       <div className="work-body">

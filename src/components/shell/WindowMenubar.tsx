@@ -5,7 +5,7 @@ import { DockLeftIcon } from "../common/ChromeIcons";
 import { WorkbenchTopbarControls } from "../workbench/WorkbenchTopbarControls";
 import { useClientContributions } from "../../lib/clientContributions";
 import { requestAppQuit } from "../../lib/quitGuard";
-import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchPaneAvailable } from "../../kernel/runtime/featureSlotQueries";
 import {
   TRANSCRIPT_DENSITY_LABELS,
   TRANSCRIPT_DENSITY_ORDER,
@@ -92,7 +92,7 @@ export function WindowMenubar({
     ? "隐藏侧栏"
     : isNarrowViewport ? "显示侧栏" : "固定侧栏";
   const { menuItems } = useClientContributions();
-  const webPreviewEnabled = useBuiltinPluginGatesStore((state) => state.webPreviewEnabled);
+  const webPreviewEnabled = useWorkbenchPaneAvailable("preview");
   const menus: readonly AppMenu[] = hasMenuItems(menuItems, "menubar.tools") ? [...BUILTIN_MENUS, "tools"] : BUILTIN_MENUS;
   const pluginMenuContext = { cwd, sessionFile };
   const closeMenu = () => setAppMenu(null);

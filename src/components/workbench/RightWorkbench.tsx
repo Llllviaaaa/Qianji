@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
 import type { CodeReviewScope } from "../../lib/codeReview";
 import { useClientContributions } from "../../lib/clientContributions";
-import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchPaneAvailable } from "../../kernel/runtime/featureSlotQueries";
 import {
   computeTileLayout,
   detectPaneDropZone,
@@ -108,9 +108,9 @@ export function RightWorkbench({
   const setSplitNodeRatio = useWorkbenchLayoutStore((state) => state.setSplitNodeRatio);
   const swapOrDockPanes = useWorkbenchLayoutStore((state) => state.swapOrDockPanes);
 
-  const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
-  const sideChatEnabled = useBuiltinPluginGatesStore((state) => state.sideChatEnabled);
-  const webPreviewEnabled = useBuiltinPluginGatesStore((state) => state.webPreviewEnabled);
+  const codeReviewEnabled = useWorkbenchPaneAvailable("review");
+  const sideChatEnabled = useWorkbenchPaneAvailable("side-chat");
+  const webPreviewEnabled = useWorkbenchPaneAvailable("preview");
   const contributions = useClientContributions();
 
   const [sideChatVisited, setSideChatVisited] = useState(false);

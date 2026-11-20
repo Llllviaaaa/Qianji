@@ -26,7 +26,7 @@ import {
   isRpcMethodNotFound,
 } from "../../lib/harnessRuntime";
 import { useAppStore } from "../../store";
-import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchPaneAvailable } from "../../kernel/runtime/featureSlotQueries";
 import { useWorkbenchLayoutStore } from "../../stores/workbenchLayoutStore";
 import { previewKindForPath, useWorkbenchStore } from "../../stores/workbenchStore";
 import { WorkbenchContextCard } from "./WorkbenchContextCard";
@@ -59,7 +59,7 @@ function renderOutputGlyph(filePath: string) {
 export function TaskSummaryTab({ cwd, sessionFile }: TaskSummaryTabProps) {
   const messages = useAppStore((state) => state.messages);
   const git = useAppStore((state) => state.git);
-  const sideChatEnabled = useBuiltinPluginGatesStore((state) => state.sideChatEnabled);
+  const sideChatEnabled = useWorkbenchPaneAvailable("side-chat");
   const openPanes = useWorkbenchLayoutStore((state) => state.openPanes);
   const contributions = useClientContributions();
 

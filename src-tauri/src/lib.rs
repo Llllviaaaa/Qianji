@@ -56,6 +56,23 @@ static KEEP_AWAKE: AtomicBool = AtomicBool::new(false);
 static STREAMING_GUARD_ACTIVE: AtomicBool = AtomicBool::new(false);
 static QUIT_CONFIRM_OPEN: AtomicBool = AtomicBool::new(false);
 static EXPLICIT_EXIT: AtomicBool = AtomicBool::new(false);
+static SAFE_MODE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) const SAFE_MODE_INIT_SCRIPT: &str = "window.__QIANJI_SAFE_MODE__ = true;";
+
+pub(crate) fn detect_safe_mode_flag<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .skip(1)
+        .any(|arg| arg.as_ref() == "--safe-mode")
+}
+
+pub(crate) fn is_safe_mode_enabled() -> bool {
+    SAFE_MODE.load(Ordering::Acquire)
+}
 
 #[cfg(windows)]
 unsafe extern "system" {
@@ -215,6 +232,11 @@ fn set_streaming_guard(active: bool) {
 }
 
 #[tauri::command]
+fn is_safe_mode() -> bool {
+    is_safe_mode_enabled()
+}
+
+#[tauri::command]
 fn quit_app(app: AppHandle, confirmed: Option<bool>) {
     request_app_exit(app, confirmed.unwrap_or(false));
 }
@@ -222,6 +244,12 @@ fn quit_app(app: AppHandle, confirmed: Option<bool>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     desktop_log::install_panic_hook();
+
+    let safe_mode = detect_safe_mode_flag(std::env::args());
+    SAFE_MODE.store(safe_mode, Ordering::Release);
+    if safe_mode {
+        log_line!("[desktop] starting in Safe Mode (--safe-mode)");
+    }
 
     #[cfg(windows)]
     std::thread::spawn(|| loop {
@@ -243,12 +271,33 @@ pub fn run() {
     #[cfg(windows)]
     KEEP_AWAKE.store(settings.prevent_sleep, Ordering::Relaxed);
 
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         // Must be registered first: a second launch hands off here and exits before
         // it can start its own window, tray icon or Harness Host.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if detect_safe_mode_flag(&args) {
+                SAFE_MODE.store(true, Ordering::Release);
+                log_line!(
+                    "[desktop] second launch requested --safe-mode; enabling Safe Mode and reloading main window"
+                );
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(
+                        "window.__QIANJI_SAFE_MODE__ = true; try { sessionStorage.setItem('qianji:safe-mode', '1'); } catch {} window.location.reload();",
+                    );
+                }
+            }
             show_main_window(app);
-        }))
+        }));
+
+    if safe_mode {
+        builder = builder.plugin(
+            tauri::plugin::Builder::<tauri::Wry, ()>::new("qianji-safe-mode")
+                .js_init_script(SAFE_MODE_INIT_SCRIPT.to_string())
+                .build(),
+        );
+    }
+
+    let app = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
@@ -287,6 +336,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             quit_app,
             set_streaming_guard,
+            is_safe_mode,
             desktop_log::log_frontend_error,
             quick_chat_dir,
             list_projects_cmd,
@@ -381,5 +431,24 @@ pub fn run_computer_helper() -> i32 {
     {
         println!(r#"{{"ok":false,"error":"Computer Use currently supports Windows only"}}"#);
         1
+    }
+}
+
+#[cfg(test)]
+mod safe_mode_tests {
+    use super::*;
+
+    #[test]
+    fn detects_safe_mode_cli_flag() {
+        assert!(!detect_safe_mode_flag(["qianji.exe"]));
+        assert!(!detect_safe_mode_flag(["qianji.exe", "--other-flag"]));
+        assert!(!detect_safe_mode_flag(["--safe-mode"]));
+        assert!(detect_safe_mode_flag(["qianji.exe", "--safe-mode"]));
+        assert!(detect_safe_mode_flag([
+            "qianji.exe",
+            "--foo",
+            "--safe-mode",
+            "--bar"
+        ]));
     }
 }

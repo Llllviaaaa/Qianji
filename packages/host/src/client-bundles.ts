@@ -145,33 +145,12 @@ const MIME_BY_EXT: Readonly<Record<string, string>> = {
 };
 
 const TRACKABLE_SOURCE_EXT = new Set([
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".mts",
-  ".cjs",
-  ".cts",
-  ".json",
-  ".css",
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts", ".cjs", ".cts", ".json", ".css",
 ]);
 
 const RESOLVE_PROBE_SUFFIXES = [
-  "",
-  ".tsx",
-  ".ts",
-  ".jsx",
-  ".js",
-  ".mts",
-  ".mjs",
-  ".cjs",
-  ".json",
-  ".css",
-  "/index.tsx",
-  "/index.ts",
-  "/index.jsx",
-  "/index.js",
+  "", ".tsx", ".ts", ".jsx", ".js", ".mts", ".mjs", ".cjs", ".json", ".css",
+  "/index.tsx", "/index.ts", "/index.jsx", "/index.js",
 ] as const;
 
 function isPathInsidePluginRoot(pluginRootCanonical: string, pluginRootKey: string, candidatePath: string): boolean {
@@ -294,26 +273,37 @@ function sanitizeCssForFallbackScope(css: string): string {
   return out;
 }
 
-function buildCssModuleSnippet(pluginId: string, styleKey: string, cssText: string): string {
+function isGlobalCssPath(filePath: string): boolean {
+  return /\.global\.css$/i.test(filePath);
+}
+
+function buildCssModuleSnippet(pluginId: string, styleKey: string, cssText: string, isGlobal = false): string {
   const pidJson = JSON.stringify(pluginId);
   const keyJson = JSON.stringify(styleKey);
   const cssJson = JSON.stringify(cssText);
   const safeFallbackJson = JSON.stringify(sanitizeCssForFallbackScope(cssText));
+  const hookName = isGlobal ? "__qianjiInjectPluginGlobalStyle" : "__qianjiInjectPluginStyle";
+  const styleAttr = isGlobal ? "data-qj-plugin-global-style" : "data-qj-plugin-style";
+  const assignCssLines = isGlobal
+    ? [`  __el.textContent = '@layer plugin-skin {\\n' + ${safeFallbackJson} + '\\n}';`]
+    : [
+        `  const __escapedId = ${pidJson}.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"');`,
+        `  __el.textContent = '@layer plugin-ui { @scope ([data-qj-plugin="' + __escapedId + '"]) {\\n' + ${safeFallbackJson} + '\\n} }';`,
+      ];
   return [
     `const __css = ${cssJson};`,
-    `if (typeof globalThis !== "undefined" && typeof globalThis.__qianjiInjectPluginStyle === "function") {`,
-    `  globalThis.__qianjiInjectPluginStyle(${pidJson}, __css, ${keyJson});`,
+    `if (typeof globalThis !== "undefined" && typeof globalThis.${hookName} === "function") {`,
+    `  globalThis.${hookName}(${pidJson}, __css, ${keyJson});`,
     `} else if (typeof document !== "undefined" && document.head) {`,
     `  const __attr = ${JSON.stringify(`${pluginId}:${styleKey}`)};`,
-    `  let __el = document.head.querySelector('style[data-qj-plugin-style="' + __attr.replace(/"/g, '\\\\"') + '"]');`,
+    `  let __el = document.head.querySelector('style[${styleAttr}="' + __attr.replace(/"/g, '\\\\"') + '"]');`,
     `  if (!__el) {`,
     `    __el = document.createElement("style");`,
-    `    __el.setAttribute("data-qj-plugin-style", __attr);`,
+    `    __el.setAttribute("${styleAttr}", __attr);`,
     `    __el.setAttribute("data-qj-plugin-owner", ${pidJson});`,
     `    document.head.appendChild(__el);`,
     `  }`,
-    `  const __escapedId = ${pidJson}.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"');`,
-    `  __el.textContent = '@layer plugin-ui { @scope ([data-qj-plugin="' + __escapedId + '"]) {\\n' + ${safeFallbackJson} + '\\n} }';`,
+    ...assignCssLines,
     `}`,
     `export default __css;`,
   ].join("\n");
@@ -409,7 +399,7 @@ async function bundleClientEntryToCjs(
         const cssText = await readFile(absPath, "utf8");
         const relKey = relative(pluginRootCanonical, absPath).replace(/\\/g, "/") || absPath;
         return {
-          contents: buildCssModuleSnippet(pluginId, relKey, cssText),
+          contents: buildCssModuleSnippet(pluginId, relKey, cssText, isGlobalCssPath(absPath)),
           loader: "js",
         };
       });

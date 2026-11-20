@@ -5,6 +5,7 @@
  * runtime the page creates.
  */
 import type { PluginClearClientErrorParams, PluginReportClientErrorParams } from "@qianji/protocol";
+import { bindDefaultAbdicationHost } from "../kernel/slots/abdication";
 import { reportFrontendError, type CrashLogLimiter, type FrontendLogSink } from "./crashLogger";
 import type { ClientPluginActivationError, ClientPluginRenderError, ClientPluginRuntimeMeta } from "./clientPluginRuntime";
 
@@ -349,3 +350,11 @@ export function getClientActivationError(id: string): ClientPluginActivationErro
 export function hasClientActivationError(id: string): boolean {
   return activationErrorsSnapshot[id] !== undefined;
 }
+
+bindDefaultAbdicationHost({
+  getRuntimeMeta: getClientPluginRuntimeMeta,
+  getReloadEpoch: getPluginReloadEpoch,
+  getSlotLockout: getClientSlotLockout,
+  recordRenderError: recordClientRenderError,
+  subscribeErrors: subscribeClientPluginErrors,
+});

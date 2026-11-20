@@ -14,6 +14,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@qianji/client-slots": resolve(import.meta.dirname, "src/kernel/slots/index.ts"),
+      "@qianji/client-store": resolve(import.meta.dirname, "src/kernel/store/index.ts"),
+      "@qianji/client-primitives": resolve(import.meta.dirname, "src/kernel/primitives/index.ts"),
       "@qianji/client": resolve(import.meta.dirname, "src/sdk/index.ts"),
     },
   },

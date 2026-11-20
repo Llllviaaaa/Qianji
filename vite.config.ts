@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -25,6 +26,14 @@ const e2eTauriStub: Plugin = {
 // https://vite.dev/config/
 export default defineConfig(async ({ mode }) => ({
   plugins: [react(), tailwindcss(), ...(mode === "e2e" ? [e2eTauriStub] : [])],
+  resolve: {
+    alias: {
+      "@qianji/client-slots": resolve(import.meta.dirname, "src/kernel/slots/index.ts"),
+      "@qianji/client-store": resolve(import.meta.dirname, "src/kernel/store/index.ts"),
+      "@qianji/client-primitives": resolve(import.meta.dirname, "src/kernel/primitives/index.ts"),
+      "@qianji/client": resolve(import.meta.dirname, "src/sdk/index.ts"),
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

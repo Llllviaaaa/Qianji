@@ -12,6 +12,13 @@ import { Context, Service } from "@deepseek-ai/cordis";
 import { CLIENT_SLOT_CATALOG, type ClientSlotMetadata } from "@qianji/protocol";
 import type { UiMessage } from "../types";
 import type { AppearanceThemeDefinition } from "./appearanceCatalog";
+import { injectPluginGlobalStyle } from "../kernel/runtime/pluginStyles";
+import {
+  clientSlotsRegistry,
+  mirrorContributionToSlot,
+  type LegacyContributionMirrorItem,
+  type SlotRegistry,
+} from "../kernel/slots/registry";
 import { injectPluginScopedStyle, recordClientRenderError, resolveContextPluginId } from "./clientPluginRuntime";
 import type {
   AppearanceThemeInput,
@@ -136,8 +143,14 @@ export class ClientContributionRegistry {
   private readonly maps = Object.fromEntries(
     CONTRIBUTION_KINDS.map((kind) => [kind, new Map()]),
   ) as unknown as ContributionMaps;
+  private readonly slotMirrorDisposers = new Map<string, () => void>();
+  private readonly slotRegistry: SlotRegistry | undefined;
   private readonly listeners = new Set<() => void>();
   private snapshot: ClientContributionsSnapshot = this.buildSnapshot();
+
+  constructor(slotRegistry?: SlotRegistry) {
+    this.slotRegistry = slotRegistry;
+  }
 
   private buildSnapshot(): ClientContributionsSnapshot {
     const next: Partial<Record<ClientContributionKind, readonly unknown[]>> = {};
@@ -157,100 +170,47 @@ export class ClientContributionRegistry {
   /** Register one contribution of `kind`; the returned disposer only removes this exact entry. */
   add<K extends ClientContributionKind>(kind: K, item: ClientContributionKinds[K]): () => void {
     const map = this.maps[kind];
+    const mirrorKey = `${kind}:${item.id}`;
+    this.slotMirrorDisposers.get(mirrorKey)?.();
     map.set(item.id, item);
+    if (this.slotRegistry !== undefined) {
+      this.slotMirrorDisposers.set(
+        mirrorKey,
+        mirrorContributionToSlot(this.slotRegistry, kind, item as unknown as LegacyContributionMirrorItem),
+      );
+    }
     this.emit();
     return () => {
       if (map.get(item.id) === item) {
         map.delete(item.id);
+        this.slotMirrorDisposers.get(mirrorKey)?.();
+        this.slotMirrorDisposers.delete(mirrorKey);
         this.emit();
       }
     };
   }
 
-  registerPage(page: ClientPageContribution): () => void {
-    return this.add("pages", page);
-  }
-
-  registerLeftSidebar(section: ClientSidebarSectionContribution): () => void {
-    return this.add("leftSidebar", section);
-  }
-
-  registerRightWorkbenchTab(tab: ClientWorkbenchTabContribution): () => void {
-    return this.add("rightWorkbenchTabs", tab);
-  }
-
-  registerBottomPanelTab(tab: ClientWorkbenchTabContribution): () => void {
-    return this.add("bottomPanelTabs", tab);
-  }
-
-  registerTopbarAction(action: ClientActionContribution): () => void {
-    return this.add("topbarActions", action);
-  }
-
-  registerComposerToolbar(item: ClientActionContribution): () => void {
-    return this.add("composerToolbar", item);
-  }
-
-  registerComposerStatus(item: ClientComposerStatusContribution): () => void {
-    return this.add("composerStatus", item);
-  }
-
-  registerComposerBanner(item: ClientActionContribution): () => void {
-    return this.add("composerBanners", item);
-  }
-
-  registerOverlay(item: ClientActionContribution): () => void {
-    return this.add("overlays", item);
-  }
-
-  registerMessageAction(item: ClientMessageActionContribution): () => void {
-    return this.add("messageActions", item);
-  }
-
-  registerToolRenderer(item: ClientToolRendererContribution): () => void {
-    return this.add("toolRenderers", item);
-  }
-
-  registerFileViewer(item: ClientFileViewerContribution): () => void {
-    return this.add("fileViewers", item);
-  }
-
-  registerStatusBarItem(item: ClientStatusBarContribution): () => void {
-    return this.add("statusBarItems", item);
-  }
-
-  registerHomeQuickAction(item: ClientHomeQuickActionContribution): () => void {
-    return this.add("homeQuickActions", item);
-  }
-
-  registerRewindHandler(handler: ClientRewindHandlerContribution): () => void {
-    return this.add("rewindHandlers", handler);
-  }
-
-  registerSlashInterceptor(interceptor: ClientSlashInterceptorContribution): () => void {
-    return this.add("slashInterceptors", interceptor);
-  }
-
-  registerSettingsPage(page: ClientSettingsPageContribution): () => void {
-    return this.add("settingsPages", page);
-  }
-
-  registerSettingsSection(section: ClientSettingsSectionContribution): () => void {
-    return this.add("settingsSections", section);
-  }
-
-  registerMenuItem(item: ClientMenuItemContribution): () => void {
-    return this.add("menuItems", item);
-  }
-
-  registerKeybinding(binding: ClientKeybindingContribution): () => void {
-    return this.add("keybindings", binding);
-  }
-
-  registerCodeBlockRenderer(renderer: ClientCodeBlockRendererContribution): () => void {
-    return this.add("codeBlockRenderers", renderer);
-  }
-
+  registerPage(page: ClientPageContribution): () => void { return this.add("pages", page); }
+  registerLeftSidebar(section: ClientSidebarSectionContribution): () => void { return this.add("leftSidebar", section); }
+  registerRightWorkbenchTab(tab: ClientWorkbenchTabContribution): () => void { return this.add("rightWorkbenchTabs", tab); }
+  registerBottomPanelTab(tab: ClientWorkbenchTabContribution): () => void { return this.add("bottomPanelTabs", tab); }
+  registerTopbarAction(action: ClientActionContribution): () => void { return this.add("topbarActions", action); }
+  registerComposerToolbar(item: ClientActionContribution): () => void { return this.add("composerToolbar", item); }
+  registerComposerStatus(item: ClientComposerStatusContribution): () => void { return this.add("composerStatus", item); }
+  registerComposerBanner(item: ClientActionContribution): () => void { return this.add("composerBanners", item); }
+  registerOverlay(item: ClientActionContribution): () => void { return this.add("overlays", item); }
+  registerMessageAction(item: ClientMessageActionContribution): () => void { return this.add("messageActions", item); }
+  registerToolRenderer(item: ClientToolRendererContribution): () => void { return this.add("toolRenderers", item); }
+  registerFileViewer(item: ClientFileViewerContribution): () => void { return this.add("fileViewers", item); }
+  registerStatusBarItem(item: ClientStatusBarContribution): () => void { return this.add("statusBarItems", item); }
+  registerHomeQuickAction(item: ClientHomeQuickActionContribution): () => void { return this.add("homeQuickActions", item); }
+  registerRewindHandler(handler: ClientRewindHandlerContribution): () => void { return this.add("rewindHandlers", handler); }
+  registerSlashInterceptor(interceptor: ClientSlashInterceptorContribution): () => void { return this.add("slashInterceptors", interceptor); }
+  registerSettingsPage(page: ClientSettingsPageContribution): () => void { return this.add("settingsPages", page); }
+  registerSettingsSection(section: ClientSettingsSectionContribution): () => void { return this.add("settingsSections", section); }
+  registerMenuItem(item: ClientMenuItemContribution): () => void { return this.add("menuItems", item); }
+  registerKeybinding(binding: ClientKeybindingContribution): () => void { return this.add("keybindings", binding); }
+  registerCodeBlockRenderer(renderer: ClientCodeBlockRendererContribution): () => void { return this.add("codeBlockRenderers", renderer); }
   registerTheme(theme: AppearanceThemeInput): () => void {
     const definition: AppearanceThemeDefinition = { ...theme, scope: theme.scope ?? "user" };
     return this.add("themes", definition);
@@ -325,6 +285,8 @@ export class ClientContributionRegistry {
   getSnapshot = (): ClientContributionsSnapshot => this.snapshot;
 
   clear(): void {
+    for (const dispose of this.slotMirrorDisposers.values()) dispose();
+    this.slotMirrorDisposers.clear();
     for (const kind of CONTRIBUTION_KINDS) this.maps[kind].clear();
     this.emit();
   }
@@ -445,11 +407,7 @@ export class ClientContributionService extends Service {
   }
 }
 
-/**
- * Scoped stylesheet injection service (`ctx.styles.inject(css, key?)`).
- * Automatically wraps plugin rules inside `@layer plugin-ui { @scope ([data-qj-plugin="<id>"]) { ... } }`
- * and disposes the `<style>` element when the owning Cordis Fiber unmounts.
- */
+/** Stylesheet injection service (`ctx.styles.inject` scoped, `ctx.styles.injectGlobal` in `@layer plugin-skin`). */
 export class ClientStylesService extends Service {
   static provide = "styles";
 
@@ -457,21 +415,28 @@ export class ClientStylesService extends Service {
     super(ctx, "styles");
   }
 
-  inject(css: string, key?: string): () => void {
-    const callerCtx = this.ctx;
-    const pluginId = resolveContextPluginId(callerCtx) ?? "builtin";
-    const rawDispose = injectPluginScopedStyle(pluginId, css, key);
+  private trackInjection(rawDispose: () => void): () => void {
     let disposed = false;
     const once = () => {
       if (disposed) return;
       disposed = true;
       rawDispose();
     };
-    return callerCtx.effect(() => once);
+    return this.ctx.effect(() => once);
+  }
+
+  inject(css: string, key?: string): () => void {
+    const pluginId = resolveContextPluginId(this.ctx) ?? "builtin";
+    return this.trackInjection(injectPluginScopedStyle(pluginId, css, key));
+  }
+
+  injectGlobal(css: string, key?: string): () => void {
+    const pluginId = resolveContextPluginId(this.ctx) ?? "builtin";
+    return this.trackInjection(injectPluginGlobalStyle(pluginId, css, key));
   }
 }
 
-export const clientContributions = new ClientContributionRegistry();
+export const clientContributions = new ClientContributionRegistry(clientSlotsRegistry);
 
 export function useClientContributions(): ClientContributionsSnapshot {
   return useSyncExternalStore(clientContributions.subscribe, clientContributions.getSnapshot, clientContributions.getSnapshot);

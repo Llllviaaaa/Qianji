@@ -5,46 +5,52 @@
  * single lightweight Cordis root context (`pidClientRoot`) wired directly to
  * `ClientContributionService` and `createClientPluginRuntime`.
  */
-import { createElement, type ReactNode } from "react";
-import { Context, Service, type Plugin } from "@deepseek-ai/cordis";
-import { Layers } from "lucide-react";
+import { Context, type Plugin } from "@deepseek-ai/cordis";
 import { agent } from "./agent";
 import {
-  ClientContributionRegistry,
+  BetterSidebarCompatService,
+  betterSidebarCompatModule,
+  type LegacyFileViewerDescriptor,
+  type LegacySidebarTabDescriptor,
+} from "./betterSidebarCompat";
+import {
   ClientContributionService,
   ClientStylesService,
   clientContributions,
   useClientContributions,
 } from "./clientContributions";
+import { registerCorePrimitiveFactories } from "../kernel/primitives/factories";
+import {
+  installIntelligentUiAutoOpenSync,
+  registerHostComponentFactories,
+} from "../kernel/primitives/hostComponentFactories";
+import {
+  createBuiltinCorePluginCoordinator,
+  createSafeModeGatedTransport,
+  installPluginStyleGlobals,
+  safeModeController,
+  setBuiltinFeatureCoordinatorActive,
+  setPluginTier,
+  type BuiltinCorePluginCoordinator,
+  type BuiltinCorePluginDescriptor,
+} from "../kernel/runtime";
+import { DEFAULT_BUILTIN_CLIENT_PLUGINS } from "../kernel/runtime/registerDefaultBuiltinPlugins";
+import { installSessionScopeAdapter, registerFrontendServices } from "../kernel/services";
+import { ClientSlotsService, clientSlotsRegistry } from "../kernel/slots";
 import {
   createClientPluginRuntime,
-  resolveContextPluginId,
   type ClientPluginRuntimeHandle,
   type ClientPluginTransport,
   type ModuleLoaderGlobal,
 } from "./clientPluginRuntime";
-import { HARNESS_SESSION_PREFIX, harnessRuntimes, isHarnessSessionFile } from "./harnessRuntime";
+import { harnessRuntimes } from "./harnessRuntime";
 import { messageImagesToAttachments, rewindController } from "./rewindController";
-import {
-  deriveSessionIntelligentUis,
-  INTELLIGENT_UI_CANVAS_TAB_ID,
-  messageMayContainIntelligentUi,
-} from "./intelligentUi";
 import { pluginClient } from "./pluginClient";
-import { groupTranscriptMessages } from "./transcriptTurns";
-import { IntelligentUiCanvasTab } from "../components/workbench/IntelligentUiCanvasTab";
 import { DiagramBlock } from "../components/DiagramBlock";
 import { qianjiClientSdk } from "../sdk";
+import { bindClientRootContext } from "../sdk/rootContext";
 import { useAppStore } from "../store";
-import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
-import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import { useWorkbenchStore } from "../stores/workbenchStore";
-
-declare module "@deepseek-ai/cordis" {
-  interface Context {
-    betterSidebar: BetterSidebarCompatService;
-  }
-}
 
 declare global {
   interface Window {
@@ -53,170 +59,12 @@ declare global {
   }
 }
 
-export { ClientStylesService };
-
-export interface LegacySidebarTabDescriptor {
-  id: string;
-  title?: string | (() => string);
-  label?: string;
-  icon?: ReactNode | ((size: number) => ReactNode);
-  order?: number;
-  bottomOnly?: boolean;
-  component?: (props: Record<string, unknown>) => ReactNode;
-  render?: (props: Record<string, unknown>) => ReactNode;
-}
-
-export interface LegacyFileViewerDescriptor {
-  id: string;
-  title?: string | (() => string);
-  label?: string;
-  extensions?: readonly string[];
-  mimeTypes?: readonly string[];
-  order?: number;
-  component?: (props: Record<string, unknown>) => ReactNode;
-  render?: (props: Record<string, unknown>) => ReactNode;
-}
-
-/**
- * Lightweight compatibility shim for external client-only plugins declaring
- * `inject: ["betterSidebar"]` or importing `"dsh-better-sidebar"`. Maps tab
- * and file viewer contributions directly into `ClientContributionRegistry`
- * with zero legacy DSH bundle weight.
- */
-export class BetterSidebarCompatService extends Service {
-  static provide = "betterSidebar";
-  readonly version = "0.26.0";
-  readonly features = ["openFile", "targetedOpen", "fileViewer"] as const;
-  private readonly registry: ClientContributionRegistry;
-
-  constructor(ctx: Context, registry: ClientContributionRegistry = clientContributions) {
-    super(ctx, "betterSidebar");
-    this.registry = registry;
-  }
-
-  registerTab(descriptor: LegacySidebarTabDescriptor): () => void {
-    const callerCtx = this.ctx;
-    const pluginId = resolveContextPluginId(callerCtx);
-    const resolveLabel = (): string => {
-      if (typeof descriptor.title === "function") return descriptor.title();
-      if (typeof descriptor.title === "string" && descriptor.title !== "") return descriptor.title;
-      return descriptor.label || descriptor.id;
-    };
-    const icon = typeof descriptor.icon === "function" ? descriptor.icon(14) : descriptor.icon;
-    const contribution = {
-      id: descriptor.id,
-      ...(pluginId === undefined ? {} : { pluginId }),
-      label: resolveLabel(),
-      ...(icon === undefined ? {} : { icon }),
-      ...(descriptor.order === undefined ? {} : { order: descriptor.order }),
-      render: ({ cwd, sessionFile }: { cwd: string; sessionFile: string | null }): ReactNode => {
-        const sessionId = sessionFile && isHarnessSessionFile(sessionFile)
-          ? sessionFile.slice(HARNESS_SESSION_PREFIX.length)
-          : "";
-        const props = {
-          ctx: callerCtx,
-          cwd,
-          sessionFile,
-          scope: { sessionId, cwd },
-          tab: { id: descriptor.id, type: descriptor.id, title: resolveLabel() },
-          visible: true,
-          onOpenFile: (path: string) => {
-            void useWorkbenchStore.getState().openFile(cwd, path);
-          },
-        };
-        if (typeof descriptor.component === "function") return descriptor.component(props);
-        if (typeof descriptor.render === "function") return descriptor.render(props);
-        return null;
-      },
-    };
-    const rawDispose = descriptor.bottomOnly
-      ? this.registry.registerBottomPanelTab(contribution)
-      : this.registry.registerRightWorkbenchTab(contribution);
-    let disposed = false;
-    const once = () => {
-      if (disposed) return;
-      disposed = true;
-      rawDispose();
-    };
-    return callerCtx.effect(() => once);
-  }
-
-  registerFileViewer(descriptor: LegacyFileViewerDescriptor): () => void {
-    if (typeof descriptor !== "object" || descriptor === null || typeof descriptor.id !== "string") {
-      return () => undefined;
-    }
-    const callerCtx = this.ctx;
-    const pluginId = resolveContextPluginId(callerCtx);
-    const resolveLabel = (): string => {
-      if (typeof descriptor.title === "function") return descriptor.title();
-      if (typeof descriptor.title === "string" && descriptor.title !== "") return descriptor.title;
-      return descriptor.label || descriptor.id;
-    };
-    const rawDispose = this.registry.registerFileViewer({
-      id: descriptor.id,
-      ...(pluginId === undefined ? {} : { pluginId }),
-      label: resolveLabel(),
-      ...(descriptor.extensions === undefined ? {} : { extensions: descriptor.extensions }),
-      ...(descriptor.mimeTypes === undefined ? {} : { mimeTypes: descriptor.mimeTypes }),
-      ...(descriptor.order === undefined ? {} : { order: descriptor.order }),
-      render: (fileCtx) => {
-        const props = {
-          ctx: callerCtx,
-          ...fileCtx,
-        };
-        if (typeof descriptor.component === "function") return descriptor.component(props);
-        if (typeof descriptor.render === "function") return descriptor.render(props);
-        return null;
-      },
-    });
-    let disposed = false;
-    const once = () => {
-      if (disposed) return;
-      disposed = true;
-      rawDispose();
-    };
-    return callerCtx.effect(() => once);
-  }
-
-  registerFileIcon(_descriptor: unknown): () => void {
-    return () => {};
-  }
-
-  openFile(scope: { cwd?: string } | undefined, path: string): void {
-    const cwd = scope?.cwd || useAppStore.getState().cwd;
-    void useWorkbenchStore.getState().openFile(cwd, path);
-  }
-
-  openTab(seed: { type?: string; id?: string; path?: string }, scope?: { cwd?: string }): void {
-    if (typeof seed.path === "string" && seed.path !== "") {
-      const cwd = scope?.cwd || useAppStore.getState().cwd;
-      void useWorkbenchStore.getState().openFile(cwd, seed.path);
-      return;
-    }
-    const target = seed.type ?? seed.id;
-    if (typeof target === "string" && target !== "") {
-      useWorkbenchStore.getState().openTab(target);
-    }
-  }
-
-  closeTab(_tabId: string): void {}
-  activateTab(tabId: string): void {
-    useWorkbenchStore.getState().openTab(tabId);
-  }
-  subscribe(_listener: () => void): () => void {
-    return () => {};
-  }
-  subscribeState(_listener: () => void): () => void {
-    return () => {};
-  }
-  getSnapshot(): Record<string, unknown> {
-    return {};
-  }
-}
-
-const betterSidebarCompatModule = {
+export {
   BetterSidebarCompatService,
-  SIDEBAR_SERVICE_VERSION: "0.26.0",
+  ClientStylesService,
+  type BuiltinCorePluginDescriptor,
+  type LegacyFileViewerDescriptor,
+  type LegacySidebarTabDescriptor,
 };
 
 export * from "../sdk";
@@ -268,6 +116,9 @@ export const CLIENT_MODULES: Record<string, () => Promise<unknown>> = {
   "schemastery": () => import("@deepseek-ai/schemastery"),
   "@deepseek-ai/schemastery": () => import("@deepseek-ai/schemastery"),
   "@qianji/client": async () => qianjiClientSdk,
+  "@qianji/client-slots": () => import("../kernel/slots"),
+  "@qianji/client-store": () => import("../kernel/store"),
+  "@qianji/client-primitives": () => import("../kernel/primitives"),
   "@qianji/protocol": () => import("@qianji/protocol"),
   "@pid/client": async () => qianjiClientSdk,
   "@pid/protocol": () => import("@qianji/protocol"),
@@ -276,7 +127,12 @@ export const CLIENT_MODULES: Record<string, () => Promise<unknown>> = {
   "lucide-react": () => import("lucide-react"),
 };
 
-const defaultTransport: ClientPluginTransport = {
+/** Register an additional shared module specifier (e.g. `@qianji/client-primitives`) before runtime preload. */
+export function registerClientModule(specifier: string, loader: () => Promise<unknown>): void {
+  CLIENT_MODULES[specifier] = loader;
+}
+
+const rawHostPluginTransport: ClientPluginTransport = {
   list: (workspace) => pluginClient.list(workspace),
   clientBundle: (params) => pluginClient.clientBundle(params),
   reportClientError: (params) => pluginClient.reportClientError(params),
@@ -294,156 +150,144 @@ const defaultTransport: ClientPluginTransport = {
   },
 };
 
+const defaultTransport: ClientPluginTransport = createSafeModeGatedTransport(
+  rawHostPluginTransport,
+  safeModeController,
+  (plugins) => {
+    for (const item of plugins) {
+      setPluginTier(item.id, item.tier);
+    }
+  },
+);
+
 let singletonRoot: Context | undefined;
 let singletonRuntime: ClientPluginRuntimeHandle | undefined;
+let singletonBuiltinCoordinator: BuiltinCorePluginCoordinator | undefined;
+let singletonServicesReady: Promise<void> | undefined;
+const pendingBuiltinDescriptors: BuiltinCorePluginDescriptor[] = [];
 
-function mountBuiltinIntelligentUiSync(): void {
-  let mountedDisposers: Array<() => void> = [];
-  let currentWorkspace: string | undefined;
-
-  const applyEnabled = (enabled: boolean) => {
-    useIntelligentUiStore.getState().setPluginEnabled(enabled);
-    if (enabled) {
-      if (mountedDisposers.length > 0) return;
-      mountedDisposers = [
-        clientContributions.registerRightWorkbenchTab({
-          id: INTELLIGENT_UI_CANVAS_TAB_ID,
-          label: "画布",
-          icon: createElement(Layers, { size: 13 }),
-          order: 15,
-          render: () => createElement(IntelligentUiCanvasTab),
-        }),
-      ];
-    } else {
-      for (const dispose of mountedDisposers) dispose();
-      mountedDisposers = [];
-      if (useWorkbenchStore.getState().activeTab === INTELLIGENT_UI_CANVAS_TAB_ID) {
-        useWorkbenchStore.getState().openTab("files");
-      }
-    }
-  };
-
-  // Mount immediately by default so offline / browser / fixture boots have Intelligent UI ready.
-  applyEnabled(true);
-  if (typeof window !== "undefined") {
-    window.__qianjiDiagramComponent = DiagramBlock;
+/**
+ * Register Vite-bundled built-in core/feature client plugins with the microkernel
+ * coordinator. Safe to call either before or after `ensureClientPluginRuntime()`.
+ */
+export function registerBuiltinCorePlugins(
+  descriptors: readonly BuiltinCorePluginDescriptor[],
+): () => void {
+  if (singletonBuiltinCoordinator !== undefined) {
+    return singletonBuiltinCoordinator.register(descriptors);
   }
-
-  const syncFromHost = async () => {
-    try {
-      const items = await pluginClient.list(currentWorkspace);
-      const entry = items.find((item) => item.id === "intelligent-ui");
-      if (entry !== undefined) {
-        applyEnabled(entry.enabled !== false && entry.status !== "disabled");
-      }
-      useBuiltinPluginGatesStore.getState().syncFromPluginList(items);
-      const gates = useBuiltinPluginGatesStore.getState();
-      const wb = useWorkbenchStore.getState();
-      if (
-        (!gates.codeReviewEnabled && wb.activeTab === "review") ||
-        (!gates.webPreviewEnabled && wb.activeTab === "preview") ||
-        (!gates.sideChatEnabled && wb.activeTab === "side-chat")
-      ) {
-        wb.openTab("files");
-      }
-    } catch {
-      // Keep current state when host is not yet connected or running in browser mode.
+  for (const desc of descriptors) {
+    const existingIdx = pendingBuiltinDescriptors.findIndex((item) => item.id === desc.id);
+    if (existingIdx >= 0) {
+      pendingBuiltinDescriptors[existingIdx] = desc;
+    } else {
+      pendingBuiltinDescriptors.push(desc);
     }
+  }
+  const ids = descriptors.map((desc) => desc.id);
+  const idSet = new Set(ids);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    for (let i = pendingBuiltinDescriptors.length - 1; i >= 0; i -= 1) {
+      const item = pendingBuiltinDescriptors[i];
+      if (item !== undefined && idSet.has(item.id)) {
+        pendingBuiltinDescriptors.splice(i, 1);
+      }
+    }
+    singletonBuiltinCoordinator?.unregister(ids);
   };
+}
 
-  void syncFromHost();
-  pluginClient.onChanged(() => {
-    void syncFromHost();
-  });
-  harnessRuntimes.onHostStatus((status) => {
-    if (status === "connected") {
-      void syncFromHost();
-    }
-  });
-  const MAX_SEEN_HTML_ARTIFACTS = 512;
-  const seenHtmlArtifacts = new Set<string>();
-  const rememberSeenArtifact = (key: string) => {
-    if (seenHtmlArtifacts.size >= MAX_SEEN_HTML_ARTIFACTS) {
-      const oldest = seenHtmlArtifacts.values().next().value;
-      if (oldest !== undefined) seenHtmlArtifacts.delete(oldest);
-    }
-    seenHtmlArtifacts.add(key);
-  };
-  const initial = useAppStore.getState();
-  let hydratedSessionKey: string | null = initial.messages.length > 0
-    ? (initial.sessionFile ?? "__draft__")
-    : null;
-
-  useAppStore.subscribe((state, prev) => {
-    if (state.cwd !== prev.cwd) {
-      currentWorkspace = state.cwd || undefined;
-      void syncFromHost();
-    }
-    if (state.messages !== prev.messages || state.sessionFile !== prev.sessionFile) {
-      if (state.sessionFile !== prev.sessionFile && state.messages.length === 0) {
-        hydratedSessionKey = null;
-      }
-      if (!useIntelligentUiStore.getState().pluginEnabled) return;
-      if (state.messages.length === 0) return;
-
-      const sessionKey = state.sessionFile ?? "__draft__";
-      const sameHydratedSession = hydratedSessionKey === sessionKey;
-      const isIdleSessionHydration = !sameHydratedSession && !state.isStreaming;
-      hydratedSessionKey = sessionKey;
-
-      // Fast path during 32ms streaming updates: if all prior messages are referentially identical
-      // and the tail message carries neither `render_ui`/`update_ui` nor an `intelligent-ui` fence, skip full derivation.
-      if (
-        sameHydratedSession
-        && state.sessionFile === prev.sessionFile
-        && prev.messages.length > 0
-        && state.messages.length >= prev.messages.length
-        && state.messages.length - prev.messages.length <= 1
-      ) {
-        const prefixEnd = state.messages.length === prev.messages.length
-          ? prev.messages.length - 1
-          : prev.messages.length;
-        let prefixUnchanged = true;
-        for (let i = 0; i < prefixEnd; i += 1) {
-          if (state.messages[i] !== prev.messages[i]) {
-            prefixUnchanged = false;
-            break;
-          }
-        }
-        const tail = state.messages[state.messages.length - 1];
-        if (prefixUnchanged && !messageMayContainIntelligentUi(tail)) return;
-      }
-
-      const summary = deriveSessionIntelligentUis(groupTranscriptMessages(state.messages));
-      for (const grp of summary.orderedGroups) {
-        if (grp.latest.engine !== "html") continue;
-        const key = `${state.sessionFile ?? "draft"}::${grp.id}::v${grp.latest.version}`;
-        if (!seenHtmlArtifacts.has(key)) {
-          rememberSeenArtifact(key);
-          if (!isIdleSessionHydration) {
-            useIntelligentUiStore.getState().openInCanvas(grp.id, grp.latest.version);
-          }
-        }
-      }
-    }
-  });
+function mergeInitialBuiltinDescriptors(): BuiltinCorePluginDescriptor[] {
+  const byId = new Map<string, BuiltinCorePluginDescriptor>();
+  for (const desc of DEFAULT_BUILTIN_CLIENT_PLUGINS) {
+    byId.set(desc.id, desc);
+  }
+  for (const desc of pendingBuiltinDescriptors) {
+    byId.set(desc.id, desc);
+  }
+  return [...byId.values()];
 }
 
 export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
   if (singletonRuntime !== undefined) return singletonRuntime;
+  installPluginStyleGlobals();
+  safeModeController.install();
+  if (typeof window !== "undefined") {
+    window.__qianjiDiagramComponent = DiagramBlock;
+  }
   const root = new Context();
-  root.plugin(ClientContributionService, clientContributions);
-  root.plugin(ClientStylesService);
-  root.plugin(BetterSidebarCompatService, clientContributions);
-  mountBuiltinIntelligentUiSync();
+  bindClientRootContext(root);
+  const coreFibers = [
+    root.plugin(ClientSlotsService, clientSlotsRegistry),
+    root.plugin(ClientContributionService, clientContributions),
+    root.plugin(ClientStylesService),
+    root.plugin(BetterSidebarCompatService, clientContributions),
+  ];
+  const frontendServicesReady = registerFrontendServices(root, { contributionRegistry: clientContributions });
+  installSessionScopeAdapter(root);
+  registerCorePrimitiveFactories(clientSlotsRegistry);
+  registerHostComponentFactories(clientSlotsRegistry);
+  const stopIntelligentUiSync = installIntelligentUiAutoOpenSync();
+  clientSlotsRegistry.abdication.onAbdicate((record) => {
+    // When built-in `core-shell` is mounted, its own `ctx.slots.onAbdicate` handler
+    // emits the user-facing toast; keep this fallback active when `core-shell` is
+    // overridden or unloaded so abdication is always surfaced.
+    if (singletonBuiltinCoordinator?.getMountedIds().includes("core-shell") === true) {
+      return;
+    }
+    const fallbackNote = record.fallbackPluginId === undefined ? "" : `，已回退至 ${record.fallbackPluginId}`;
+    useAppStore.getState().showToast(`插件 "${record.pluginId}" 槽位 ${record.slotKey} 渲染异常${fallbackNote}`, "warning");
+  });
   singletonRoot = root;
-  singletonRuntime = createClientPluginRuntime<Plugin>(root, {
+  singletonBuiltinCoordinator = createBuiltinCorePluginCoordinator(root, {
+    transport: rawHostPluginTransport,
+    safeMode: safeModeController,
+    descriptors: mergeInitialBuiltinDescriptors(),
+  });
+  // Mount all Vite-bundled builtin core & feature Fibers immediately for zero-latency cold start,
+  // then let the background transport sync reconcile against Host plugin state & user overrides.
+  const immediateBuiltinReady = singletonBuiltinCoordinator.sync({ fetchList: false }).then(() => {
+    setBuiltinFeatureCoordinatorActive(true);
+  });
+  singletonServicesReady = Promise.all([...coreFibers, frontendServicesReady, immediateBuiltinReady]).then(
+    () => undefined,
+  );
+  const baseRuntime = createClientPluginRuntime<Plugin>(root, {
     transport: defaultTransport,
     modules: CLIENT_MODULES,
   });
+  singletonRuntime = {
+    setWorkspace(workspace) {
+      singletonBuiltinCoordinator?.setWorkspace(workspace);
+      baseRuntime.setWorkspace(workspace);
+    },
+    async sync() {
+      await Promise.all([
+        baseRuntime.sync(),
+        singletonBuiltinCoordinator?.sync() ?? Promise.resolve(),
+      ]);
+    },
+    async dispose() {
+      stopIntelligentUiSync();
+      setBuiltinFeatureCoordinatorActive(false);
+      await singletonBuiltinCoordinator?.dispose();
+      await baseRuntime.dispose();
+    },
+  };
   return singletonRuntime;
 }
 
 export function getClientRootContext(): Context | undefined {
   return singletonRoot;
+}
+
+export function getBuiltinCorePluginCoordinator(): BuiltinCorePluginCoordinator | undefined {
+  return singletonBuiltinCoordinator;
+}
+
+export function whenClientPluginServicesReady(): Promise<void> {
+  return singletonServicesReady ?? Promise.resolve();
 }

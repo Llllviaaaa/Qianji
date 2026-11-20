@@ -19,13 +19,14 @@ V2 重构（[REFACTOR_V2_PLAN.md](../archive/REFACTOR_V2_PLAN.md)）期间的架
 | [0013](0013-desktop-settings-and-secrets.md) | 桌面端设置、密钥与热重载 | 已接受 |
 | [0014](0014-frontend-harness-adapter.md) | 前端接入 Harness：在传输层模拟 Pi runtime | 已接受 |
 | [0015](0015-pi-session-import.md) | 导入 Pi 的历史任务 | 已废弃 |
-| [0016](0016-dynamic-plugins-and-hmr.md) | 动态插件内核、分层覆盖与全栈热重载 | 已接受，部分由 0017 修订 |
+| [0016](0016-dynamic-plugins-and-hmr.md) | 动态插件内核、分层覆盖与全栈热重载 | 已接受，部分由 0017、0023 修订 |
 | [0017](0017-plugin-trust-model.md) | 插件信任模型 | 已接受 |
 | [0018](0018-anthropic-adaptive-thinking-and-caching.md) | Anthropic 适配器：自适应 thinking 与提示词缓存 | 已接受 |
 | [0019](0019-context-pressure.md) | 上下文压力：提前压缩、摘要请求收缩与工具输出上限 | 已接受，部分由 0022 扩展 |
 | [0020](0020-tool-guards.md) | 工具调用的时限与重复提醒 | 已接受 |
 | [0021](0021-powershell-fallback.md) | Windows 上没有 Git Bash 时改用 PowerShell | 已接受 |
 | [0022](0022-agent-capability-enhancements.md) | Agent 核心能力五向演进（Hashline 编辑、隔离 Subagent、滑动压缩与分支摘要、受管后台进程、渐进式记忆索引） | 已接受 |
+| [0023](0023-frontend-microkernel-and-core-pluginization.md) | 前端微内核化、强类型槽位树与全栈核心插件化 | 已接受 |
 
 ## 旧名对照
 

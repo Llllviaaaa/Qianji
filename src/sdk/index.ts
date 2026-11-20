@@ -12,63 +12,32 @@ import {
   CLIENT_SLOT_CATALOG,
   clientContributions,
   useClientContributions,
-  type AppearanceThemeInput,
-  type BuiltinSettingsPageId,
-  type ClientActionContribution,
-  type ClientCodeBlockRendererContribution,
-  type ClientComposerStatusContribution,
-  type ClientContributionsSnapshot,
-  type ClientFileViewerContribution,
-  type ClientHomeQuickActionContribution,
-  type ClientKeybindingContribution,
-  type ClientMenuContextMap,
-  type ClientMenuItemContribution,
-  type ClientMenuItemFor,
-  type ClientMenuLocation,
-  type ClientMessageActionContribution,
-  type ClientPageContribution,
-  type ClientRewindHandlerContribution,
-  type ClientSettingsPageContribution,
-  type ClientSettingsSectionContribution,
-  type ClientSidebarSectionContribution,
-  type ClientSlashInterceptorContribution,
-  type ClientSlotMetadata,
-  type ClientStatusBarContribution,
-  type ClientToolRendererContribution,
-  type ClientWorkbenchTabContribution,
-  type CodeBlockRendererSlotContext,
-  type FileMenuContext,
-  type FileViewerSlotContext,
-  type HomeQuickActionSlotContext,
-  type MessageActionSlotContext,
-  type ProjectMenuContext,
-  type SessionMenuContext,
-  type SettingsSlotContext,
-  type ToolRendererSlotContext,
-  type WorkbenchSlotContext,
 } from "../lib/clientContributions";
-import type {
-  AppearanceScope,
-  AppearanceThemeDefinition,
-  ThemePalette,
-} from "../lib/appearanceCatalog";
 import { harnessRuntimes as internalHarnessRuntimes } from "../lib/harnessRuntime";
 import { pluginClient } from "../lib/pluginClient";
 import { requestOpenHubPage, requestOpenSettings } from "../lib/shellBridge";
-import {
-  messageImagesToAttachments,
-  rewindController,
-  type ComposerDraftSnapshot,
-  type PerformedRewindResult,
-  type RewindExecutionResult,
-  type RewindInspection,
-  type RewindMode,
-  type RewindTargetSummary,
-  type RewindTurnSummary,
-} from "../lib/rewindController";
+import { messageImagesToAttachments, rewindController } from "../lib/rewindController";
 import { useAppStore as internalUseAppStore } from "../store";
 import { useWorkbenchStore as internalUseWorkbenchStore } from "../stores/workbenchStore";
 import type { AttachmentPayload, SessionStats, UiMessage, UiToolCall } from "../types";
+import {
+  useClientContext,
+  useComposerState,
+  useFrontendService,
+  useLocaleState,
+  useMenusState,
+  useNavigationState,
+  useResourcesState,
+  useRpcState,
+  useSafeMode,
+  useSessionHandle,
+  useSessionState,
+  useShortcutsState,
+  useSlotOverrides,
+  useThemeState,
+  useWorkbenchState,
+  useWorkspaceState,
+} from "./frontendServices";
 import { useHostRpcQuery, type HostRpcQueryOptions, type HostRpcQueryResult } from "./hostRpcQuery";
 export type { SessionStats };
 export { useHostRpcQuery, type HostRpcQueryOptions, type HostRpcQueryResult };
@@ -362,11 +331,15 @@ export {
   messageImagesToAttachments,
 };
 
+export * from "./frontendServices";
+
 export type {
   AppearanceScope,
   AppearanceThemeDefinition,
+  ThemePalette,
+} from "../lib/appearanceCatalog";
+export type {
   AppearanceThemeInput,
-  AttachmentPayload,
   BuiltinSettingsPageId,
   ClientActionContribution,
   ClientCodeBlockRendererContribution,
@@ -391,26 +364,26 @@ export type {
   ClientToolRendererContribution,
   ClientWorkbenchTabContribution,
   CodeBlockRendererSlotContext,
-  ComposerDraftSnapshot,
   FileMenuContext,
   FileViewerSlotContext,
   HomeQuickActionSlotContext,
   MessageActionSlotContext,
-  PerformedRewindResult,
   ProjectMenuContext,
+  SessionMenuContext,
+  SettingsSlotContext,
+  ToolRendererSlotContext,
+  WorkbenchSlotContext,
+} from "../lib/clientContributions";
+export type {
+  ComposerDraftSnapshot,
+  PerformedRewindResult,
   RewindExecutionResult,
   RewindInspection,
   RewindMode,
   RewindTargetSummary,
   RewindTurnSummary,
-  SessionMenuContext,
-  SettingsSlotContext,
-  ThemePalette,
-  ToolRendererSlotContext,
-  UiMessage,
-  UiToolCall,
-  WorkbenchSlotContext,
-};
+} from "../lib/rewindController";
+export type { AttachmentPayload, UiMessage, UiToolCall };
 
 /**
  * @deprecated Internal host store. Prefer `useActiveSession`, `useActiveWorkspace`, `useAppearanceTheme`, `sendChatPrompt`, and `showToast`.
@@ -440,6 +413,23 @@ export const qianjiClientSdk = {
   usePluginConfig,
   useHostRpcQuery,
   useClientContributions,
+  // Frontend Cordis Service Hooks (ADR 0023)
+  useClientContext,
+  useFrontendService,
+  useSessionState,
+  useSessionHandle,
+  useWorkspaceState,
+  useComposerState,
+  useWorkbenchState,
+  useNavigationState,
+  useThemeState,
+  useShortcutsState,
+  useMenusState,
+  useRpcState,
+  useLocaleState,
+  useResourcesState,
+  useSafeMode,
+  useSlotOverrides,
   // Controlled Actions & Helpers
   callHostRpc,
   openWorkbenchTab,

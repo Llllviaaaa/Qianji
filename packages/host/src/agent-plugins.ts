@@ -1,12 +1,12 @@
 /**
  * Minimal pure-spine Core + isomorphic pluggable plugin catalog.
  *
- * `corePlugins()` contains ONLY the pure in-memory agent spine (credentials slot,
- * LLM slot, in-memory sessions, UI bus, tool bus, slash command bus, system
- * prompt builder, and the single agent loop). Every concrete model protocol,
- * pricing catalog, storage backend, full-text search index, filesystem/shell
- * tool, Git checkpointing, security policy, and HTTP/WebSocket RPC gateway is a
- * first-class `PluginManager`-managed plugin (`builtinPluginDefinitions`).
+ * `corePlugins()` contains ONLY the 7 pure in-memory buses (credentials slot,
+ * LLM slot, in-memory sessions, UI bus, tool bus, slash command bus, and system
+ * prompt builder). The agent execution loop (`agent-loop`) and every concrete
+ * model protocol, pricing catalog, storage backend, full-text search index,
+ * filesystem/shell tool, Git checkpointing, security policy, and HTTP/WebSocket
+ * RPC gateway are first-class `PluginManager`-managed plugins (`builtinPluginDefinitions`).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -66,20 +66,11 @@ export interface CoreOptions {
 }
 
 /**
- * Minimal pure in-memory Core spine. Contains zero business/vendor logic,
- * zero disk formats, zero pricing tables, zero concrete tools, and zero network gateways.
+ * Minimal 7-bus pure in-memory Core spine. Contains zero orchestration loop,
+ * zero vendor/disk/tool logic, and zero network gateways.
  */
 export function corePlugins(_dataDir?: string, _options?: CoreOptions): PluginEntry[] {
-  return [
-    [Credentials],
-    [LlmService],
-    [Sessions],
-    [Ui],
-    [Tools],
-    [Commands],
-    [SystemPrompt],
-    [AgentLoop],
-  ];
+  return [[Credentials], [LlmService], [Sessions], [Ui], [Tools], [Commands], [SystemPrompt]];
 }
 
 export interface GatewayOptions {
@@ -133,8 +124,10 @@ export interface BuiltinPluginDefinition {
   name: string;
   description: string;
   enabled: boolean;
-  /** False when disabling this built-in would sever the active HTTP/RPC control plane. */
+  /** False when disabling this built-in would sever core execution or the active HTTP/RPC control plane. */
   canDisable?: boolean;
+  /** True when a user/workspace plugin with the same `id` may override this built-in (defaults to `canDisable !== false`). */
+  canOverride?: boolean;
   hasHost: boolean;
   hasClient: boolean;
   plugin: Plugin;
@@ -414,6 +407,19 @@ export function builtinPluginDefinitions(
       plugin: secretStore,
       inject: ["credentials"],
       config: { file: join(dataDir, "secrets.dat"), codec: options.codec },
+    },
+    {
+      id: "agent-loop",
+      name: "Agent 主循环引擎 (agent-loop)",
+      description: "驱动流式模型推理、并行工具编排、上下文自动压缩与引导排队的核心执行循环",
+      enabled: true,
+      canDisable: false,
+      canOverride: true,
+      hasHost: true,
+      hasClient: false,
+      plugin: AgentLoop,
+      inject: ["llm", "sessions", "tools", "systemPrompt"],
+      provides: ["agents"],
     },
     {
       id: "llm-openai-compat",
