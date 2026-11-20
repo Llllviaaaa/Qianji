@@ -201,7 +201,10 @@ function DeclarativeArtifactView({ artifact }: { readonly artifact: IntelligentU
 /** Keyed `"intelligent-ui-canvas"` pane registered onto `workbench.panes`. */
 export function IntelligentUiCanvasTab({
   ctx,
+  renderFactory,
 }: SlotComponentProps<WorkbenchPaneSlotProps, "session-maybe">): ReactElement {
+  const hasHostCanvas =
+    (ctx?.slots?.registry?.getFactoryCandidates("host.intelligentUi.canvas").length ?? 0) > 0;
   const session = useSessionState(ctx);
   const composerService = useFrontendService("composerService", ctx);
   const appearance = useAppearanceTheme();
@@ -219,6 +222,14 @@ export function IntelligentUiCanvasTab({
     }
     return groups[groups.length - 1] ?? null;
   }, [groups, selectedWidgetId]);
+
+  if (hasHostCanvas) {
+    return (
+      <div data-feature-pane="intelligent-ui" style={{ display: "contents" }}>
+        {renderFactory("host.intelligentUi.canvas", {})}
+      </div>
+    );
+  }
 
   if (activeGroup === null) {
     return (

@@ -5,9 +5,7 @@
  * single lightweight Cordis root context (`pidClientRoot`) wired directly to
  * `ClientContributionService` and `createClientPluginRuntime`.
  */
-import { createElement } from "react";
 import { Context, type Plugin } from "@deepseek-ai/cordis";
-import { Layers } from "lucide-react";
 import { agent } from "./agent";
 import {
   BetterSidebarCompatService,
@@ -23,14 +21,20 @@ import {
 } from "./clientContributions";
 import { registerCorePrimitiveFactories } from "../kernel/primitives/factories";
 import {
+  installIntelligentUiAutoOpenSync,
+  registerHostComponentFactories,
+} from "../kernel/primitives/hostComponentFactories";
+import {
   createBuiltinCorePluginCoordinator,
   createSafeModeGatedTransport,
   installPluginStyleGlobals,
   safeModeController,
+  setBuiltinFeatureCoordinatorActive,
   setPluginTier,
   type BuiltinCorePluginCoordinator,
   type BuiltinCorePluginDescriptor,
 } from "../kernel/runtime";
+import { DEFAULT_BUILTIN_CLIENT_PLUGINS } from "../kernel/runtime/registerDefaultBuiltinPlugins";
 import { installSessionScopeAdapter, registerFrontendServices } from "../kernel/services";
 import { ClientSlotsService, clientSlotsRegistry } from "../kernel/slots";
 import {
@@ -41,20 +45,11 @@ import {
 } from "./clientPluginRuntime";
 import { harnessRuntimes } from "./harnessRuntime";
 import { messageImagesToAttachments, rewindController } from "./rewindController";
-import {
-  deriveSessionIntelligentUis,
-  INTELLIGENT_UI_CANVAS_TAB_ID,
-  messageMayContainIntelligentUi,
-} from "./intelligentUi";
 import { pluginClient } from "./pluginClient";
-import { groupTranscriptMessages } from "./transcriptTurns";
-import { IntelligentUiCanvasTab } from "../components/workbench/IntelligentUiCanvasTab";
 import { DiagramBlock } from "../components/DiagramBlock";
 import { qianjiClientSdk } from "../sdk";
 import { bindClientRootContext } from "../sdk/rootContext";
 import { useAppStore } from "../store";
-import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
-import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import { useWorkbenchStore } from "../stores/workbenchStore";
 
 declare global {
@@ -205,142 +200,24 @@ export function registerBuiltinCorePlugins(
   };
 }
 
-function mountBuiltinIntelligentUiSync(): void {
-  let mountedDisposers: Array<() => void> = [];
-  let currentWorkspace: string | undefined;
-
-  const applyEnabled = (enabled: boolean) => {
-    useIntelligentUiStore.getState().setPluginEnabled(enabled);
-    if (enabled) {
-      if (mountedDisposers.length > 0) return;
-      mountedDisposers = [
-        clientContributions.registerRightWorkbenchTab({
-          id: INTELLIGENT_UI_CANVAS_TAB_ID,
-          label: "画布",
-          icon: createElement(Layers, { size: 13 }),
-          order: 15,
-          render: () => createElement(IntelligentUiCanvasTab),
-        }),
-      ];
-    } else {
-      for (const dispose of mountedDisposers) dispose();
-      mountedDisposers = [];
-      if (useWorkbenchStore.getState().activeTab === INTELLIGENT_UI_CANVAS_TAB_ID) {
-        useWorkbenchStore.getState().openTab("files");
-      }
-    }
-  };
-
-  // Mount immediately by default so offline / browser / fixture boots have Intelligent UI ready.
-  applyEnabled(true);
-  if (typeof window !== "undefined") {
-    window.__qianjiDiagramComponent = DiagramBlock;
+function mergeInitialBuiltinDescriptors(): BuiltinCorePluginDescriptor[] {
+  const byId = new Map<string, BuiltinCorePluginDescriptor>();
+  for (const desc of DEFAULT_BUILTIN_CLIENT_PLUGINS) {
+    byId.set(desc.id, desc);
   }
-
-  const syncFromHost = async () => {
-    try {
-      const items = await pluginClient.list(currentWorkspace);
-      const entry = items.find((item) => item.id === "intelligent-ui");
-      if (entry !== undefined) {
-        applyEnabled(entry.enabled !== false && entry.status !== "disabled");
-      }
-      useBuiltinPluginGatesStore.getState().syncFromPluginList(items);
-      const gates = useBuiltinPluginGatesStore.getState();
-      const wb = useWorkbenchStore.getState();
-      if (
-        (!gates.codeReviewEnabled && wb.activeTab === "review") ||
-        (!gates.webPreviewEnabled && wb.activeTab === "preview") ||
-        (!gates.sideChatEnabled && wb.activeTab === "side-chat")
-      ) {
-        wb.openTab("files");
-      }
-    } catch {
-      // Keep current state when host is not yet connected or running in browser mode.
-    }
-  };
-
-  void syncFromHost();
-  pluginClient.onChanged(() => {
-    void syncFromHost();
-  });
-  harnessRuntimes.onHostStatus((status) => {
-    if (status === "connected") {
-      void syncFromHost();
-    }
-  });
-  const MAX_SEEN_HTML_ARTIFACTS = 512;
-  const seenHtmlArtifacts = new Set<string>();
-  const rememberSeenArtifact = (key: string) => {
-    if (seenHtmlArtifacts.size >= MAX_SEEN_HTML_ARTIFACTS) {
-      const oldest = seenHtmlArtifacts.values().next().value;
-      if (oldest !== undefined) seenHtmlArtifacts.delete(oldest);
-    }
-    seenHtmlArtifacts.add(key);
-  };
-  const initial = useAppStore.getState();
-  let hydratedSessionKey: string | null = initial.messages.length > 0
-    ? (initial.sessionFile ?? "__draft__")
-    : null;
-
-  useAppStore.subscribe((state, prev) => {
-    if (state.cwd !== prev.cwd) {
-      currentWorkspace = state.cwd || undefined;
-      void syncFromHost();
-    }
-    if (state.messages !== prev.messages || state.sessionFile !== prev.sessionFile) {
-      if (state.sessionFile !== prev.sessionFile && state.messages.length === 0) {
-        hydratedSessionKey = null;
-      }
-      if (!useIntelligentUiStore.getState().pluginEnabled) return;
-      if (state.messages.length === 0) return;
-
-      const sessionKey = state.sessionFile ?? "__draft__";
-      const sameHydratedSession = hydratedSessionKey === sessionKey;
-      const isIdleSessionHydration = !sameHydratedSession && !state.isStreaming;
-      hydratedSessionKey = sessionKey;
-
-      // Fast path during 32ms streaming updates: if all prior messages are referentially identical
-      // and the tail message carries neither `render_ui`/`update_ui` nor an `intelligent-ui` fence, skip full derivation.
-      if (
-        sameHydratedSession
-        && state.sessionFile === prev.sessionFile
-        && prev.messages.length > 0
-        && state.messages.length >= prev.messages.length
-        && state.messages.length - prev.messages.length <= 1
-      ) {
-        const prefixEnd = state.messages.length === prev.messages.length
-          ? prev.messages.length - 1
-          : prev.messages.length;
-        let prefixUnchanged = true;
-        for (let i = 0; i < prefixEnd; i += 1) {
-          if (state.messages[i] !== prev.messages[i]) {
-            prefixUnchanged = false;
-            break;
-          }
-        }
-        const tail = state.messages[state.messages.length - 1];
-        if (prefixUnchanged && !messageMayContainIntelligentUi(tail)) return;
-      }
-
-      const summary = deriveSessionIntelligentUis(groupTranscriptMessages(state.messages));
-      for (const grp of summary.orderedGroups) {
-        if (grp.latest.engine !== "html") continue;
-        const key = `${state.sessionFile ?? "draft"}::${grp.id}::v${grp.latest.version}`;
-        if (!seenHtmlArtifacts.has(key)) {
-          rememberSeenArtifact(key);
-          if (!isIdleSessionHydration) {
-            useIntelligentUiStore.getState().openInCanvas(grp.id, grp.latest.version);
-          }
-        }
-      }
-    }
-  });
+  for (const desc of pendingBuiltinDescriptors) {
+    byId.set(desc.id, desc);
+  }
+  return [...byId.values()];
 }
 
 export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
   if (singletonRuntime !== undefined) return singletonRuntime;
   installPluginStyleGlobals();
   safeModeController.install();
+  if (typeof window !== "undefined") {
+    window.__qianjiDiagramComponent = DiagramBlock;
+  }
   const root = new Context();
   bindClientRootContext(root);
   const coreFibers = [
@@ -352,18 +229,32 @@ export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
   const frontendServicesReady = registerFrontendServices(root, { contributionRegistry: clientContributions });
   installSessionScopeAdapter(root);
   registerCorePrimitiveFactories(clientSlotsRegistry);
-  singletonServicesReady = Promise.all([...coreFibers, frontendServicesReady]).then(() => undefined);
+  registerHostComponentFactories(clientSlotsRegistry);
+  const stopIntelligentUiSync = installIntelligentUiAutoOpenSync();
   clientSlotsRegistry.abdication.onAbdicate((record) => {
+    // When built-in `core-shell` is mounted, its own `ctx.slots.onAbdicate` handler
+    // emits the user-facing toast; keep this fallback active when `core-shell` is
+    // overridden or unloaded so abdication is always surfaced.
+    if (singletonBuiltinCoordinator?.getMountedIds().includes("core-shell") === true) {
+      return;
+    }
     const fallbackNote = record.fallbackPluginId === undefined ? "" : `，已回退至 ${record.fallbackPluginId}`;
     useAppStore.getState().showToast(`插件 "${record.pluginId}" 槽位 ${record.slotKey} 渲染异常${fallbackNote}`, "warning");
   });
-  mountBuiltinIntelligentUiSync();
   singletonRoot = root;
   singletonBuiltinCoordinator = createBuiltinCorePluginCoordinator(root, {
     transport: rawHostPluginTransport,
     safeMode: safeModeController,
-    descriptors: pendingBuiltinDescriptors,
+    descriptors: mergeInitialBuiltinDescriptors(),
   });
+  // Mount all Vite-bundled builtin core & feature Fibers immediately for zero-latency cold start,
+  // then let the background transport sync reconcile against Host plugin state & user overrides.
+  const immediateBuiltinReady = singletonBuiltinCoordinator.sync({ fetchList: false }).then(() => {
+    setBuiltinFeatureCoordinatorActive(true);
+  });
+  singletonServicesReady = Promise.all([...coreFibers, frontendServicesReady, immediateBuiltinReady]).then(
+    () => undefined,
+  );
   const baseRuntime = createClientPluginRuntime<Plugin>(root, {
     transport: defaultTransport,
     modules: CLIENT_MODULES,
@@ -380,6 +271,8 @@ export function ensureClientPluginRuntime(): ClientPluginRuntimeHandle {
       ]);
     },
     async dispose() {
+      stopIntelligentUiSync();
+      setBuiltinFeatureCoordinatorActive(false);
       await singletonBuiltinCoordinator?.dispose();
       await baseRuntime.dispose();
     },

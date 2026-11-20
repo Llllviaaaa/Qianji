@@ -28,6 +28,10 @@ import type {
   UiMessage,
 } from "../../types";
 import {
+  applyMainAgentMode,
+  applyMainPermissionMode,
+} from "./sessionHandleBase";
+import {
   createActivePoolEntry,
   createBoundSessionHandle,
   createIsolatedPoolEntry,
@@ -351,11 +355,11 @@ export class SessionService extends Service {
   }
 
   async setPermissionMode(mode: AppSettings["permissionMode"]): Promise<void> {
-    await useAppStore.getState().setRuntimePermissionMode(mode);
+    await applyMainPermissionMode(mode);
   }
 
   async setAgentMode(mode: AppSettings["agentMode"]): Promise<void> {
-    await useAppStore.getState().setRuntimeAgentMode(mode);
+    await applyMainAgentMode(mode);
   }
 
   async compact(): Promise<void> {

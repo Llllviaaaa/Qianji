@@ -1,7 +1,7 @@
 import { ChevronDown, Menu } from "lucide-react";
 import type { GitSnapshot, SessionInfo, WorkspaceEditorInfo } from "../../types";
 import { useClientContributions } from "../../lib/clientContributions";
-import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchPaneAvailable } from "../../kernel/runtime/featureSlotQueries";
 import { SlotEntryHost } from "../common/ErrorBoundary";
 import { PluginMenuItems } from "../common/PluginMenuItems";
 import { GitActionButton } from "../GitActionButton";
@@ -98,7 +98,7 @@ export function StageTopbar({
   preferredWorkspaceEditor,
   openWorkspaceInPreferredApp,
 }: StageTopbarProps) {
-  const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
+  const codeReviewEnabled = useWorkbenchPaneAvailable("review");
   const contributions = useClientContributions();
   const sidebarToggleLabel = isNarrowViewport
     ? (sidebarRendered ? "隐藏侧栏" : "显示侧栏")

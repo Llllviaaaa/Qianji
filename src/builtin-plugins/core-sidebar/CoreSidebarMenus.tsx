@@ -200,6 +200,7 @@ export function SidebarContextMenus<
         >
           <button
             type="button"
+            role="menuitem"
             onClick={() => {
               onOpenProjectFolder(projectMenu.workspace);
               onCloseProjectMenu();
@@ -212,6 +213,7 @@ export function SidebarContextMenus<
             <button
               key={item.id}
               type="button"
+              role="menuitem"
               className={item.danger ? "danger" : undefined}
               disabled={item.disabled}
               onClick={() => {
@@ -234,6 +236,7 @@ export function SidebarContextMenus<
         >
           <button
             type="button"
+            role="menuitem"
             onClick={() => {
               onTogglePinned(threadMenu.session.file);
               onCloseThreadMenu();
@@ -244,6 +247,7 @@ export function SidebarContextMenus<
           </button>
           <button
             type="button"
+            role="menuitem"
             onClick={() => {
               onArchiveSession(threadMenu.session);
               onCloseThreadMenu();
@@ -256,6 +260,7 @@ export function SidebarContextMenus<
             <button
               key={item.id}
               type="button"
+              role="menuitem"
               className={item.danger ? "danger" : undefined}
               disabled={item.disabled}
               onClick={() => {
@@ -269,6 +274,7 @@ export function SidebarContextMenus<
           <div className="sidebar-popover-separator" />
           <button
             type="button"
+            role="menuitem"
             className="danger"
             onClick={() => {
               onDeleteSession(threadMenu.session);

@@ -26,6 +26,7 @@ import {
   useFrontendService,
   useSessionHandle,
   useSessionState,
+  useThemeState,
   useWorkspaceState,
   type AttachmentPayload,
 } from "@qianji/client";
@@ -54,12 +55,15 @@ export function CoreComposerMain({
   onSend: ownerOnSend,
   sessionId,
   renderSlot,
+  renderFactory,
 }: SlotComponentProps<ComposerMainSlotProps, "session-maybe">): ReactNode {
   const composerService = useFrontendService("composerService");
   const sessionService = useFrontendService("sessionService");
   const workspaceService = useFrontendService("workspaceService");
   const sessionState = useSessionState();
+  const themeState = useThemeState();
   const workspaceState = useWorkspaceState();
+  const requireCtrlEnter = themeState?.requireCtrlEnter === true;
 
   const handleOptions = useMemo(
     () => (isolated === true ? { isolated: true, cwd: ownerCwd } : undefined),
@@ -179,7 +183,7 @@ export function CoreComposerMain({
     isStreaming,
     streamingBehavior,
     variant,
-    requireCtrlEnter: false,
+    requireCtrlEnter,
   });
 
   const showWorkspaceChips = variant === "task-start";
@@ -297,7 +301,11 @@ export function CoreComposerMain({
           <div className="composer-toolbar-right">
             {renderSlot("composer.status", { ...baseChildProps, position: "before-model" })}
 
-            <CoreComposerModelPicker handle={handle} sessionId={sessionId} />
+            {renderFactory(
+              "host.composer.modelPicker",
+              { handle, sessionId },
+              { fallback: <CoreComposerModelPicker handle={handle} sessionId={sessionId} /> },
+            )}
 
             {renderSlot("composer.status", { ...baseChildProps, position: "after-model" })}
 
@@ -317,7 +325,7 @@ export function CoreComposerMain({
                 className="send-button dsh-primary-send"
                 disabled={sendDisabled}
                 aria-label="发送"
-                title={`发送 (${formatSendShortcutHint(false)})`}
+                title={`发送 (${formatSendShortcutHint(requireCtrlEnter)})`}
                 onClick={() => void handleSubmit()}
               >
                 <ArrowUp size={16} strokeWidth={2.25} />

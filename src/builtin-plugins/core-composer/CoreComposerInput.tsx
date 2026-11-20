@@ -11,6 +11,7 @@ import {
   useFrontendService,
   useSessionHandle,
   useSessionState,
+  useThemeState,
 } from "@qianji/client";
 import type { ComposerInputSlotProps, SlotComponentProps } from "@qianji/client-slots";
 import {
@@ -32,6 +33,8 @@ export function CoreComposerInput({
   const resolvedKey = resolveComposerSessionKey(sessionKey, sessionId, sessionFile);
   const composerSnap = useComposerState(resolvedKey);
   const sessionState = useSessionState();
+  const themeState = useThemeState();
+  const requireCtrlEnter = themeState?.requireCtrlEnter === true;
   const { snapshot: handleSnap } = useSessionHandle(sessionId);
 
   const serviceDraft = composerSnap?.draft ?? "";
@@ -99,6 +102,15 @@ export function CoreComposerInput({
                 {command.description !== undefined && command.description !== "" && (
                   <span className="command-item-desc">{command.description}</span>
                 )}
+                <span className="command-item-source">
+                  {command.source === "skill"
+                    ? "技能"
+                    : command.source === "prompt"
+                      ? "模板"
+                      : command.source === "extension"
+                        ? "扩展"
+                        : "内置"}
+                </span>
               </button>
             );
           })}
@@ -155,7 +167,7 @@ export function CoreComposerInput({
                 keyCode: event.nativeEvent.keyCode,
                 defaultPrevented: event.defaultPrevented,
               },
-              { requireCtrlEnter: false, hasActiveSuggestion: menuOpen },
+              { requireCtrlEnter, hasActiveSuggestion: menuOpen },
             );
 
             if (action === "accept-suggestion" && activeCommand !== undefined) {
@@ -176,6 +188,14 @@ export function CoreComposerInput({
                 event.currentTarget.selectionEnd,
               );
               updateDraft(next.value);
+              if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+                window.requestAnimationFrame(() => {
+                  const el = textareaRef.current;
+                  if (el !== null) {
+                    el.setSelectionRange(next.caret, next.caret);
+                  }
+                });
+              }
             }
           }}
         />

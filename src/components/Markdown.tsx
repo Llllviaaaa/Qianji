@@ -16,7 +16,8 @@ import { isRichContentLanguage, parseRichContent } from "../lib/richContent";
 import { splitStreamingMarkdownBlocks } from "../lib/streamingMarkdown";
 import { resolveWorkspacePath } from "../lib/workspaceEditors";
 import { INTELLIGENT_UI_FENCE_LANGUAGE, parseIntelligentUiFence } from "../lib/intelligentUi";
-import { useBuiltinPluginGatesStore } from "../stores/builtinPluginGatesStore";
+import { SlotHost } from "@qianji/client-slots";
+import { useCodeBlockSlotStatus } from "../kernel/runtime/featureSlotQueries";
 import { useIntelligentUiStore } from "../stores/intelligentUiStore";
 import { SlotEntryHost } from "./common/ErrorBoundary";
 import { DiagramBlock, diagramKindForLanguage } from "./DiagramBlock";
@@ -159,9 +160,7 @@ function MarkdownPre({
 }) {
   const { language, text } = codeFenceDetails(children);
   const intelligentUiEnabled = useIntelligentUiStore((state) => state.pluginEnabled);
-  const diagramViewerEnabled = useBuiltinPluginGatesStore((state) => state.diagramViewerEnabled);
-  const mermaidEnabled = useBuiltinPluginGatesStore((state) => state.mermaidEnabled);
-  const plantUmlEnabled = useBuiltinPluginGatesStore((state) => state.plantUmlEnabled);
+  const { hasSlotEntry, allowPrebootDiagramFallback } = useCodeBlockSlotStatus(language);
   const { codeBlockRenderers } = useClientContributions();
   const cwd = useAppStore((state) => state.cwd);
   const sessionFile = useAppStore((state) => state.sessionFile);
@@ -187,12 +186,19 @@ function MarkdownPre({
       />
     );
   }
+  if (hasSlotEntry) {
+    return (
+      <SlotHost
+        slotKey="conversation.markdown.codeBlock"
+        kind="keyed"
+        routeKey={language.toLowerCase()}
+        props={{ cwd, sessionFile, language, code: text, isStreaming }}
+        fallback={<CodeFence>{children}</CodeFence>}
+      />
+    );
+  }
   const diagramKind = diagramKindForLanguage(language);
-  const canRenderDiagram =
-    diagramKind !== null &&
-    diagramViewerEnabled &&
-    (diagramKind === "mermaid" ? mermaidEnabled : plantUmlEnabled);
-  if (canRenderDiagram && diagramKind) {
+  if (allowPrebootDiagramFallback && diagramKind !== null) {
     return isStreaming ? <CodeFence>{children}</CodeFence> : <DiagramBlock kind={diagramKind} source={text} />;
   }
   return <CodeFence>{children}</CodeFence>;

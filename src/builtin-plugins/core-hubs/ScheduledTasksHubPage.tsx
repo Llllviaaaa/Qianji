@@ -87,7 +87,9 @@ function statusLabel(status: string): string {
 }
 
 export function ScheduledTasksHubPage(props: SlotComponentProps<HubPageSlotProps, "root">) {
-  const { ctx } = props;
+  const { ctx, renderFactory } = props;
+  const hasHostScheduled =
+    (ctx?.slots?.registry?.getFactoryCandidates("host.hub.scheduled").length ?? 0) > 0;
   const rpcService = useFrontendService("rpcService", ctx);
   const navigationService = useFrontendService("navigationService", ctx);
   const sessionService = useFrontendService("sessionService", ctx);
@@ -116,7 +118,7 @@ export function ScheduledTasksHubPage(props: SlotComponentProps<HubPageSlotProps
   }, [rpcService]);
 
   useEffect(() => {
-    if (rpcService === undefined) return undefined;
+    if (hasHostScheduled || rpcService === undefined) return undefined;
     let cancelled = false;
     void (async () => {
       try {
@@ -144,7 +146,24 @@ export function ScheduledTasksHubPage(props: SlotComponentProps<HubPageSlotProps
       offTask();
       offRun();
     };
-  }, [loadData, rpcService, sessionService]);
+  }, [hasHostScheduled, loadData, rpcService, sessionService]);
+
+  if (hasHostScheduled) {
+    return (
+      <>
+        {renderFactory("host.hub.scheduled", {
+          cwd: defaultCwd,
+          workspaces: workspaceSnap?.workspaceOptions ?? [],
+          onOpenSession: (workspace: string, file: string) => {
+            navigationService?.navigate({ kind: "session", cwd: workspace, file });
+          },
+          onError: (message: string) => {
+            navigationService?.showToast(message, "error");
+          },
+        })}
+      </>
+    );
+  }
 
   const handleSave = async () => {
     if (editor === null || rpcService === undefined) return;

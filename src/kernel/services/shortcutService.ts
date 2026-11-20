@@ -112,17 +112,21 @@ export class ShortcutService extends Service {
       emitter: new ServiceEmitter("shortcutService"),
     };
 
-    const target = options !== undefined && "target" in options
+    const target = options !== undefined && options.target !== undefined
       ? options.target
       : (typeof window !== "undefined" ? window : null);
 
     let detachTarget: (() => void) | undefined;
-    if (target !== null && target !== undefined) {
+    if (target !== null && target !== undefined && typeof target.addEventListener === "function") {
       const listener = (event: Event) => {
         this.dispatch(event as KeyboardEvent);
       };
-      target.addEventListener("keydown", listener);
-      detachTarget = () => target.removeEventListener("keydown", listener);
+      target.addEventListener("keydown", listener, true);
+      detachTarget = () => {
+        if (typeof target.removeEventListener === "function") {
+          target.removeEventListener("keydown", listener, true);
+        }
+      };
     }
 
     ctx.effect(() => () => {
@@ -154,9 +158,9 @@ export class ShortcutService extends Service {
     const listener = (event: Event) => {
       this.dispatch(event as KeyboardEvent);
     };
-    target.addEventListener("keydown", listener);
+    target.addEventListener("keydown", listener, true);
     return trackContextEffect(this.ctx, () => {
-      target.removeEventListener("keydown", listener);
+      target.removeEventListener("keydown", listener, true);
     });
   }
 

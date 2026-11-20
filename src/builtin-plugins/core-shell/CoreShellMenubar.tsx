@@ -42,6 +42,7 @@ function renderPluginMenuItems<L extends ClientMenuLocation>(
         <button
           key={item.id}
           type="button"
+          role="menuitem"
           className={item.danger ? "danger" : undefined}
           disabled={item.disabled}
           data-qj-plugin={item.pluginId ?? "builtin"}
@@ -124,6 +125,7 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
   };
 
   const sidebarToggleLabel = sidebarVisible ? "隐藏侧栏" : "显示侧栏";
+  const toggleSidebarShortcut = themeSnap?.shortcutToggleSidebar || "Ctrl+B";
 
   return (
     <div className="window-menubar" data-tauri-drag-region="">
@@ -133,7 +135,7 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
           className="window-nav-button"
           data-sidebar-toggle=""
           onClick={handleToggleSidebar}
-          title={`${sidebarToggleLabel} (Ctrl+B)`}
+          title={`${sidebarToggleLabel} (${toggleSidebarShortcut})`}
           aria-label={sidebarToggleLabel}
         >
           <DockLeftIcon open={sidebarVisible} size={15} />

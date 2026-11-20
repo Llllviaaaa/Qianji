@@ -73,6 +73,7 @@ export function CoreCodeWorkspacePane({
   cwd: propCwd,
   sessionFile: propSessionFile,
   renderSlot,
+  renderFactory,
   ctx,
 }: SlotComponentProps<WorkbenchPaneSlotProps, "session-maybe">): ReactElement {
   const workbench = useWorkbenchState(ctx);
@@ -106,6 +107,15 @@ export function CoreCodeWorkspacePane({
       void workspaceService?.refreshGit(cwd);
     }
   }, [activeFile, cwd, workbenchService, workspaceService]);
+
+  const hasHostWorkspace = (registry?.getFactoryCandidates("host.workbench.codeWorkspace").length ?? 0) > 0;
+  if (hasHostWorkspace) {
+    return (
+      <div data-core-workbench-pane="files" style={{ display: "contents" }}>
+        {renderFactory("host.workbench.codeWorkspace", { cwd })}
+      </div>
+    );
+  }
 
   const fileExt = activeFile !== null ? extractExtension(activeFile.path) : "";
   const hasActiveViewerForKey = (routeKey: string): boolean => {

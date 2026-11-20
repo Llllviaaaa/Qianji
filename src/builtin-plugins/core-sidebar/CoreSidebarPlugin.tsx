@@ -74,7 +74,7 @@ export function CoreSidebarRoot(props: SlotComponentProps<CoreShellSidebarProps,
 
   return (
     <aside
-      className="sidebar codex-sidebar"
+      className={`sidebar codex-sidebar${props.visible === false ? " sidebar-hover-preview" : ""}`}
       data-slot="sidebar"
       data-core-plugin="core-sidebar"
       data-sidebar-mode={props.visible === false ? "preview" : "pinned"}

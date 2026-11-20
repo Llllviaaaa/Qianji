@@ -72,7 +72,7 @@ function SettingRow({
   );
 }
 
-export function GeneralSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactElement {
+export function GeneralSettingsSlotPage({ ctx, cwd, renderFactory }: PageCompProps): ReactElement {
   const sessionState = useSessionState(ctx);
   const workspaceState = useWorkspaceState(ctx);
   const sessionService = useFrontendService("sessionService", ctx);
@@ -82,7 +82,7 @@ export function GeneralSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
   const agentMode = sessionState?.agentMode ?? "agent";
   const permissionMode = sessionState?.permissionMode ?? "ask";
 
-  return (
+  const fallback = (
     <div data-testid="settings-page-general" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
       <Card variant="subtle" padding="md">
         <SettingRow
@@ -137,9 +137,15 @@ export function GeneralSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
       </Card>
     </div>
   );
+
+  return (
+    <>
+      {renderFactory("host.settings.general", { cwd: activeCwd }, { fallback })}
+    </>
+  );
 }
 
-export function AppearanceSettingsSlotPage({ ctx }: PageCompProps): ReactElement {
+export function AppearanceSettingsSlotPage({ ctx, renderFactory }: PageCompProps): ReactElement {
   const themeState = useThemeState(ctx);
   const themeService = useFrontendService("themeService", ctx);
   const themes = themeState?.catalog.themes ?? [];
@@ -147,7 +153,7 @@ export function AppearanceSettingsSlotPage({ ctx }: PageCompProps): ReactElement
   const uiScale = themeState?.uiScale ?? 100;
   const density = themeState?.transcriptDensity ?? "normal";
 
-  return (
+  const fallback = (
     <div data-testid="settings-page-appearance" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
       <Card variant="subtle" padding="md">
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -215,11 +221,17 @@ export function AppearanceSettingsSlotPage({ ctx }: PageCompProps): ReactElement
       </Card>
     </div>
   );
+
+  return (
+    <>
+      {renderFactory("host.settings.appearance", {}, { fallback })}
+    </>
+  );
 }
 
 const DEFAULT_THINKING_LEVELS: readonly string[] = ["off", "low", "medium", "high"];
 
-export function ProvidersSettingsSlotPage({ ctx }: PageCompProps): ReactElement {
+export function ProvidersSettingsSlotPage({ ctx, renderFactory }: PageCompProps): ReactElement {
   const sessionState = useSessionState(ctx);
   const sessionService = useFrontendService("sessionService", ctx);
   const availableModels = sessionState?.availableModels;
@@ -245,7 +257,7 @@ export function ProvidersSettingsSlotPage({ ctx }: PageCompProps): ReactElement 
 
   const modelList = availableModels ?? [];
 
-  return (
+  const fallback = (
     <div data-testid="settings-page-providers" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
       <Card variant="subtle" padding="md">
         <SettingRow
@@ -282,5 +294,11 @@ export function ProvidersSettingsSlotPage({ ctx }: PageCompProps): ReactElement 
         />
       </Card>
     </div>
+  );
+
+  return (
+    <>
+      {renderFactory("host.settings.providers", {}, { fallback })}
+    </>
   );
 }

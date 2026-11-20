@@ -108,6 +108,55 @@ export interface SessionPoolEntry {
   dispose(): void;
 }
 
+function describeSessionActionError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export async function applyMainPermissionMode(mode: AppSettings["permissionMode"]): Promise<void> {
+  const current = useAppStore.getState();
+  if (current.settings !== null && current.settings.permissionMode === mode) return;
+  if (current.isStreaming) {
+    current.showToast("请等待当前回复完成后再切换权限", "warning");
+    return;
+  }
+  const previous = current.settings?.permissionMode;
+  try {
+    await current.setRuntimePermissionMode(mode);
+    if (current.settings !== null) {
+      await current.saveSettings({ ...current.settings, permissionMode: mode });
+      useAppStore.getState().showToast("权限模式已更新", "info");
+    }
+  } catch (error) {
+    if (previous !== undefined) {
+      await useAppStore.getState().setRuntimePermissionMode(previous).catch(() => undefined);
+    }
+    useAppStore.getState().showToast(`切换权限失败：${describeSessionActionError(error)}`, "error");
+  }
+}
+
+export async function applyMainAgentMode(mode: AppSettings["agentMode"]): Promise<void> {
+  const current = useAppStore.getState();
+  if (current.settings !== null && current.settings.agentMode === mode) return;
+  if (current.isStreaming) {
+    current.showToast("请等待当前回复完成后再切换工作模式", "warning");
+    return;
+  }
+  const previous = current.settings?.agentMode;
+  try {
+    await current.setRuntimeAgentMode(mode);
+    if (current.settings !== null) {
+      await current.saveSettings({ ...current.settings, agentMode: mode });
+      const label = mode === "agent" ? "执行" : mode === "plan" ? "计划" : "问答";
+      useAppStore.getState().showToast(`已切换到${label}模式`, "info");
+    }
+  } catch (error) {
+    if (previous !== undefined) {
+      await useAppStore.getState().setRuntimeAgentMode(previous).catch(() => undefined);
+    }
+    useAppStore.getState().showToast(`切换工作模式失败：${describeSessionActionError(error)}`, "error");
+  }
+}
+
 export function buildActiveHandleSnapshot(): SessionHandleSnapshot {
   const s = useAppStore.getState();
   return {
@@ -171,8 +220,8 @@ export function createActivePoolEntry(key: string, sessionId: string): SessionPo
     clone: () => useAppStore.getState().cloneSession(),
     setModel: (model) => useAppStore.getState().setModel(model),
     setThinkingLevel: (level) => useAppStore.getState().setThinkingLevel(level),
-    setPermissionMode: (mode) => useAppStore.getState().setRuntimePermissionMode(mode),
-    setAgentMode: (mode) => useAppStore.getState().setRuntimeAgentMode(mode),
+    setPermissionMode: (mode) => applyMainPermissionMode(mode),
+    setAgentMode: (mode) => applyMainAgentMode(mode),
     compact: () => useAppStore.getState().compact(),
     exportMarkdown: (destination) => useAppStore.getState().exportSession(destination),
     dispose: () => {

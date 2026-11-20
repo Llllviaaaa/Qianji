@@ -62,15 +62,36 @@ export const coreShellPlugin: Plugin.Object = {
     });
 
     // Global shell shortcuts wired through ShortcutService (automatically disposed on Fiber unmount).
-    ctx.shortcutService.register({
+    let activeToggleKey = ctx.themeService.getSnapshot().shortcutToggleSidebar || "Ctrl+B";
+    let disposeToggleShortcut = ctx.shortcutService.register({
       id: `${CORE_SHELL_PLUGIN_ID}:toggle-sidebar`,
       pluginId: CORE_SHELL_PLUGIN_ID,
-      key: "Ctrl+B",
+      key: activeToggleKey,
       label: "切换左侧栏",
       when: (sc) => !sc.inEditable && !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
       run: () => {
         ctx.navigationService.toggleSidebar();
       },
+    });
+    const offThemeShortcut = ctx.themeService.subscribe(() => {
+      const nextKey = ctx.themeService.getSnapshot().shortcutToggleSidebar || "Ctrl+B";
+      if (nextKey === activeToggleKey) return;
+      activeToggleKey = nextKey;
+      disposeToggleShortcut();
+      disposeToggleShortcut = ctx.shortcutService.register({
+        id: `${CORE_SHELL_PLUGIN_ID}:toggle-sidebar`,
+        pluginId: CORE_SHELL_PLUGIN_ID,
+        key: activeToggleKey,
+        label: "切换左侧栏",
+        when: (sc) => !sc.inEditable && !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
+        run: () => {
+          ctx.navigationService.toggleSidebar();
+        },
+      });
+    });
+    ctx.effect(() => () => {
+      offThemeShortcut();
+      disposeToggleShortcut();
     });
 
     ctx.shortcutService.register({

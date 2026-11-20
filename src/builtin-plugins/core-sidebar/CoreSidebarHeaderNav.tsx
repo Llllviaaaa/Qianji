@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Clock3,
   MessageCircleQuestion,
+  Pin,
   Plus,
   Puzzle,
   Search,
@@ -55,6 +56,9 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
   const sessions = sessionSnap?.sessions ?? [];
   const cwd = props.cwd ?? workspaceSnap?.cwd ?? sessionSnap?.cwd ?? "";
   const unreadCount = notifications.filter((item) => !item.read).length;
+  const sidebarPinned = navSnap?.sidebarVisible ?? true;
+  const isNarrow = typeof window !== "undefined" && window.innerWidth > 0 && window.innerWidth <= 760;
+  const isPreviewMode = !sidebarPinned || isNarrow;
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -95,6 +99,38 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
         </button>
 
         <div className="sidebar-brand-actions">
+          {isPreviewMode && (
+            <>
+              {!isNarrow && (
+                <button
+                  type="button"
+                  className="icon-button sidebar-pin-button"
+                  title="固定侧栏"
+                  aria-label="固定侧栏"
+                  onClick={() => {
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new Event("qianji:sidebar-pin"));
+                    }
+                  }}
+                >
+                  <Pin size={14} strokeWidth={1.75} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="icon-button sidebar-close-button"
+                title="收起侧栏"
+                aria-label="收起侧栏"
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(new Event("qianji:sidebar-close-preview"));
+                  }
+                }}
+              >
+                <X size={14} strokeWidth={1.75} />
+              </button>
+            </>
+          )}
           <button
             type="button"
             className={`icon-button ${searchOpen || query !== "" ? "active" : ""}`}

@@ -26,8 +26,10 @@ export function CoreMessageItem({
   onRewind,
   onEditAndResend,
   sessionId,
+  ctx,
   renderSlot,
   renderSlotChain,
+  renderFactory,
 }: SlotComponentProps<ConversationMessageSlotProps, "session">): ReactNode {
   const workbenchService = useFrontendService("workbenchService");
   const resolvedCwd = ownerCwd ?? "";
@@ -107,8 +109,51 @@ export function CoreMessageItem({
   const assistantContent = extracted.content;
   const thinkingText = extracted.thinking;
   const toolCalls = message.toolCalls ?? [];
+  const inlineUiCalls = toolCalls.filter((call) => call.name === "render_ui" || call.name === "update_ui");
+  const processToolCalls = toolCalls.filter((call) => call.name !== "render_ui" && call.name !== "update_ui");
+  const hasProcessWork = thinkingText !== "" || processToolCalls.length > 0;
+  const hasHostProcessFactory =
+    (ctx?.slots?.registry?.getFactoryCandidates("host.conversation.processGroup").length ?? 0) > 0;
   const hasContent = assistantContent.trim() !== "";
   const segments = hasContent ? splitMarkdownCodeBlocks(assistantContent) : [];
+
+  const renderToolCallNodes = (calls: typeof toolCalls) =>
+    calls.map((call) => {
+      const state: "running" | "error" | "ok" = call.running ? "running" : call.isError ? "error" : "ok";
+      return (
+        <div key={call.id} style={{ display: "contents" }}>
+          {renderSlot(
+            "conversation.toolCall",
+            {
+              cwd: resolvedCwd,
+              sessionFile: resolvedSessionFile,
+              call,
+              state,
+              messageId: message.id,
+            },
+            { key: call.name },
+          )}
+        </div>
+      );
+    });
+
+  const fallbackProcessNodes = (
+    <>
+      {thinkingText !== "" &&
+        renderSlotChain("conversation.thinking", {
+          cwd: resolvedCwd,
+          sessionFile: resolvedSessionFile,
+          message,
+          thinking: thinkingText,
+          isStreaming: working && !hasContent,
+          ...(message.workSteps === undefined ? {} : { workSteps: message.workSteps }),
+        })}
+
+      {processToolCalls.length > 0 && (
+        <div className="dshc-tool-list">{renderToolCallNodes(processToolCalls)}</div>
+      )}
+    </>
+  );
 
   return (
     <article
@@ -120,51 +165,36 @@ export function CoreMessageItem({
       data-message-id={message.id}
       id={`message-${message.id}`}
     >
-      {!working && (message.durationMs !== undefined || message.isError || message.isAborted) && (
-        <div className="dshc-turn-process">
-          <span className="dshc-turn-process-label">
-            {message.isError
-              ? "处理失败"
-              : message.isAborted
-                ? "已停止"
-                : message.durationMs !== undefined && message.durationMs > 0
-                  ? `已完成，用时 ${formatRunDuration(message.durationMs)}`
-                  : "已完成"}
-          </span>
-        </div>
-      )}
+      {!working &&
+        !(hasProcessWork && hasHostProcessFactory) &&
+        (message.durationMs !== undefined || message.isError || message.isAborted) && (
+          <div className="dshc-turn-process">
+            <span className="dshc-turn-process-label">
+              {message.isError
+                ? "处理失败"
+                : message.isAborted
+                  ? "已停止"
+                  : message.durationMs !== undefined && message.durationMs > 0
+                    ? `已完成，用时 ${formatRunDuration(message.durationMs)}`
+                    : "已完成"}
+            </span>
+          </div>
+        )}
 
-      {thinkingText !== "" &&
-        renderSlotChain("conversation.thinking", {
-          cwd: resolvedCwd,
-          sessionFile: resolvedSessionFile,
-          message,
-          thinking: thinkingText,
-          isStreaming: working && !hasContent,
-          ...(message.workSteps === undefined ? {} : { workSteps: message.workSteps }),
-        })}
+      {hasProcessWork &&
+        renderFactory(
+          "host.conversation.processGroup",
+          {
+            message,
+            thinking: thinkingText,
+            working,
+            toolNodes: processToolCalls.length > 0 ? renderToolCallNodes(processToolCalls) : undefined,
+          },
+          { fallback: fallbackProcessNodes },
+        )}
 
-      {toolCalls.length > 0 && (
-        <div className="dshc-tool-list">
-          {toolCalls.map((call) => {
-            const state: "running" | "error" | "ok" = call.running ? "running" : call.isError ? "error" : "ok";
-            return (
-              <div key={call.id} style={{ display: "contents" }}>
-                {renderSlot(
-                  "conversation.toolCall",
-                  {
-                    cwd: resolvedCwd,
-                    sessionFile: resolvedSessionFile,
-                    call,
-                    state,
-                    messageId: message.id,
-                  },
-                  { key: call.name },
-                )}
-              </div>
-            );
-          })}
-        </div>
+      {inlineUiCalls.length > 0 && (
+        <div className="dshc-tool-list dshc-iui-inline-list">{renderToolCallNodes(inlineUiCalls)}</div>
       )}
 
       {hasContent && (

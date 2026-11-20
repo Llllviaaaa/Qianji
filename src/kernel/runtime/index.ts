@@ -46,6 +46,15 @@ export {
 } from "./builtinCorePlugins";
 
 export {
+  hasCodeBlockSlotEntry,
+  isBuiltinFeatureCoordinatorActive,
+  isWorkbenchPaneAvailable,
+  setBuiltinFeatureCoordinatorActive,
+  useCodeBlockSlotStatus,
+  useWorkbenchPaneAvailable,
+} from "./featureSlotQueries";
+
+export {
   describeSafeModeReason,
   SafeModeBanner,
   type SafeModeBannerProps,

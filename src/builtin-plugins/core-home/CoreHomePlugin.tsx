@@ -183,10 +183,41 @@ export function CoreHomeStage(props: SlotComponentProps<CoreShellStageProps, "se
     async (text: string, attachments?: AttachmentPayload[]): Promise<boolean> => {
       const trimmed = text.trim();
       if (trimmed === "" || sessionService === undefined) return false;
-      navigationService?.setDraftMode(false);
-      return sessionService.sendMessage(trimmed, attachments);
+      const snap = sessionService.getSnapshot();
+      const wsSnap = workspaceService?.getSnapshot();
+      let targetCwd = (
+        effectiveCwd ||
+        wsSnap?.draftWorkspace ||
+        wsSnap?.workspaceOptions[0] ||
+        snap.cwd ||
+        ""
+      ).trim();
+      if (targetCwd === "" && workspaceService !== undefined) {
+        targetCwd = (await workspaceService.pickFolder()) ?? "";
+      }
+      const normalize = (value: string) => value.replace(/[\\/]+$/, "").toLowerCase();
+      if (
+        snap.connection !== "running" ||
+        (targetCwd !== "" && normalize(snap.cwd) !== normalize(targetCwd))
+      ) {
+        if (targetCwd === "") return false;
+        workspaceService?.selectWorkspace(targetCwd);
+        navigationService?.setDraftMode(false);
+        await sessionService.connect(targetCwd);
+        if (sessionService.getSnapshot().connection !== "running") {
+          navigationService?.setDraftMode(true);
+          return false;
+        }
+      } else {
+        navigationService?.setDraftMode(false);
+      }
+      const sent = await sessionService.sendMessage(trimmed, attachments);
+      if (!sent && sessionService.getSnapshot().messages.length === 0) {
+        navigationService?.setDraftMode(true);
+      }
+      return sent;
     },
-    [navigationService, sessionService],
+    [effectiveCwd, navigationService, sessionService, workspaceService],
   );
 
   const quickCtx: HomeQuickActionSlotContext = {

@@ -196,14 +196,14 @@ export class WorkspaceService extends Service {
     const onProjectsChanged = () => {
       void this.refreshProjects();
     };
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       window.addEventListener("qianji:projects-changed", onProjectsChanged);
     }
 
     ctx.effect(() => () => {
       offStore();
       offTrust();
-      if (typeof window !== "undefined") {
+      if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
         window.removeEventListener("qianji:projects-changed", onProjectsChanged);
       }
       this.internal.emitter.clear();

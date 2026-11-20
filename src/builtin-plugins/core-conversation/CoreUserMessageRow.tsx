@@ -2,9 +2,9 @@
  * Built-in user message row and copy action button for `conversation.message`
  * (ADR 0023 `core-conversation`).
  */
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ArrowUp, Check, Copy, LoaderCircle, Pencil, RotateCcw } from "lucide-react";
-import type { UiMessage } from "@qianji/client";
+import { useThemeState, type UiMessage } from "@qianji/client";
 import type { BoundRenderSlotFn } from "@qianji/client-slots";
 
 export function CopyActionButton({
@@ -61,10 +61,13 @@ export function CoreUserMessageRow({
   readonly onEditAndResend?: (entryId: string, text: string) => void;
   readonly renderSlot: BoundRenderSlotFn;
 }): ReactNode {
+  const themeState = useThemeState();
+  const requireCtrlEnter = themeState?.requireCtrlEnter === true;
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(message.content);
   const [submittingEdit, setSubmittingEdit] = useState(false);
   const [rewinding, setRewinding] = useState(false);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canEdit =
     onEditAndResend !== undefined && typeof message.entryId === "string" && message.entryId !== "";
@@ -101,12 +104,51 @@ export function CoreUserMessageRow({
       >
         <div className="message-edit-card">
           <textarea
+            ref={editTextareaRef}
             className="message-edit-input"
             aria-label="编辑消息"
             rows={2}
             value={editDraft}
             disabled={submittingEdit}
             onChange={(event) => setEditDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setEditing(false);
+                return;
+              }
+              const mod = event.ctrlKey || event.metaKey;
+              const isEnterKey = event.key === "Enter" || (mod && event.key === "\n");
+              if (!isEnterKey) return;
+              const shouldSubmit = requireCtrlEnter
+                ? mod && !event.altKey && !event.shiftKey
+                : !mod && !event.altKey && !event.shiftKey;
+              if (shouldSubmit) {
+                event.preventDefault();
+                handleSubmitEdit();
+                return;
+              }
+              const shouldInsertNewline = requireCtrlEnter
+                ? event.altKey && !mod && !event.shiftKey
+                : (mod || event.altKey) && !event.shiftKey;
+              if (shouldInsertNewline) {
+                event.preventDefault();
+                const start = Math.max(0, Math.min(editDraft.length, event.currentTarget.selectionStart ?? editDraft.length));
+                const end = Math.max(start, Math.min(editDraft.length, event.currentTarget.selectionEnd ?? start));
+                const nextDraft = `${editDraft.slice(0, start)}\n${editDraft.slice(end)}`;
+                const nextCaret = start + 1;
+                setEditDraft(nextDraft);
+                if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+                  window.requestAnimationFrame(() => {
+                    const el = editTextareaRef.current;
+                    if (el !== null) {
+                      el.setSelectionRange(nextCaret, nextCaret);
+                    }
+                  });
+                }
+              }
+            }}
           />
           <div className="message-edit-actions">
             <button
@@ -120,6 +162,7 @@ export function CoreUserMessageRow({
             <button
               type="button"
               className="message-edit-submit"
+              title="从此消息重新发送"
               disabled={submittingEdit || editDraft.trim() === ""}
               onClick={handleSubmitEdit}
             >

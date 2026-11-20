@@ -159,12 +159,13 @@ export function CoreWorkbenchRight({
           tabIndex={0}
           onPointerDown={beginWidthResize}
           onKeyDown={(event) => {
+            const step = event.shiftKey ? 48 : 16;
             if (event.key === "ArrowLeft") {
               event.preventDefault();
-              setPanelWidth((prev) => clampRightWidth(prev + 24));
+              setPanelWidth((prev) => clampRightWidth(prev + step));
             } else if (event.key === "ArrowRight") {
               event.preventDefault();
-              setPanelWidth((prev) => clampRightWidth(prev - 24));
+              setPanelWidth((prev) => clampRightWidth(prev - step));
             }
           }}
         />

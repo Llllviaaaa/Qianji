@@ -113,20 +113,33 @@ export function resolveChatEnterAction(
   if (event.defaultPrevented === true || event.isComposing === true || event.keyCode === 229) {
     return "none";
   }
-  if (event.key === "Tab" && options.hasActiveSuggestion === true) {
-    return "accept-suggestion";
+  const mod = event.ctrlKey || event.metaKey;
+  if (options.hasActiveSuggestion === true) {
+    if (event.key === "Tab" && !mod && !event.altKey) {
+      return "accept-suggestion";
+    }
+    if (event.key === "Enter" && !mod && !event.shiftKey && !event.altKey) {
+      return "accept-suggestion";
+    }
   }
-  if (event.key !== "Enter") return "none";
-  if (options.hasActiveSuggestion === true && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
-    return "accept-suggestion";
-  }
+  const isEnterKey = event.key === "Enter" || (mod && event.key === "\n");
+  if (!isEnterKey) return "none";
   if (options.requireCtrlEnter) {
-    return event.ctrlKey || event.metaKey ? "submit" : "none";
+    if (mod && !event.shiftKey && !event.altKey) {
+      return "submit";
+    }
+    if (event.altKey && !mod && !event.shiftKey) {
+      return "insert-newline";
+    }
+    return "none";
   }
-  if (event.shiftKey || event.altKey) {
+  if (!mod && !event.shiftKey && !event.altKey) {
+    return "submit";
+  }
+  if ((mod || event.altKey) && !event.shiftKey) {
     return "insert-newline";
   }
-  return "submit";
+  return "none";
 }
 
 export function insertNewlineAtSelection(

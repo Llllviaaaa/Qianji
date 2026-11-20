@@ -28,6 +28,7 @@ import {
   useFrontendService,
   useNavigationState,
   useSessionState,
+  useThemeState,
   useWorkspaceState,
   type ClientSettingsPageContribution,
   type ClientSettingsSectionContribution,
@@ -201,11 +202,19 @@ export function CoreSettingsShell({
   const ambientCtx = useClientContext(ctx);
   const resolvedCtx = ctx ?? ambientCtx;
   const navigationService = useFrontendService("navigationService", resolvedCtx);
+  const themeService = useFrontendService("themeService", resolvedCtx);
+  const themeState = useThemeState(resolvedCtx);
   const registry = useMemo(() => resolveRegistry(resolvedCtx), [resolvedCtx]);
   const registryVersion = useSyncExternalStore(registry.subscribe, registry.getVersion, registry.getVersion);
   const { settingsPages: legacyPages, settingsSections: legacySections } = useClientContributions();
 
-  const [displayMode, setDisplayMode] = useState<"modal" | "page">("modal");
+  const [localDisplayMode, setLocalDisplayMode] = useState<"modal" | "page">("modal");
+  const displayMode: "modal" | "page" = themeState?.settingsDisplayMode ?? localDisplayMode;
+  const toggleDisplayMode = useCallback((): void => {
+    const next: "modal" | "page" = displayMode === "page" ? "modal" : "page";
+    setLocalDisplayMode(next);
+    void themeService?.setSettingsDisplayMode(next);
+  }, [displayMode, themeService]);
   const [uncontrolledPage, setUncontrolledPage] = useState<string>(() => normalizeSettingsPageKey(page));
 
   const requestedPage = onSelectPage !== undefined
@@ -241,9 +250,16 @@ export function CoreSettingsShell({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, closeSettings]);
 
-  const builtinNav = useMemo<ResolvedSettingsNavEntry[]>(
+  const allBuiltinMeta = useMemo<ResolvedSettingsNavEntry[]>(
     () => BUILTIN_SETTINGS_PAGE_META.map((meta) => ({ ...meta, icon: renderBuiltinPageIcon(meta.id) })),
     [],
+  );
+
+  // Keep the primary Settings left rail at the 4 minimalist modules (通用 / 外观 / 模型 / 插件);
+  // "slots" remains a built-in keyed page reachable from 插件 -> 管理槽位接管 & openSettingsPage("slots").
+  const builtinNav = useMemo<ResolvedSettingsNavEntry[]>(
+    () => allBuiltinMeta.filter((meta) => meta.id !== "slots"),
+    [allBuiltinMeta],
   );
 
   const extensionNav = useMemo<ResolvedSettingsNavEntry[]>(() => {
@@ -273,7 +289,7 @@ export function CoreSettingsShell({
 
   if (!open) return null;
 
-  const activeMeta = [...builtinNav, ...extensionNav].find((item) => item.id === requestedPage) ?? builtinNav[0];
+  const activeMeta = [...allBuiltinMeta, ...extensionNav].find((item) => item.id === requestedPage) ?? allBuiltinMeta[0];
   const shownPage = activeMeta?.id ?? "general";
   const isWideGrid = activeMeta?.wide === true;
   const isPage = displayMode === "page";
@@ -316,7 +332,7 @@ export function CoreSettingsShell({
                 <button
                   type="button"
                   className="settings-mode-toggle-btn"
-                  onClick={() => setDisplayMode((mode) => (mode === "page" ? "modal" : "page"))}
+                  onClick={toggleDisplayMode}
                   title={isPage ? "切换为居中弹窗展示" : "切换为独立页面展示"}
                   aria-label={isPage ? "切换为居中弹窗" : "切换为独立页面"}
                 >

@@ -240,6 +240,7 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
                     <button
                       key={item.id}
                       type="button"
+                      role="menuitem"
                       className={item.danger ? "danger" : undefined}
                       disabled={item.disabled}
                       data-qj-plugin={item.pluginId ?? "builtin"}

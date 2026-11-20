@@ -23,7 +23,13 @@ import {
   ClientContributionService,
   ClientStylesService,
 } from "../src/lib/clientContributions.ts";
-import { useBuiltinPluginGatesStore } from "../src/stores/builtinPluginGatesStore.ts";
+import {
+  createBuiltinCorePluginCoordinator,
+  createSafeModeController,
+} from "../src/kernel/runtime";
+import { DEFAULT_BUILTIN_FEATURE_PLUGINS } from "../src/kernel/runtime/registerDefaultBuiltinPlugins";
+import { registerFrontendServices } from "../src/kernel/services";
+import { ClientSlotsService, SlotRegistry } from "../src/kernel/slots";
 import goalTrackerClient from "../plugins/goal-tracker/client.tsx";
 import quickPromptsClient from "../plugins/quick-prompts/client.tsx";
 import messageActionsClient from "../plugins/message-actions/client.tsx";
@@ -141,7 +147,6 @@ describe("Official bundled feature plugins suite", () => {
     while (disposers.length > 0) {
       disposers.pop()?.();
     }
-    useBuiltinPluginGatesStore.getState().resetBuiltinPluginGates();
   });
 
   it("verifies manifest, Host compile, Client bundle compile, and offline plugin-types check for all 10 bundled plugins", async () => {
@@ -467,24 +472,37 @@ describe("Official bundled feature plugins suite", () => {
       expect(isBundledFeaturePlugin(sample), `${id} should appear in bundledList`).toBe(true);
     }
 
-    useBuiltinPluginGatesStore.getState().syncFromPluginList([
-      makePluginInfo({ id: "code-review", enabled: false, status: "disabled" }),
-      makePluginInfo({ id: "web-preview", enabled: false, status: "disabled" }),
-      makePluginInfo({ id: "side-chat", enabled: false, status: "disabled" }),
-      makePluginInfo({
-        id: "diagram-viewer",
-        enabled: true,
-        status: "active",
-        config: { enableMermaid: true, enablePlantUml: false },
-      }),
-    ]);
+    // Verify real BuiltinCorePluginCoordinator Fiber mounting/unmounting replaces legacy fake gates
+    const clientRoot = new Context();
+    const slotRegistry = new SlotRegistry();
+    await clientRoot.plugin(ClientSlotsService, slotRegistry);
+    await registerFrontendServices(clientRoot, { shortcutTarget: null });
+    const coordinator = createBuiltinCorePluginCoordinator(clientRoot, {
+      safeMode: createSafeModeController({ windowLike: null, storage: null }),
+      descriptors: DEFAULT_BUILTIN_FEATURE_PLUGINS,
+      transport: {
+        list: async () => [
+          makePluginInfo({ id: "code-review", enabled: false, status: "disabled" }),
+          makePluginInfo({ id: "web-preview", enabled: false, status: "disabled" }),
+          makePluginInfo({ id: "side-chat", enabled: false, status: "disabled" }),
+          makePluginInfo({
+            id: "diagram-viewer",
+            enabled: true,
+            status: "active",
+            config: { enableMermaid: true, enablePlantUml: false },
+          }),
+        ],
+      },
+    });
+    await coordinator.sync();
 
-    const gates = useBuiltinPluginGatesStore.getState();
-    expect(gates.codeReviewEnabled).toBe(false);
-    expect(gates.webPreviewEnabled).toBe(false);
-    expect(gates.sideChatEnabled).toBe(false);
-    expect(gates.diagramViewerEnabled).toBe(true);
-    expect(gates.mermaidEnabled).toBe(true);
-    expect(gates.plantUmlEnabled).toBe(false);
+    expect(slotRegistry.getKeyedCandidates("workbench.panes", "review")).toHaveLength(0);
+    expect(slotRegistry.getKeyedCandidates("workbench.panes", "preview")).toHaveLength(0);
+    expect(slotRegistry.getKeyedCandidates("workbench.panes", "side-chat")).toHaveLength(0);
+    expect(slotRegistry.getKeyedCandidates("conversation.markdown.codeBlock", "mermaid").length).toBeGreaterThan(0);
+    expect(slotRegistry.getKeyedCandidates("conversation.markdown.codeBlock", "plantuml")).toHaveLength(0);
+
+    await coordinator.dispose();
+    slotRegistry.dispose();
   });
 });

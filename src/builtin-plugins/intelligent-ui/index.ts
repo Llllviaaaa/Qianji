@@ -6,11 +6,23 @@
  * automatically when a live streaming turn emits an HTML `render_ui` widget.
  */
 import type { Context, Plugin } from "@deepseek-ai/cordis";
+import type { ConversationToolCallSlotProps, SlotComponentProps } from "@qianji/client-slots";
 import { deriveSessionWidgets } from "./artifactParser";
 import { IntelligentUiCanvasTab } from "./IntelligentUiCanvasTab";
 
 export const INTELLIGENT_UI_PLUGIN_ID = "intelligent-ui";
 export const INTELLIGENT_UI_CANVAS_PANE_ID = "intelligent-ui-canvas";
+
+function IntelligentUiInlineToolCall({
+  call,
+  messageId,
+  renderFactory,
+}: SlotComponentProps<ConversationToolCallSlotProps, "session">) {
+  return renderFactory("host.intelligentUi.inlineCard", {
+    call,
+    ...(messageId === undefined ? {} : { messageId }),
+  });
+}
 
 export const intelligentUiPlugin: Plugin = {
   name: INTELLIGENT_UI_PLUGIN_ID,
@@ -21,6 +33,13 @@ export const intelligentUiPlugin: Plugin = {
       key: INTELLIGENT_UI_CANVAS_PANE_ID,
       priority: 0,
       component: IntelligentUiCanvasTab,
+    });
+
+    ctx.slots.register("conversation.toolCall", {
+      id: `${INTELLIGENT_UI_PLUGIN_ID}:inline-tool`,
+      key: ["render_ui", "update_ui"],
+      priority: 0,
+      component: IntelligentUiInlineToolCall,
     });
 
     const seenHtmlArtifacts = new Set<string>();

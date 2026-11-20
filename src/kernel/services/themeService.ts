@@ -52,6 +52,11 @@ export interface ThemeServiceSnapshot {
   readonly uiScale: number;
   readonly resolvedScale: number;
   readonly transcriptDensity: TranscriptDensity;
+  readonly settingsLoaded: boolean;
+  readonly settingsDisplayMode: "page" | "modal";
+  readonly requireCtrlEnter: boolean;
+  readonly shortcutToggleSidebar: string;
+  readonly showThinking: boolean;
 }
 
 export interface ThemeServiceOptions {
@@ -82,6 +87,7 @@ interface ThemeInternalState {
   localAccentColor: string;
   localUiScale: number;
   localTranscriptDensity: TranscriptDensity;
+  localSettingsDisplayMode: "page" | "modal";
   cachedThemesRef: readonly AppearanceThemeDefinition[];
   cachedCatalog: AppearanceCatalog;
   snapshot: ThemeServiceSnapshot;
@@ -105,6 +111,7 @@ export class ThemeService extends Service {
       localAccentColor: "",
       localUiScale: 100,
       localTranscriptDensity: "normal",
+      localSettingsDisplayMode: "modal",
       cachedThemesRef: initialThemes,
       cachedCatalog: initialCatalog,
       snapshot: null as unknown as ThemeServiceSnapshot,
@@ -167,6 +174,12 @@ export class ThemeService extends Service {
       ? normalizeTranscriptDensity(settings.transcriptDensity)
       : this.internal.localTranscriptDensity;
 
+    const settingsDisplayMode: "page" | "modal" = settings
+      ? settings.settingsDisplayMode === "modal"
+        ? "modal"
+        : "page"
+      : this.internal.localSettingsDisplayMode;
+
     return {
       catalog,
       themeId,
@@ -176,6 +189,11 @@ export class ThemeService extends Service {
       uiScale,
       resolvedScale: resolveUiScale(uiScale),
       transcriptDensity,
+      settingsLoaded: settings !== null,
+      settingsDisplayMode,
+      requireCtrlEnter: settings?.requireCtrlEnter === true,
+      shortcutToggleSidebar: settings?.shortcutToggleSidebar?.trim() || "Ctrl+B",
+      showThinking: settings?.showThinking !== false,
     };
   }
 
@@ -247,6 +265,13 @@ export class ThemeService extends Service {
     await this.persistSettingsPatch({ uiScale: clamped });
     this.publish();
     this.applyToDocument();
+  }
+
+  async setSettingsDisplayMode(mode: "page" | "modal"): Promise<void> {
+    const normalized: "page" | "modal" = mode === "modal" ? "modal" : "page";
+    this.internal.localSettingsDisplayMode = normalized;
+    await this.persistSettingsPatch({ settingsDisplayMode: normalized });
+    this.publish();
   }
 
   applyToDocument(): void {

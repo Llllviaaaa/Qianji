@@ -174,7 +174,10 @@ export function registerFrontendServices(
     root.plugin(WorkbenchService),
     root.plugin(NavigationService, { onSwitchSession: options.onSwitchSession }),
     root.plugin(ThemeService, { registry: options.contributionRegistry }),
-    root.plugin(ShortcutService, { target: options.shortcutTarget }),
+    root.plugin(
+      ShortcutService,
+      options.shortcutTarget === undefined ? undefined : { target: options.shortcutTarget },
+    ),
     root.plugin(MenuService, { registry: options.contributionRegistry }),
     root.plugin(RpcService, {
       transport: options.rpcTransport,

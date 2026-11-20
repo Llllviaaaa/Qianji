@@ -143,8 +143,11 @@ export function SideChatTab({
   cwd: propCwd,
   sessionFile: propSessionFile,
   active,
+  renderFactory,
   ctx,
 }: SlotComponentProps<WorkbenchPaneSlotProps, "session-maybe">): ReactElement {
+  const hasHostSideChat =
+    (ctx?.slots?.registry?.getFactoryCandidates("host.workbench.sideChat").length ?? 0) > 0;
   const session = useSessionState(ctx);
   const workspace = useWorkspaceState(ctx);
 
@@ -157,8 +160,8 @@ export function SideChatTab({
     anchorKey !== "" ? `side:${anchorKey}` : cwd !== "" ? `side:workspace:${cwd}` : null;
 
   const retained = useSessionHandle(
-    effectiveSideId,
-    effectiveSideId === null
+    hasHostSideChat ? null : effectiveSideId,
+    hasHostSideChat || effectiveSideId === null
       ? undefined
       : {
           isolated: true,
@@ -167,6 +170,14 @@ export function SideChatTab({
         },
     ctx,
   );
+
+  if (hasHostSideChat) {
+    return (
+      <div className="pid-wb-sidechat-host" data-feature-pane="side-chat" hidden={!active}>
+        {renderFactory("host.workbench.sideChat", { cwd, sessionFile, active })}
+      </div>
+    );
+  }
 
   if (effectiveSideId === null) {
     return (

@@ -16,7 +16,7 @@ import {
   type WorkbenchTileNode,
 } from "../lib/workbenchTiling";
 import { useAppStore } from "../store";
-import { useBuiltinPluginGatesStore } from "./builtinPluginGatesStore";
+import { isWorkbenchPaneAvailable } from "../kernel/runtime/featureSlotQueries";
 import { useWorkbenchStore } from "./workbenchStore";
 
 export * from "../lib/workbenchTiling";
@@ -93,27 +93,22 @@ export function isCodePaneTab(tab: string): boolean {
 }
 
 export function pickSecondaryTab(primaryTab: string): string {
-  const gates = useBuiltinPluginGatesStore.getState();
   if (isCodePaneTab(primaryTab)) {
-    if (gates.webPreviewEnabled) return "preview";
-    return gates.codeReviewEnabled ? "review" : "summary";
+    if (isWorkbenchPaneAvailable("preview")) return "preview";
+    return isWorkbenchPaneAvailable("review") ? "review" : "summary";
   }
   if (primaryTab === "review") return "files";
   if (primaryTab === "summary") {
-    return gates.codeReviewEnabled ? "review" : "files";
+    return isWorkbenchPaneAvailable("review") ? "review" : "files";
   }
   return "summary";
 }
 
 export function filterAllowedPanes(panes: readonly string[]): string[] {
-  const gates = useBuiltinPluginGatesStore.getState();
   const pluginIds = new Set(clientContributions.getSnapshot().rightWorkbenchTabs.map((t) => t.id));
   return panes.filter((id) => {
-    if (id === "review") return gates.codeReviewEnabled;
-    if (id === "preview") return gates.webPreviewEnabled;
-    if (id === "side-chat") return gates.sideChatEnabled;
     if (id === "files" || id === "terminal") return true;
-    return pluginIds.has(id);
+    return isWorkbenchPaneAvailable(id) || pluginIds.has(id);
   });
 }
 

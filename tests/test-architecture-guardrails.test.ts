@@ -94,9 +94,13 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
     );
   });
 
-  it("enforces <= 350 physical line budget across all 7 decomposed monolith entry files", () => {
+  it("enforces microkernel <= 150 line budget on src/App.tsx and <= 350 budget across the other 6 entry files", () => {
+    const appLines = countPhysicalLines("src/App.tsx");
+    assert.ok(
+      appLines <= 150,
+      `src/App.tsx is ${appLines} physical lines (ADR 0023 microkernel boot stub budget <= 150).`,
+    );
     const entryBudgets = [
-      "src/App.tsx",
       "src/components/PluginsSettingsPanel.tsx",
       "src/components/ModelsPage.tsx",
       "src/components/IntelligentUiCard.tsx",
@@ -184,18 +188,18 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
     }
   });
 
-  it("compiles all 3 skill templates and all 3 scaffold templates with zero-dependency tsc --noEmit and ClientBundleRegistry", async () => {
+  it("compiles all 3 skill templates and all 5 scaffold templates with zero-dependency tsc --noEmit and ClientBundleRegistry", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "qj-guardrail-templates-"));
     try {
       const pluginTypesDir = sharedPluginTypesDir;
 
-      const templateSpecs: Array<{ kind: PluginTemplateKind; include: string[] }> = [
+      const staticTemplateSpecs: Array<{ kind: PluginTemplateKind; include: string[] }> = [
         { kind: "tool-only", include: ["index.ts"] },
         { kind: "ui-slot-widget", include: ["client.tsx"] },
         { kind: "fullstack-panel", include: ["index.ts", "client.tsx"] },
       ];
 
-      for (const spec of templateSpecs) {
+      for (const spec of staticTemplateSpecs) {
         // 1. Verify static template in skills/qianji-plugin-development/templates/<kind>
         const staticCopyDir = join(tempRoot, `skill-template-${spec.kind}`);
         cpSync(
@@ -216,13 +220,22 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
           true,
           `skill template "${spec.kind}" failed verifyPluginDirectory: ${staticVerify.errors.join("; ")}`,
         );
+      }
 
-        // 2. Verify dynamic scaffoldPluginFiles output for <kind>
-        const scaffoldDir = join(tempRoot, `scaffold-${spec.kind}`);
+      const scaffoldKinds: PluginTemplateKind[] = [
+        "tool-only",
+        "ui-slot-widget",
+        "fullstack-panel",
+        "core-override",
+        "global-skin",
+      ];
+      for (const kind of scaffoldKinds) {
+        // 2. Verify dynamic scaffoldPluginFiles output for all 5 template kinds
+        const scaffoldDir = join(tempRoot, `scaffold-${kind}`);
         scaffoldPluginFiles({
-          pluginId: `ci-check-${spec.kind}`,
-          displayName: `CI Check ${spec.kind}`,
-          template: spec.kind,
+          pluginId: `ci-check-${kind}`,
+          displayName: `CI Check ${kind}`,
+          template: kind,
           targetDir: scaffoldDir,
           pluginTypesDir,
         });
@@ -230,13 +243,13 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
         assert.deepEqual(
           scaffoldDiagnostics,
           [],
-          `scaffoldPluginFiles("${spec.kind}") failed tsc --noEmit:\n${scaffoldDiagnostics.join("\n")}`,
+          `scaffoldPluginFiles("${kind}") failed tsc --noEmit:\n${scaffoldDiagnostics.join("\n")}`,
         );
         const scaffoldVerify = await verifyPluginDirectory(scaffoldDir);
         assert.equal(
           scaffoldVerify.ok,
           true,
-          `scaffoldPluginFiles("${spec.kind}") failed verifyPluginDirectory: ${scaffoldVerify.errors.join("; ")}`,
+          `scaffoldPluginFiles("${kind}") failed verifyPluginDirectory: ${scaffoldVerify.errors.join("; ")}`,
         );
       }
     } finally {

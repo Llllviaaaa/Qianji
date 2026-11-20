@@ -63,6 +63,14 @@ export function CoreConversationStage({
         className="core-conversation-stage"
         data-slot="shell.stage"
         data-session-id={activeSessionId}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          position: "relative",
+        }}
       >
         {renderSlot("conversation.header", {
           cwd: resolvedCwd,

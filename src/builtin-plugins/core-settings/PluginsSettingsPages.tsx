@@ -35,7 +35,7 @@ function buildWorkspaceParams(workspace: string): Record<string, unknown> {
   return trimmed !== "" ? { workspace: trimmed } : {};
 }
 
-export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactElement {
+export function PluginsSettingsSlotPage({ ctx, cwd, renderFactory }: PageCompProps): ReactElement {
   const workspaceState = useWorkspaceState(ctx);
   const rpcState = useRpcState(ctx);
   const rpcService = useFrontendService("rpcService", ctx);
@@ -98,7 +98,7 @@ export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
     [effectiveCwd, invokeRpc, loadPlugins],
   );
 
-  return (
+  const fallback = (
     <div data-testid="settings-page-plugins" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
       {safeMode.active && (
         <Card variant="subtle" padding="sm">
@@ -158,6 +158,12 @@ export function PluginsSettingsSlotPage({ ctx, cwd }: PageCompProps): ReactEleme
         </div>
       )}
     </div>
+  );
+
+  return (
+    <>
+      {renderFactory("host.settings.plugins", { cwd: effectiveCwd }, { fallback })}
+    </>
   );
 }
 

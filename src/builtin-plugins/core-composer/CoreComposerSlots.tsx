@@ -53,6 +53,7 @@ function LegacyComposerContribBox({
   id,
   pluginId,
   slotKey,
+  legacySlotName,
   renderFn,
   context,
   className,
@@ -61,6 +62,7 @@ function LegacyComposerContribBox({
   readonly id: string;
   readonly pluginId?: string;
   readonly slotKey: string;
+  readonly legacySlotName?: string;
   readonly renderFn: (ctx: WorkbenchSlotContext) => ReactNode;
   readonly context: WorkbenchSlotContext;
   readonly className?: string;
@@ -68,7 +70,7 @@ function LegacyComposerContribBox({
 }): ReactNode {
   const ownerPlugin = pluginId ?? "legacy-plugin";
   return (
-    <span className={className} data-qj-plugin={ownerPlugin}>
+    <span className={className} data-qj-plugin={ownerPlugin} data-qj-slot={legacySlotName}>
       <SlotKernelErrorBoundary pluginId={ownerPlugin} entryId={id} slotKey={slotKey} compact={compact}>
         <LegacyComposerContribRunner renderFn={renderFn} context={context} />
       </SlotKernelErrorBoundary>
@@ -95,6 +97,7 @@ export function CoreComposerBanners({
             id={banner.id}
             pluginId={banner.pluginId}
             slotKey="composer.banners"
+            legacySlotName="composerBanners"
             renderFn={banner.render}
             context={ctx}
           />
@@ -283,6 +286,7 @@ export function CoreComposerToolbar({
           id={action.id}
           pluginId={action.pluginId}
           slotKey="composer.toolbar"
+          legacySlotName="composerToolbar"
           renderFn={action.render}
           context={contribCtx}
           className="composer-plugin-action"
@@ -323,6 +327,7 @@ export function CoreComposerStatus({
           id={item.id}
           pluginId={item.pluginId}
           slotKey="composer.status"
+          legacySlotName="composerStatus"
           renderFn={item.render}
           context={contribCtx}
           className="composer-plugin-status"

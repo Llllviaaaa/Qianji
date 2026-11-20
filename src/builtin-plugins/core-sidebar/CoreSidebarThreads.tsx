@@ -69,6 +69,10 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
   const [archivedLoading, setArchivedLoading] = useState(false);
   const [projectMenu, setProjectMenu] = useState<{ workspace: string; top: number } | null>(null);
   const [threadMenu, setThreadMenu] = useState<{ session: SidebarSessionItem; top: number } | null>(null);
+  const [ftsMatches, setFtsMatches] = useState<{
+    readonly query: string;
+    readonly items: ReadonlyArray<{ readonly file: string; readonly cwd: string; readonly snippet: string; readonly title: string }>;
+  }>({ query: "", items: [] });
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -101,6 +105,47 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
 
   const effectiveQuery = props.searchQuery !== undefined && props.searchQuery !== "" ? props.searchQuery : query;
   const trimmedQuery = effectiveQuery.trim();
+
+  useEffect(() => {
+    if (trimmedQuery === "" || sessionService === undefined) return undefined;
+    let cancelled = false;
+    const timer = typeof window !== "undefined"
+      ? window.setTimeout(() => {
+          void sessionService
+            .searchSessions(trimmedQuery, { limit: 24 })
+            .then((matches) => {
+              if (cancelled) return;
+              setFtsMatches({
+                query: trimmedQuery,
+                items: matches.map((m) => ({
+                  file: m.session.file,
+                  cwd: m.session.cwd,
+                  snippet: m.snippet,
+                  title: m.session.name || m.session.firstMessage || m.session.file,
+                })),
+              });
+            })
+            .catch(() => undefined);
+        }, 80)
+      : undefined;
+    return () => {
+      cancelled = true;
+      if (timer !== undefined && typeof window !== "undefined") window.clearTimeout(timer);
+    };
+  }, [sessionService, trimmedQuery]);
+
+  const activeFtsMatches = useMemo(
+    () => (trimmedQuery !== "" && ftsMatches.query === trimmedQuery ? ftsMatches.items : []),
+    [ftsMatches, trimmedQuery],
+  );
+  const snippetByFile = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of activeFtsMatches) {
+      if (item.snippet.trim() !== "") map.set(item.file.replace(/\\/g, "/").toLowerCase(), item.snippet);
+    }
+    return map;
+  }, [activeFtsMatches]);
+
   const sessions = useMemo(() => sessionSnap?.sessions ?? [], [sessionSnap?.sessions]);
   const projects = useMemo(() => workspaceSnap?.projects ?? [], [workspaceSnap?.projects]);
   const activeSessionFile = props.activeSessionFile !== undefined
@@ -110,10 +155,23 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
   const newTaskActive = (navSnap?.newTask ?? true) && (navSnap?.hubView ?? null) === null;
   const isStreaming = sessionSnap?.isStreaming ?? false;
 
-  const groups = useMemo(
-    () => buildSidebarProjectGroups({ query: effectiveQuery, sessions, projects, pinnedFiles }),
-    [effectiveQuery, pinnedFiles, projects, sessions],
-  );
+  const groups = useMemo(() => {
+    const base = buildSidebarProjectGroups({ query: effectiveQuery, sessions, projects, pinnedFiles });
+    if (activeFtsMatches.length === 0) return base;
+    const existingFiles = new Set(base.flatMap(([, chats]) => chats.map((c) => c.file.replace(/\\/g, "/").toLowerCase())));
+    const byWorkspace = new Map<string, SidebarSessionItem[]>(base.map(([ws, chats]) => [ws, [...chats]]));
+    for (const match of activeFtsMatches) {
+      const key = match.file.replace(/\\/g, "/").toLowerCase();
+      if (existingFiles.has(key)) continue;
+      const found = sessions.find((s) => sameLocalPath(s.file, match.file));
+      if (found === undefined) continue;
+      existingFiles.add(key);
+      const list = byWorkspace.get(found.cwd) ?? [];
+      list.push(found);
+      byWorkspace.set(found.cwd, list);
+    }
+    return [...byWorkspace.entries()];
+  }, [activeFtsMatches, effectiveQuery, pinnedFiles, projects, sessions]);
   const recentSessions = useMemo(
     () => sortSidebarSessions(groups.flatMap(([, chats]) => chats), pinnedFiles),
     [groups, pinnedFiles],
@@ -160,6 +218,7 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
   const renderSessionRow = (session: SidebarSessionItem) => {
     const isActive = !newTaskActive && sameLocalPath(session.file, activeSessionFile);
     const isRunning = isStreaming && sameLocalPath(session.file, activeSessionFile);
+    const snippet = snippetByFile.get(session.file.replace(/\\/g, "/").toLowerCase());
     return (
       <div
         key={session.file}
@@ -183,6 +242,15 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
             onDelete: () => handleDeleteSession(session),
           }}
         />
+        {snippet !== undefined && snippet !== "" && (
+          <button
+            type="button"
+            className="thread-search-snippet"
+            onClick={() => handleOpenSession(session)}
+          >
+            {snippet}
+          </button>
+        )}
       </div>
     );
   };

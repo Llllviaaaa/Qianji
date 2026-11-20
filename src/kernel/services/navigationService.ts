@@ -134,8 +134,19 @@ export class NavigationService extends Service {
       emitter: new ServiceEmitter("navigationService"),
     };
     this.internal.snapshot = this.computeSnapshot();
+    writeStoredSidebarPinned(this.internal.sidebarVisible);
 
     const offStore = useAppStore.subscribe(() => {
+      const app = useAppStore.getState();
+      if (!this.internal.draftMode && this.internal.hubView === null && app.sessionFile !== null) {
+        if (
+          this.internal.activeRoute.kind !== "session"
+          || this.internal.activeRoute.file !== app.sessionFile
+          || this.internal.activeRoute.cwd !== app.cwd
+        ) {
+          this.internal.activeRoute = { kind: "session", cwd: app.cwd, file: app.sessionFile };
+        }
+      }
       this.publish();
     });
 
@@ -326,8 +337,8 @@ export class NavigationService extends Service {
     if (draftMode) {
       this.internal.hubView = null;
       this.internal.activeRoute = { kind: "home", workspace: app.cwd };
-    } else if (this.internal.hubView === null && app.sessionFile !== null) {
-      this.internal.activeRoute = { kind: "session", cwd: app.cwd, file: app.sessionFile };
+    } else if (this.internal.hubView === null) {
+      this.internal.activeRoute = { kind: "session", cwd: app.cwd, file: app.sessionFile ?? "" };
     }
     this.publish();
   }

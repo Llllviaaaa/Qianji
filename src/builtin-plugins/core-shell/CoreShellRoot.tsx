@@ -21,7 +21,6 @@ import {
   LegacyContributionHost,
   resolveActiveSessionTitle,
   SIDEBAR_BOUNDS,
-  WORKSPACE_PANEL_BOUNDS,
 } from "./shellHelpers";
 import { useCorePanelResize } from "./useCorePanelResize";
 
@@ -56,7 +55,7 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
   const [sidebarHoverPreview, setSidebarHoverPreview] = useState(false);
   const [hoverCloseScheduled, setHoverCloseScheduled] = useState(false);
 
-  const sidebarVisible = navSnap?.sidebarVisible ?? true;
+  const sidebarPinned = navSnap?.sidebarVisible ?? true;
   const sidebarWidth = navSnap?.sidebarWidth ?? SIDEBAR_BOUNDS.fallback;
   const settingsOpen = navSnap?.settingsOpen ?? false;
   const hubView = navSnap?.hubView ?? null;
@@ -69,6 +68,23 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
   const rightOpen = workbenchSnap?.rightOpen ?? false;
   const bottomOpen = workbenchSnap?.bottomOpen ?? false;
   const layoutScale = themeSnap?.resolvedScale ?? 1;
+
+  const [isNarrowViewport, setIsNarrowViewport] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth > 0 && window.innerWidth / layoutScale <= 760;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const syncViewport = () => {
+      if (window.innerWidth <= 0) return;
+      setIsNarrowViewport(window.innerWidth / layoutScale <= 760);
+    };
+    window.addEventListener("resize", syncViewport);
+    return () => window.removeEventListener("resize", syncViewport);
+  }, [layoutScale]);
+
+  const sidebarVisible = sidebarPinned && !isNarrowViewport;
 
   const resolvedTitle = useMemo(
     () =>
@@ -133,8 +149,31 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
 
   const handleToggleSidebar = useCallback(() => {
     setHoverCloseScheduled(false);
+    if (isNarrowViewport) {
+      setSidebarHoverPreview((prev) => !prev);
+      return;
+    }
     setSidebarHoverPreview(false);
     navigationService?.toggleSidebar();
+  }, [isNarrowViewport, navigationService]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onPin = () => {
+      setHoverCloseScheduled(false);
+      setSidebarHoverPreview(false);
+      navigationService?.setSidebarVisible(true);
+    };
+    const onClosePreview = () => {
+      setHoverCloseScheduled(false);
+      setSidebarHoverPreview(false);
+    };
+    window.addEventListener("qianji:sidebar-pin", onPin);
+    window.addEventListener("qianji:sidebar-close-preview", onClosePreview);
+    return () => {
+      window.removeEventListener("qianji:sidebar-pin", onPin);
+      window.removeEventListener("qianji:sidebar-close-preview", onClosePreview);
+    };
   }, [navigationService]);
 
   const handleSidebarWidthChange = useCallback(
@@ -275,21 +314,6 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
               </footer>
             )}
           </div>
-
-          {rightOpen && (
-            <div
-              className="workspace-panel-resizer"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="调整右侧工作台宽度"
-              aria-valuemin={WORKSPACE_PANEL_BOUNDS.min}
-              aria-valuemax={WORKSPACE_PANEL_BOUNDS.max}
-              aria-valuenow={Math.round(resize.workspacePanelWidth)}
-              tabIndex={0}
-              onPointerDown={resize.beginWorkspaceResize}
-              onKeyDown={resize.resizeWorkspaceWithKeyboard}
-            />
-          )}
 
           {renderSlot("shell.workbench.right", {
             cwd: effectiveCwd,

@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { DockBottomIcon, DockRightIcon } from "../common/ChromeIcons";
 import { useClientContributions } from "../../lib/clientContributions";
-import { useBuiltinPluginGatesStore } from "../../stores/builtinPluginGatesStore";
+import { useWorkbenchPaneAvailable } from "../../kernel/runtime/featureSlotQueries";
 import {
   filterAllowedPanes,
   useWorkbenchLayoutStore,
@@ -38,9 +38,9 @@ export function WorkbenchTopbarControls({ onBeforeOpen }: WorkbenchTopbarControl
   const togglePane = useWorkbenchLayoutStore((state) => state.togglePane);
   const toggleInspector = useWorkbenchLayoutStore((state) => state.toggleInspector);
 
-  const codeReviewEnabled = useBuiltinPluginGatesStore((state) => state.codeReviewEnabled);
-  const webPreviewEnabled = useBuiltinPluginGatesStore((state) => state.webPreviewEnabled);
-  const sideChatEnabled = useBuiltinPluginGatesStore((state) => state.sideChatEnabled);
+  const codeReviewEnabled = useWorkbenchPaneAvailable("review");
+  const webPreviewEnabled = useWorkbenchPaneAvailable("preview");
+  const sideChatEnabled = useWorkbenchPaneAvailable("side-chat");
   const contributions = useClientContributions();
 
   const activePanes = filterAllowedPanes(openPanes);

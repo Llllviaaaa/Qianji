@@ -10,7 +10,6 @@ import { RightWorkbench, WorkbenchTopbarControls } from "../src/components/workb
 import { TaskSummaryTab } from "../src/components/workbench/TaskSummaryTab";
 import type { CodeReviewComment } from "../src/lib/codeReview";
 import { useAppStore } from "../src/store";
-import { useBuiltinPluginGatesStore } from "../src/stores/builtinPluginGatesStore";
 import {
   clampSplitRatio,
   computeGridColumns,
@@ -40,7 +39,6 @@ function renderWithQuery(node: ReactNode): string {
     syncStoreInitial(useWorkbenchStore),
     syncStoreInitial(useWorkbenchLayoutStore),
     syncStoreInitial(useAppStore),
-    syncStoreInitial(useBuiltinPluginGatesStore),
   ];
   try {
     const client = new QueryClient({
@@ -62,11 +60,6 @@ const noopResize = {
 afterEach(() => {
   useWorkbenchStore.getState().resetForTest();
   useWorkbenchLayoutStore.getState().resetLayoutForTest();
-  useBuiltinPluginGatesStore.setState({
-    codeReviewEnabled: true,
-    webPreviewEnabled: true,
-    sideChatEnabled: true,
-  });
   useAppStore.setState({
     messages: [],
     stats: null,
