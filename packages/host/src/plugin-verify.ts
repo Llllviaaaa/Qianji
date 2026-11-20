@@ -6,6 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
+import { FRONTEND_SERVICE_CATALOG } from "@qianji/protocol";
 import { ClientBundleRegistry } from "./client-bundles.ts";
 import { HOST_SHARED_MODULES } from "./plugin-bridge.ts";
 import { HOST_SERVICE_CATALOG } from "./plugin-dev-catalog.ts";
@@ -291,6 +292,11 @@ export function findMissingCordisInjects(
   const planeServices = new Set(
     HOST_SERVICE_CATALOG.filter((entry) => entry.plane === plane).map((entry) => entry.name),
   );
+  if (plane === "client") {
+    for (const service of FRONTEND_SERVICE_CATALOG) {
+      planeServices.add(service.name);
+    }
+  }
   const ctxAlternation = Array.from(ctxNames)
     .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|");

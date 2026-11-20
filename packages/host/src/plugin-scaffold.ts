@@ -1,12 +1,33 @@
 /**
- * Scaffolds for new plugins (`plugin_manager` `scaffold`, ADR 0016): the
- * tool-only, ui-slot-widget and fullstack-panel templates, written as files
- * that pass `verify` and `tsc --noEmit` against the generated plugin-types.
+ * Scaffolds for new plugins (`plugin_manager` `scaffold`, ADR 0016 & ADR 0023):
+ * `tool-only`, `ui-slot-widget`, `fullstack-panel`, `core-override`, and `global-skin`
+ * templates written as files that pass `verify` and `tsc --noEmit` against offline `plugin-types/`.
  */
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import {
+  buildCoreTemplateSpec,
+  CORE_PLUGIN_TEMPLATE_KINDS,
+  isCorePluginTemplateKind,
+  type CorePluginTemplateKind,
+} from "./plugin-templates-core.ts";
 
-export type PluginTemplateKind = "tool-only" | "ui-slot-widget" | "fullstack-panel";
+export type PluginTemplateKind =
+  | "tool-only"
+  | "ui-slot-widget"
+  | "fullstack-panel"
+  | CorePluginTemplateKind;
+
+export const PLUGIN_TEMPLATE_KINDS: readonly PluginTemplateKind[] = [
+  "tool-only",
+  "ui-slot-widget",
+  "fullstack-panel",
+  ...CORE_PLUGIN_TEMPLATE_KINDS,
+] as const;
+
+export function isPluginTemplateKind(value: string): value is PluginTemplateKind {
+  return (PLUGIN_TEMPLATE_KINDS as readonly string[]).includes(value);
+}
 
 export function slugifyPluginFolder(pluginId: string): string {
   return pluginId
@@ -52,8 +73,27 @@ export function scaffoldPluginFiles(options: {
     written.push(relPath);
   };
 
+  const coreSpec = isCorePluginTemplateKind(template)
+    ? buildCoreTemplateSpec(template, { pluginId, title, description, toolPrefix })
+    : undefined;
+
   const hasHost = template === "tool-only" || template === "fullstack-panel";
-  const hasClient = template === "ui-slot-widget" || template === "fullstack-panel";
+  const hasClient =
+    template === "ui-slot-widget" ||
+    template === "fullstack-panel" ||
+    coreSpec !== undefined;
+
+  const defaultConfigSchema = {
+    type: "object",
+    properties: {
+      greeting: {
+        type: "string",
+        title: "展示前缀",
+        description: "在插件微件或工具响应中显示的文案前缀",
+        default: title,
+      },
+    },
+  };
 
   const pkgJson: Record<string, unknown> = {
     name: pluginId,
@@ -67,20 +107,17 @@ export function scaffoldPluginFiles(options: {
       name: title,
       ...(hasHost ? { host: "./index.ts" } : {}),
       ...(hasClient ? { client: "./client.tsx" } : {}),
-      configSchema: {
-        type: "object",
-        properties: {
-          greeting: {
-            type: "string",
-            title: "展示前缀",
-            description: "在插件微件或工具响应中显示的文案前缀",
-            default: title,
-          },
-        },
-      },
+      configSchema: coreSpec !== undefined ? coreSpec.configSchema : defaultConfigSchema,
     },
   };
   write("package.json", `${JSON.stringify(pkgJson, null, 2)}\n`);
+
+  const tsconfigInclude = coreSpec !== undefined
+    ? [...coreSpec.tsconfigInclude]
+    : [
+        ...(hasHost ? ["index.ts"] : []),
+        ...(hasClient ? ["client.tsx"] : []),
+      ];
 
   const typesRel = pluginTypesDir !== undefined
     ? relative(targetDir, pluginTypesDir).replace(/\\/g, "/")
@@ -96,10 +133,7 @@ export function scaffoldPluginFiles(options: {
             "*": [`${typesRel}/*/index.d.ts`, `${typesRel}/*`],
           },
         },
-        include: [
-          ...(hasHost ? ["index.ts"] : []),
-          ...(hasClient ? ["client.tsx"] : []),
-        ],
+        include: tsconfigInclude,
       }
     : {
         compilerOptions: {
@@ -111,12 +145,16 @@ export function scaffoldPluginFiles(options: {
           noEmit: true,
           skipLibCheck: true,
         },
-        include: [
-          ...(hasHost ? ["index.ts"] : []),
-          ...(hasClient ? ["client.tsx"] : []),
-        ],
+        include: tsconfigInclude,
       };
   write("tsconfig.json", `${JSON.stringify(tsconfig, null, 2)}\n`);
+
+  if (coreSpec !== undefined) {
+    for (const entry of coreSpec.files) {
+      write(entry.relPath, entry.content);
+    }
+    return written;
+  }
 
   if (template === "tool-only") {
     write(
