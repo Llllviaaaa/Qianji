@@ -12,6 +12,7 @@ import {
   type ResolvedMenuItem,
 } from "@qianji/client";
 import type { CoreShellMenubarProps, SlotComponentProps } from "@qianji/client-slots";
+import { CoreShellModeSwitch } from "./CoreShellModeSwitch";
 import {
   DockLeftIcon,
   TRANSCRIPT_DENSITY_LABELS,
@@ -437,6 +438,7 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
             {props.renderSlot("workbench.topbarControls", { cwd, sessionFile })}
           </div>
         )}
+        <CoreShellModeSwitch ctx={props.ctx} />
         <div className="window-controls">
           <button
             type="button"

@@ -8,6 +8,8 @@ export const CLIENT_STORE_DTS = `export interface StoreDecl<TStore = unknown, TI
 }
 
 export interface ReactiveStore<TState> {
+  get(): TState;
+  set(next: TState | ((prev: TState) => TState)): void;
   getSnapshot(): TState;
   setState(next: TState | ((prev: TState) => TState)): void;
   subscribe(listener: () => void): () => void;
@@ -20,6 +22,7 @@ export interface RetainedFactoryStore<TStore = unknown> {
 }
 
 export declare function createReactiveStore<TState>(initial: TState): ReactiveStore<TState>;
+export declare function useStoreValue<TState>(store: ReactiveStore<TState>): TState;
 export declare function storeOf<TStore = unknown>(entryId: string, scopeKey?: string): TStore | undefined;
 export declare function factoryStoreOf<TStore = unknown>(
   factoryKey: string,
@@ -91,7 +94,10 @@ export type CoreSlotKey = keyof CoreSlotMap;
 export declare const CORE_SLOT_SPECS: Readonly<Record<CoreSlotKey, ChildSlotDecl>>;
 
 export interface SlotMap extends CoreSlotMap {}
-export interface SlotFactoryMap {}
+export interface SlotFactoryMap {
+  "bot.rail": SlotFactorySpec<{ readonly active?: boolean }, "root">;
+  "bot.stage": SlotFactorySpec<{ readonly active?: boolean; readonly cwd?: string }, "root">;
+}
 export interface LocaleNamespaceMap {}
 export interface ResourceProtocolMap {}
 

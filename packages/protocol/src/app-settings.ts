@@ -7,6 +7,7 @@
  * Verified 1-to-1 against `src-tauri/src/config.rs` by `tests/test-appsettings-alignment.test.ts`.
  */
 import type { AgentModeName, PermissionModeName } from "./methods.ts";
+import type { BotServerMode, UiShellMode } from "./bot-methods.ts";
 
 export type SettingsDisplayMode = "page" | "modal";
 
@@ -140,6 +141,23 @@ export interface AppSettings {
   shortcutTerminal: string;
   shortcutChanges: string;
   shortcutToggleSidebar: string;
+  shortcutToggleShellMode: string;
+  uiShellMode: UiShellMode;
+  botDisplayName: string;
+  botAvatarPreset: string;
+  botRightPanelOpen: boolean;
+  botHeartbeatEnabled: boolean;
+  botHeartbeatIntervalMinutes: number;
+  botServerMode: BotServerMode;
+  botLocalCpuCores: number;
+  botLocalMemoryGb: number;
+  botLocalDiskGb: number;
+  botAutoSleepIdle: boolean;
+  botRemoteHost: string;
+  botRemotePort: number;
+  botRemoteUser: string;
+  botRemoteWorkDir: string;
+  closeToTrayInBotMode: boolean;
   archivedSessions: string[];
 }
 
@@ -224,6 +242,23 @@ export const DEFAULT_APP_SETTINGS: Required<AppSettings> = {
   shortcutTerminal: "Ctrl+Shift+T",
   shortcutChanges: "Ctrl+Shift+G",
   shortcutToggleSidebar: "Ctrl+B",
+  shortcutToggleShellMode: "Ctrl+Shift+M",
+  uiShellMode: "agent",
+  botDisplayName: "千机",
+  botAvatarPreset: "alabaster-felt",
+  botRightPanelOpen: true,
+  botHeartbeatEnabled: true,
+  botHeartbeatIntervalMinutes: 30,
+  botServerMode: "local",
+  botLocalCpuCores: 2,
+  botLocalMemoryGb: 4,
+  botLocalDiskGb: 32,
+  botAutoSleepIdle: true,
+  botRemoteHost: "",
+  botRemotePort: 22,
+  botRemoteUser: "",
+  botRemoteWorkDir: "~/.qianji-vm",
+  closeToTrayInBotMode: true,
   archivedSessions: [],
 };
 

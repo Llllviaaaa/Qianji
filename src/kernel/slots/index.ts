@@ -10,7 +10,10 @@
 export interface SlotMap {}
 
 /** Declaration-merged map of reusable component factories (`registerFactory` / `renderFactory`). */
-export interface SlotFactoryMap {}
+export interface SlotFactoryMap {
+  "bot.rail": { readonly props: { readonly active?: boolean }; readonly scope: "root" };
+  "bot.stage": { readonly props: { readonly active?: boolean; readonly cwd?: string }; readonly scope: "root" };
+}
 
 /** Declaration-merged map of optional i18n locale namespaces and message keys. */
 export interface LocaleNamespaceMap {}

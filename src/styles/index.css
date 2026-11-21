@@ -32,6 +32,7 @@
 @import "./plugin-extensions.css" layer(components);
 @import "./sidebar.css" layer(components);
 @import "./goal-and-commands.css" layer(components);
+@import "./bot-mode.css" layer(components);
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 

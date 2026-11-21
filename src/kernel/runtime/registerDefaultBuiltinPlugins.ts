@@ -7,6 +7,7 @@
  * strict ESLint no-sibling-import boundary on `src/builtin-plugins/**` stays
  * 100% intact without any exception.
  */
+import { BOT_MODE_PLUGIN_ID, botModePlugin } from "../../builtin-plugins/bot-mode";
 import { CODE_REVIEW_PLUGIN_ID, codeReviewPlugin } from "../../builtin-plugins/code-review";
 import { CORE_COMPOSER_PLUGIN_ID, coreComposerPlugin } from "../../builtin-plugins/core-composer";
 import { CORE_CONVERSATION_PLUGIN_ID, coreConversationPlugin } from "../../builtin-plugins/core-conversation";
@@ -47,6 +48,7 @@ export const DEFAULT_BUILTIN_FEATURE_PLUGINS: readonly BuiltinCorePluginDescript
     defaultConfig: { enableMermaid: true, enablePlantUml: true },
   },
   { id: INTELLIGENT_UI_PLUGIN_ID, plugin: intelligentUiPlugin, canDisable: true, defaultEnabled: true },
+  { id: BOT_MODE_PLUGIN_ID, plugin: botModePlugin, canDisable: true, defaultEnabled: true },
 ];
 
 /** All 13 default Vite-bundled built-in client plugins mounted during microkernel boot. */

@@ -10,6 +10,7 @@ import {
   useWorkspaceState,
 } from "@qianji/client";
 import type { CoreShellTopbarProps, SlotComponentProps } from "@qianji/client-slots";
+import { BotHandoffReturnChip } from "./CoreShellModeSwitch";
 import { aggregateDiffStats, LegacyContributionHost, resolveActiveSessionTitle } from "./shellHelpers";
 
 const NOOP_UNSUB = (): void => undefined;
@@ -94,7 +95,8 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
   const gitDiffStats = useMemo(() => aggregateDiffStats(git?.diff), [git?.diff]);
   const threadMoreItems = menuService?.getItems("thread.more", { cwd, sessionFile }) ?? [];
 
-  const hasHomeChrome = !sidebarVisible || contributions.topbarActions.length > 0;
+  const hasActiveBotHandoff = (navSnap?.activeBotHandoff ?? null) !== null;
+  const hasHomeChrome = !sidebarVisible || contributions.topbarActions.length > 0 || hasActiveBotHandoff;
   if (newTask && hubView === null && !hasHomeChrome) {
     return null;
   }
@@ -139,6 +141,8 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
             <Menu size={17} />
           </button>
         )}
+
+        <BotHandoffReturnChip ctx={ctx} />
 
         {!newTask && hubView === null && (
           <div className="thread-title-cluster">

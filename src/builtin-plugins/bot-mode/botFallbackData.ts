@@ -1,0 +1,246 @@
+import type { BotSnapshotResult } from "@qianji/protocol";
+
+export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
+  mainSessionId: "bot-main",
+  mainSessionFile: "",
+  botCwd: "",
+  profile: {
+    displayName: "千机",
+    avatarPreset: "alabaster-felt",
+  },
+  sideThreads: [
+    {
+      id: "side-arch",
+      sessionId: "bot-side-arch",
+      sessionFile: "",
+      title: "旁聊 · 架构灵感速记",
+      updatedAt: Date.now() - 1800_000,
+      snippet: "独立分支推演，不打断主聊天长期上下文",
+    },
+  ],
+  soulContent: [
+    "# SOUL.md — 灵魂与边界契约",
+    "",
+    "- 语气自然温和、结论先行，不堆砌机械客套话。",
+    "- 长期记住我的节奏、关注方向与审美偏好。",
+    "- 任何对外发送邮件、评论或推送代码的动作，先挂入「批准」队列等待确认。",
+  ].join("\n"),
+  soulUpdatedAt: "刚刚",
+  memoryUpdatedAt: "今天 09:30",
+  learnedPreferences: [
+    "偏好简洁克制的视觉排版与高信息密度摘要",
+    "涉及跨文件工程重构时，先整理变更清单再切入工作台核验",
+    "晨间简报聚焦核心仓库进展、待办阻塞项与行业动态",
+  ],
+  activityGroups: [
+    {
+      date: "今天",
+      items: [
+        {
+          id: "act-1",
+          dateGroup: "今天",
+          title: "整理今日工程晨报与待办优先级",
+          description: "已汇总 develop 分支最新提交与 2 项高优跟进事项",
+          timeLabel: "09:40",
+          createdAt: Date.now() - 3600_000,
+        },
+        {
+          id: "act-2",
+          dateGroup: "今天",
+          title: "准备双形态切换交互核验清单",
+          description: "已完成跨模式状态保留与虚拟服务器自检，随时可在工作台打开",
+          timeLabel: "10:15",
+          createdAt: Date.now() - 1200_000,
+          handoff: {
+            id: "handoff-dual-mode",
+            title: "核验 Agent ⇄ Bot 双形态状态同步与变更",
+            kindLabel: "代码与架构协同 · 3 处关键检查点",
+            summary: "已完成后台预检：顶栏胶囊滑块、SOUL 独立注入与虚拟服务器资源配额均已就绪。",
+            targetCwd: "",
+          },
+        },
+      ],
+    },
+  ],
+  pendingApprovals: [
+    {
+      id: "apr-demo-1",
+      title: "发送每周进展摘要至团队归档频道",
+      commandSignature: "external.notify · 周报草稿外发",
+      summary: "分身已整理好本周里程碑摘要，涉及对外发送，已挂起等待你的确认。",
+      createdAt: Date.now() - 600_000,
+      expiresAt: Date.now() + 86_400_000,
+    },
+  ],
+  recentApprovals: [
+    {
+      id: "apr-hist-1",
+      title: "在受控工作目录生成每日调研快照",
+      summary: "仅写入 Bot 独立虚拟服务器空间",
+      decision: "auto-allowed",
+      timeLabel: "09:12",
+      resolvedAt: Date.now() - 5400_000,
+    },
+  ],
+  feed: [
+    {
+      id: "feed-1",
+      title: "晨间雷达 · 本地优先 AI 伴侣与云端虚拟主机趋势",
+      timeLabel: "25 分钟前",
+      body: "结合你近期关注的桌面双形态体验，为你提炼了本地轻量沙箱与云端 24×7 守护协同的三组关键取舍。",
+      actionLabel: "在主聊天展开讨论",
+      seedPrompt: "结合今天的晨间雷达，帮我对比本地虚拟服务器与远端虚拟服务器在不同场景下的最佳分工。",
+      createdAt: Date.now() - 1500_000,
+    },
+    {
+      id: "feed-2",
+      title: "周度复盘提醒 · 沉淀高复用空间模板",
+      timeLabel: "2 小时前",
+      body: "本周你高频进行了需求梳理与原型走查，可以把这套标准检查清单保存为一个可交互「空间」。",
+      actionLabel: "让千机起草方案",
+      seedPrompt: "帮我梳理一份需求评审与交互走查的标准跟进清单。",
+      createdAt: Date.now() - 7200_000,
+    },
+  ],
+  ideaSections: [
+    {
+      category: "精选推荐",
+      items: [
+        {
+          id: "idea-1",
+          icon: "sparkles",
+          title: "三分钟晨间状态对齐",
+          description: "快速梳理今天最重要的三件事，并让分身在后台持续追踪进展。",
+          seedPrompt: "我们来做一次三分钟晨间对齐，帮我梳理今天最核心的三件事。",
+        },
+        {
+          id: "idea-2",
+          icon: "compass",
+          title: "深水区议题反方推演",
+          description: "在独立旁聊中扮演苛刻审稿人，帮你提前发现方案盲区。",
+          seedPrompt: "请站在挑剔用户的视角，帮我审视当前产品方案可能存在的体验盲点。",
+        },
+      ],
+    },
+    {
+      category: "工程与创作协同",
+      items: [
+        {
+          id: "idea-3",
+          icon: "layers",
+          title: "从对话一键升维至工作台",
+          description: "先在轻松聊天中明确思路，再携带完整上下文切入 Agent 工作台精修。",
+          seedPrompt: "帮我先整理一份重构计划摘要，准备好后我们切到 Agent 工作台逐行核对。",
+        },
+        {
+          id: "idea-4",
+          icon: "globe",
+          title: "24×7 远端选题与竞品巡检",
+          description: "开启远端虚拟服务器后，合上电脑也能持续追踪行业更新。",
+          seedPrompt: "帮我规划一个每日定时巡检竞品更新并汇总到动态流的跟踪方案。",
+        },
+      ],
+    },
+  ],
+  goals: [
+    {
+      id: "goal-1",
+      title: "打磨千机 Agent + Bot 一体双面旗舰体验",
+      category: "产品里程碑",
+      summary: "保持零割裂丝滑切换、持久身份记忆与安全可控的虚拟服务器底座。",
+      status: "active",
+      updatedAt: Date.now() - 900_000,
+      handoff: {
+        id: "handoff-goal-1",
+        title: "检查千机双形态里程碑代码与测试状态",
+        kindLabel: "长期目标追踪",
+        summary: "在 Agent 工作台中查看当前分支变更、单测覆盖与构建门禁结果。",
+        targetCwd: "",
+      },
+    },
+  ],
+  spaces: [
+    {
+      id: "space-1",
+      title: "双形态体验走查看板",
+      description: "集中跟踪丝滑过渡帧率、SOUL 契约与虚拟服务器运行指标。",
+      metricBadge: "实时同步",
+      updatedLabel: "10 分钟前",
+      updatedAt: Date.now() - 600_000,
+    },
+    {
+      id: "space-2",
+      title: "每日灵感与阅读摘录馆",
+      description: "自动归档聊天中收藏的文章要点、产品参考与设计批注。",
+      metricBadge: "12 篇馆藏",
+      updatedLabel: "昨天",
+      updatedAt: Date.now() - 86_400_000,
+    },
+  ],
+  documents: [
+    {
+      id: "doc-1",
+      name: "Bot 形态需求要点速览.md",
+      updatedLabel: "今天 10:05",
+      sizeLabel: "4.2 KB",
+      content: "# Bot 形态需求要点速览\n\n- 常青主聊天 + 独立旁聊抽屉\n- 右侧数字分身面板（动态 / 批准 / 身份 / 邮箱）\n- 本地与远端虚拟服务器双模式自由切换",
+      updatedAt: Date.now() - 1800_000,
+    },
+  ],
+  media: [
+    { id: "med-1", kind: "images", title: "双形态空间变形分镜示意", updatedLabel: "今天" },
+    { id: "med-2", kind: "podcasts", title: "晨间技术简报音频摘要 · 04:20", updatedLabel: "昨天" },
+  ],
+  inboxEnabled: false,
+  inboxAddress: "qianji.companion@bot.qianji.local",
+  inboxItems: [
+    {
+      id: "mail-1",
+      sender: "GitHub Notifications",
+      subject: "[PI-Desktop] develop 分支每日构建报告",
+      preview: "所有架构门禁与类型检查均已通过，点击可让分身提炼重点。",
+      timeLabel: "08:50",
+      unread: true,
+      createdAt: Date.now() - 5000_000,
+    },
+  ],
+  connectors: [
+    { id: "conn-github", name: "GitHub 仓库通知与 PR 摘要", description: "只读拉取关注仓库动态，外发评论需经批准", enabled: true },
+    { id: "conn-calendar", name: "日程与每日提醒同步", description: "结合日程空档智能安排后台巡检与简报推送", enabled: true },
+    { id: "conn-browser", name: "虚拟服务器受控浏览器", description: "在隔离虚拟环境中执行网页检索，遇验证码支持人工接管", enabled: true },
+  ],
+  virtualServer: {
+    mode: "local",
+    lifecycle: "running",
+    uptimeLabel: "已平稳运行 2 小时 18 分",
+    latencyMs: 4,
+    local: {
+      cpuCores: 2,
+      cpuUsagePercent: 12,
+      memoryUsedGb: 0.8,
+      memoryLimitGb: 4,
+      diskUsedGb: 1.4,
+      diskLimitGb: 20,
+      autoSleepIdle: true,
+      sharedFolders: [{ path: "~/Documents/Qianji-Share", access: "read-only" }],
+    },
+    remote: {
+      alias: "云端 24×7 守护节点",
+      host: "",
+      port: 22,
+      username: "ubuntu",
+      workDir: "/home/ubuntu/.qianji-bot",
+      initialized: false,
+    },
+    liveViewTaskTitle: "受控环境空闲待命 · 随时可查看实时画面或人工接管",
+  },
+  embeddedTasks: [
+    {
+      id: "handoff-dual-mode",
+      title: "核验 Agent ⇄ Bot 双形态状态同步与变更",
+      kindLabel: "工程协同卡片 · 支持一键回传",
+      summary: "分身已完成需求对齐与后台预检，可携带完整上下文切入 Agent 工作台查看文件树与变更审查。",
+      targetCwd: "",
+    },
+  ],
+};

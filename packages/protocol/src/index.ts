@@ -6,3 +6,4 @@ export * from "./redact.ts";
 export * from "./self-guard.ts";
 export * from "./app-settings.ts";
 export * from "./plugin-catalog.ts";
+export * from "./bot-methods.ts";

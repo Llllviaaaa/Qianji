@@ -41,24 +41,19 @@ import * as toolGuards from "@qianji/tool-guards";
 import * as toolOutput from "@qianji/tool-output";
 import { Tools } from "@qianji/tools";
 import { Ui } from "@qianji/ui";
-import * as commandsRpc from "./commands-rpc.ts";
+import * as botPlugin from "./bot/index.ts";
 import { resolveDesktopBundledSkillRoots, resolveDesktopPluginTypesDir } from "./control.ts";
-import * as diagnostics from "./diagnostics.ts";
-import { bashSandboxPlugin, configRpcPlugin, secretStore } from "./host-plugins.ts";
+import { gatewayRpcDefinitions } from "./gateway-rpc-plugins.ts";
+import { bashSandboxPlugin, secretStore } from "./host-plugins.ts";
 import type { HarnessConfig } from "./harness-config.ts";
 import type { PluginEntry } from "./host.ts";
-import * as llmRpc from "./llm-rpc.ts";
 import * as pluginDevTools from "./plugin-dev-tools.ts";
 import type { PluginManager } from "./plugin-manager.ts";
-import * as providerAdmin from "./provider-admin.ts";
 import * as providers from "./providers.ts";
 import type { ReloadableEntry } from "./reloadable.ts";
 import { RpcGateway } from "./rpc.ts";
 import { readSecretFile, type McpServerSecrets, type SecretCodec } from "./secrets.ts";
-import * as sessionsRpc from "./sessions-rpc.ts";
-import * as uiRpc from "./ui-rpc.ts";
 import { WebServer } from "./web-server.ts";
-import * as workbenchRpc from "./workbench-rpc.ts";
 
 export interface CoreOptions {
   /** DPAPI, when the host runs in Bun on Windows; `{ secret }` refs then resolve against secrets.dat. */
@@ -258,6 +253,30 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
       inject: ["sessions", "tools", "systemPrompt"],
     },
     {
+      id: "bot-mode",
+      name: "千机常驻分身 (bot-mode)",
+      description: "提供常驻主聊天与旁聊、SOUL 人格契约、异步批准队列、主动情报流与本地/远端虚拟服务器管控服务",
+      enabled: config.bot.enabled !== false,
+      hasHost: true,
+      hasClient: true,
+      plugin: botPlugin,
+      inject: ["sessions", "systemPrompt", "tools"],
+      config: {
+        dataDir,
+        ...(config.bot.displayName === undefined ? {} : { displayName: config.bot.displayName }),
+        ...(config.bot.avatarPreset === undefined ? {} : { avatarPreset: config.bot.avatarPreset }),
+        ...(config.bot.serverMode === undefined ? {} : { serverMode: config.bot.serverMode }),
+        ...(config.bot.localCpuCores === undefined ? {} : { localCpuCores: config.bot.localCpuCores }),
+        ...(config.bot.localMemoryGb === undefined ? {} : { localMemoryGb: config.bot.localMemoryGb }),
+        ...(config.bot.localDiskGb === undefined ? {} : { localDiskGb: config.bot.localDiskGb }),
+        ...(config.bot.autoSleepIdle === undefined ? {} : { autoSleepIdle: config.bot.autoSleepIdle }),
+        ...(config.bot.remoteHost === undefined ? {} : { remoteHost: config.bot.remoteHost }),
+        ...(config.bot.remotePort === undefined ? {} : { remotePort: config.bot.remotePort }),
+        ...(config.bot.remoteUser === undefined ? {} : { remoteUser: config.bot.remoteUser }),
+        ...(config.bot.remoteWorkDir === undefined ? {} : { remoteWorkDir: config.bot.remoteWorkDir }),
+      },
+    },
+    {
       id: "memory",
       name: "本地长期记忆 (memory)",
       description: "维护并向系统提示词注入持久化的全局与项目记忆文件",
@@ -369,7 +388,6 @@ export function builtinPluginDefinitions(
   config: HarnessConfig,
   options: CoreOptions & FeatureOptions & { gateway?: GatewayOptions } = {},
 ): BuiltinPluginDefinition[] {
-  const providersFile = join(dataDir, "providers.json");
   const gateway = options.gateway;
   const baseDefinitions: Array<BuiltinPluginDefinition | false> = [
     gateway !== undefined && {
@@ -532,96 +550,7 @@ export function builtinPluginDefinitions(
         : {}),
       autoRegisterBuiltinProtocols: false,
     }),
-    gateway !== undefined && {
-      id: "sessions-rpc",
-      name: "会话与用量 RPC 服务 (sessions-rpc)",
-      description: "暴露 session.*、model.* 与 usage.summary 会话控制接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: sessionsRpc,
-      inject: ["rpc", "sessions", "agents", "llm"],
-      config: gateway.defaultModel === undefined ? {} : { defaultModel: gateway.defaultModel },
-    },
-    gateway !== undefined && {
-      id: "commands-rpc",
-      name: "斜杠命令 RPC 服务 (commands-rpc)",
-      description: "暴露 command.list 与 command.execute 斜杠命令接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: commandsRpc,
-      inject: ["rpc", "commands"],
-      config: gateway.manager === undefined ? {} : { manager: gateway.manager },
-    },
-    gateway !== undefined && {
-      id: "ui-rpc",
-      name: "交互审批 RPC 服务 (ui-rpc)",
-      description: "暴露 ui.pending 与 ui.respond 工具审批及询问回传接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: uiRpc,
-      inject: ["rpc", "ui"],
-    },
-    gateway !== undefined && {
-      id: "diagnostics",
-      name: "宿主诊断与日志服务 (diagnostics)",
-      description: "暴露 diagnostics.logs 与 diagnostics.export 宿主运行诊断接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: diagnostics,
-      inject: ["rpc", "hostInfo"],
-    },
-    gateway !== undefined && {
-      id: "llm-rpc",
-      name: "直连模型补全 RPC 服务 (llm-rpc)",
-      description: "暴露 llm.complete 轻量单轮补全接口（如会话自动命名与提交摘要）",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: llmRpc,
-      inject: ["rpc", "llm"],
-      config: gateway.defaultModel === undefined ? {} : { defaultModel: gateway.defaultModel },
-    },
-    gateway !== undefined && {
-      id: "provider-admin",
-      name: "模型服务商管理接口 (provider-admin)",
-      description: "暴露 provider.save、provider.delete 与在线连接测试管理接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: providerAdmin,
-      inject: ["rpc", "credentials"],
-      config: {
-        file: providersFile,
-        secretsFile: join(dataDir, "secrets.dat"),
-        ...(options.codec === undefined ? {} : { codec: options.codec }),
-        reload: gateway.reload ?? (async () => []),
-      },
-    },
-    gateway?.reload !== undefined && {
-      id: "config-rpc",
-      name: "配置热重载接口 (config-rpc)",
-      description: "暴露 config.reload 触发插件与配置同步",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: configRpcPlugin,
-      inject: ["rpc"],
-      config: { reload: gateway.reload },
-    },
-    gateway !== undefined && {
-      id: "workbench",
-      name: "原生工作台联动 (workbench)",
-      description: "提供 sidebar_open 工具与 workbench/open 工作台面板联动通知",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: workbenchRpc,
-      inject: ["rpc", "tools", "sessions"],
-    },
+    ...gatewayRpcDefinitions(dataDir, gateway, options),
   ];
   return baseDefinitions.filter((entry): entry is BuiltinPluginDefinition => entry !== false);
 }

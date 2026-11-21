@@ -32,7 +32,7 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "packages/mcp/src/index.ts": 622,
   "packages/mcp/src/client.ts": 682,
   "packages/host/src/client-bundles.ts": 657,
-  "packages/host/src/agent-plugins.ts": 644,
+  "packages/host/src/agent-plugins.ts": 573,
   "src/store/runtime.ts": 625,
   "src/stores/workbenchStore.ts": 581,
   "src/components/ModelPicker.tsx": 522,

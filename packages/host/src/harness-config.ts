@@ -45,6 +45,23 @@ export interface HarnessConfig {
   intelligentUi: { enabled: boolean };
   /** Optional Windows lightweight sandbox for `bash` (Job Object + scrubbed env + command guard). */
   sandbox: { enabled: boolean };
+  /** Bot mode configuration synced from Desktop AppSettings. */
+  bot: {
+    enabled: boolean;
+    displayName?: string;
+    avatarPreset?: string;
+    heartbeatEnabled?: boolean;
+    heartbeatIntervalMinutes?: number;
+    serverMode?: "local" | "remote";
+    localCpuCores?: number;
+    localMemoryGb?: number;
+    localDiskGb?: number;
+    autoSleepIdle?: boolean;
+    remoteHost?: string;
+    remotePort?: number;
+    remoteUser?: string;
+    remoteWorkDir?: string;
+  };
   /** The user's personality and custom instructions, as one system prompt section. */
   prompt: { instructions: string };
 }
@@ -63,6 +80,7 @@ export function defaultHarnessConfig(): HarnessConfig {
     schedule: { enabled: true },
     intelligentUi: { enabled: true },
     sandbox: { enabled: false },
+    bot: { enabled: true },
     prompt: { instructions: "" },
   };
 }
@@ -163,6 +181,26 @@ function applyHarnessLayer(config: HarnessConfig, file: string): string[] {
   if (intelligentUi !== undefined) config.intelligentUi = { enabled: intelligentUi.enabled !== false };
   const sandbox = section("sandbox");
   if (sandbox !== undefined) config.sandbox = { enabled: sandbox.enabled === true };
+  const bot = section("bot");
+  if (bot !== undefined) {
+    config.bot = {
+      ...config.bot,
+      enabled: bot.enabled !== false,
+      ...(typeof bot.displayName === "string" ? { displayName: bot.displayName } : {}),
+      ...(typeof bot.avatarPreset === "string" ? { avatarPreset: bot.avatarPreset } : {}),
+      ...(typeof bot.heartbeatEnabled === "boolean" ? { heartbeatEnabled: bot.heartbeatEnabled } : {}),
+      ...(typeof bot.heartbeatIntervalMinutes === "number" ? { heartbeatIntervalMinutes: bot.heartbeatIntervalMinutes } : {}),
+      ...(bot.serverMode === "local" || bot.serverMode === "remote" ? { serverMode: bot.serverMode } : {}),
+      ...(typeof bot.localCpuCores === "number" ? { localCpuCores: bot.localCpuCores } : {}),
+      ...(typeof bot.localMemoryGb === "number" ? { localMemoryGb: bot.localMemoryGb } : {}),
+      ...(typeof bot.localDiskGb === "number" ? { localDiskGb: bot.localDiskGb } : {}),
+      ...(typeof bot.autoSleepIdle === "boolean" ? { autoSleepIdle: bot.autoSleepIdle } : {}),
+      ...(typeof bot.remoteHost === "string" ? { remoteHost: bot.remoteHost } : {}),
+      ...(typeof bot.remotePort === "number" ? { remotePort: bot.remotePort } : {}),
+      ...(typeof bot.remoteUser === "string" ? { remoteUser: bot.remoteUser } : {}),
+      ...(typeof bot.remoteWorkDir === "string" ? { remoteWorkDir: bot.remoteWorkDir } : {}),
+    };
+  }
   return problems;
 }
 
