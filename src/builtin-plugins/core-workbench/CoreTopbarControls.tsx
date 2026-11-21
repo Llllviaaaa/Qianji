@@ -7,7 +7,7 @@
  * zero hardcoded feature gates live here.
  */
 import type { ReactElement } from "react";
-import { FileText, Puzzle, SquareTerminal } from "lucide-react";
+import { FileText, Layers, Puzzle, SquareTerminal } from "lucide-react";
 import {
   useClientContributions,
   useFrontendService,
@@ -114,6 +114,7 @@ export function CoreChromeTopbarButtons({
   const activeLegacyTabs = contributions.rightWorkbenchTabs.filter(
     (tab) => activePanes.includes(tab.id) && !isPaneRegistered(registry, tab.id),
   );
+  const canvasOpen = activePanes.includes("intelligent-ui-canvas");
   const registeredBottomTabs = listRegisteredBottomTabIds(registry);
   const hasExtraBottomTabs =
     contributions.bottomPanelTabs.length > 0 || registeredBottomTabs.some((id) => id !== "terminal");
@@ -127,6 +128,19 @@ export function CoreChromeTopbarButtons({
 
   return (
     <>
+      {canvasOpen && (
+        <button
+          type="button"
+          data-wb-tab="intelligent-ui-canvas"
+          className="pid-wb-top-toggle active"
+          title="关闭画布"
+          aria-label="画布"
+          aria-pressed
+          onClick={() => workbenchService?.togglePane("intelligent-ui-canvas")}
+        >
+          <Layers size={14} strokeWidth={1.65} />
+        </button>
+      )}
       {activeLegacyTabs.map((tab) => (
         <button
           key={tab.id}

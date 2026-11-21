@@ -58,7 +58,7 @@ export const intelligentUiPlugin: Plugin = {
         const key = `${snap.sessionFile ?? "draft"}::${grp.id}::v${grp.latest.version}`;
         if (!seenHtmlArtifacts.has(key)) {
           seenHtmlArtifacts.add(key);
-          if (snap.isStreaming) {
+          if (snap.isStreaming && !ctx.workbenchService.getSnapshot().openPanes.includes(INTELLIGENT_UI_CANVAS_PANE_ID)) {
             ctx.workbenchService.openPane(INTELLIGENT_UI_CANVAS_PANE_ID);
           }
         }

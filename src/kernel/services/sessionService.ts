@@ -71,6 +71,8 @@ export interface SessionServiceSnapshot {
   readonly permissionMode: AppSettings["permissionMode"];
   readonly agentMode: AppSettings["agentMode"];
   readonly sessions: readonly SessionInfo[];
+  readonly runningSessionFiles: readonly string[];
+  readonly approvalSessionFiles: readonly string[];
   readonly sessionTree: readonly SessionTreeNodeView[];
   readonly sessionTreeLeafId: string | null;
   readonly sessionTreeLoading: boolean;
@@ -78,8 +80,35 @@ export interface SessionServiceSnapshot {
   readonly lastError: string | null;
 }
 
+const EMPTY_STRING_LIST: readonly string[] = [];
+let cachedRunningFiles: readonly string[] = EMPTY_STRING_LIST;
+let cachedApprovalFiles: readonly string[] = EMPTY_STRING_LIST;
+
+function stableStringList(next: string[], prev: readonly string[]): readonly string[] {
+  if (next.length === 0) return EMPTY_STRING_LIST;
+  if (next.length === prev.length && next.every((item, idx) => item === prev[idx])) {
+    return prev;
+  }
+  return next;
+}
+
 function buildSessionServiceSnapshot(): SessionServiceSnapshot {
   const s = useAppStore.getState();
+  const runningSet = new Set<string>();
+  const approvalSet = new Set<string>();
+  for (const rt of Object.values(s.runtimes)) {
+    if (rt.sessionFile !== null && rt.sessionFile !== "") {
+      if (rt.isStreaming) runningSet.add(rt.sessionFile);
+      if (rt.extensionRequest !== null) approvalSet.add(rt.sessionFile);
+    }
+  }
+  if (s.sessionFile !== null && s.sessionFile !== "") {
+    if (s.isStreaming) runningSet.add(s.sessionFile);
+    if (s.extensionRequest !== null) approvalSet.add(s.sessionFile);
+  }
+  cachedRunningFiles = stableStringList([...runningSet], cachedRunningFiles);
+  cachedApprovalFiles = stableStringList([...approvalSet], cachedApprovalFiles);
+
   return {
     sessionId: s.sessionId,
     sessionFile: s.sessionFile,
@@ -101,6 +130,8 @@ function buildSessionServiceSnapshot(): SessionServiceSnapshot {
     permissionMode: s.settings?.permissionMode ?? "ask",
     agentMode: s.settings?.agentMode ?? "agent",
     sessions: s.sessions,
+    runningSessionFiles: cachedRunningFiles,
+    approvalSessionFiles: cachedApprovalFiles,
     sessionTree: s.sessionTree,
     sessionTreeLeafId: s.sessionTreeLeafId,
     sessionTreeLoading: s.sessionTreeLoading,

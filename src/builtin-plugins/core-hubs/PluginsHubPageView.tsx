@@ -23,6 +23,23 @@ function tierBadgeVariant(tier: PluginTier): "neutral" | "brand" | "warning" {
 }
 
 export function PluginsHubPageView(props: SlotComponentProps<HubPageSlotProps, "root">) {
+  const { ctx, renderFactory } = props;
+  const navigationService = useFrontendService("navigationService", ctx);
+  const workspaceSnap = useWorkspaceState(ctx);
+  const cwd = props.cwd ?? workspaceSnap?.cwd ?? "";
+  const handleClose = () => {
+    if (props.onClose !== undefined) props.onClose();
+    else navigationService?.setHubView(null);
+  };
+
+  return renderFactory(
+    "host.hub.plugins",
+    { cwd, onReturnToChat: handleClose },
+    { fallback: <PluginsHubPageFallback {...props} /> },
+  );
+}
+
+function PluginsHubPageFallback(props: SlotComponentProps<HubPageSlotProps, "root">) {
   const { ctx } = props;
   const rpcService = useFrontendService("rpcService", ctx);
   const navigationService = useFrontendService("navigationService", ctx);

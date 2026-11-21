@@ -14,8 +14,69 @@ export type SidebarGroupMode = "project" | "recent";
 export const PINNED_SESSIONS_KEY = "qianji:pinned-sessions";
 export const COLLAPSED_PROJECTS_KEY = "qianji:collapsed-projects";
 export const GROUP_MODE_KEY = "qianji:sidebar-group-mode";
+export const SIDEBAR_PROJECT_ORDER_KEY = "qianji:sidebar-project-order";
+export const ACTIVE_RUNTIME_KEY = "qianji:active-runtime";
+export const LAST_TASK_KEY = "qianji:last-task";
 export const VISIBLE_THREADS_PER_PROJECT = 5;
 export const VISIBLE_RECENT_THREADS = 15;
+
+export function dispatchSidebarClosePreview(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("qianji:sidebar-close-preview"));
+  }
+}
+
+export function dispatchSidebarSearchActive(active: boolean): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("qianji:sidebar-search-active", { detail: active }));
+  }
+}
+
+export function dispatchSidebarClosePopovers(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("qianji:sidebar-close-popovers"));
+  }
+}
+
+export function dispatchSidebarClearSearch(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("qianji:sidebar-clear-search"));
+  }
+}
+
+export function compactTimestamp(timestamp: number, now = Date.now()): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return "";
+  const minutes = Math.floor(Math.max(0, now - timestamp) / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const date = new Date(timestamp);
+  const nowDate = new Date(now);
+  const pad2 = (value: number) => String(value).padStart(2, "0");
+  if (date.getFullYear() === nowDate.getFullYear()) {
+    return `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}`;
+  }
+  return `${String(date.getFullYear()).slice(-2)}/${pad2(date.getMonth() + 1)}`;
+}
+
+export function visibleProjectSessions(
+  sessions: readonly SidebarSessionItem[],
+  showAll: boolean,
+  isImportant: (session: SidebarSessionItem) => boolean,
+  limit = VISIBLE_THREADS_PER_PROJECT,
+): { visible: SidebarSessionItem[]; hiddenCount: number } {
+  if (showAll || sessions.length <= limit) {
+    return { visible: [...sessions], hiddenCount: 0 };
+  }
+  const head = sessions.slice(0, limit);
+  const tail = sessions.slice(limit);
+  const promoted = tail.filter(isImportant);
+  const visible = promoted.length > 0 ? [...head, ...promoted] : head;
+  return { visible, hiddenCount: Math.max(0, sessions.length - visible.length) };
+}
 
 export interface TimeBucketGroup {
   readonly id: string;
@@ -175,6 +236,7 @@ export function buildSidebarProjectGroups(options: {
   readonly sessions: readonly SidebarSessionItem[];
   readonly projects: readonly SidebarProjectItem[];
   readonly pinnedFiles: readonly string[];
+  readonly workspaceOrder?: readonly string[];
 }): Array<[string, SidebarSessionItem[]]> {
   const normalizedQuery = options.query.trim().toLowerCase();
   const map = new Map<string, SidebarSessionItem[]>();
@@ -215,10 +277,21 @@ export function buildSidebarProjectGroups(options: {
     entries.push([workspace, sortSidebarSessions(chats, options.pinnedFiles)]);
   }
 
+  const orderIndex = new Map<string, number>();
+  (options.workspaceOrder ?? []).forEach((ws, idx) => {
+    const key = normalizeLocalPath(ws);
+    if (key !== "" && !orderIndex.has(key)) orderIndex.set(key, idx);
+  });
+
   return entries.sort(([leftPath, leftChats], [rightPath, rightChats]) => {
     const leftPinned = options.projects.find((p) => sameLocalPath(p.path, leftPath))?.pinned === true ? 1 : 0;
     const rightPinned = options.projects.find((p) => sameLocalPath(p.path, rightPath))?.pinned === true ? 1 : 0;
     if (leftPinned !== rightPinned) return rightPinned - leftPinned;
+    const leftIdx = orderIndex.get(normalizeLocalPath(leftPath));
+    const rightIdx = orderIndex.get(normalizeLocalPath(rightPath));
+    if (leftIdx !== undefined && rightIdx !== undefined && leftIdx !== rightIdx) {
+      return leftIdx - rightIdx;
+    }
     const leftLatest = leftChats[0] ? sessionTimestamp(leftChats[0]) : 0;
     const rightLatest = rightChats[0] ? sessionTimestamp(rightChats[0]) : 0;
     if (leftLatest !== rightLatest) return rightLatest - leftLatest;

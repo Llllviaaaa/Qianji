@@ -219,6 +219,10 @@ export class WorkspaceService extends Service {
       { eagerConnect: false },
     );
 
+    const offPluginChanged = pluginClient.onChanged(() => {
+      void this.refreshTrust().catch(() => undefined);
+    });
+
     const onProjectsChanged = () => {
       void this.refreshProjects();
     };
@@ -229,6 +233,7 @@ export class WorkspaceService extends Service {
     ctx.effect(() => () => {
       offStore();
       offTrust();
+      offPluginChanged();
       if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
         window.removeEventListener("qianji:projects-changed", onProjectsChanged);
       }
@@ -300,6 +305,22 @@ export class WorkspaceService extends Service {
     return trackContextEffect(this.ctx, rawUnsub);
   }
 
+  syncDraftWorkspace(workspace: string): void {
+    const trimmed = workspace.trim();
+    if (trimmed === this.internal.draftWorkspace) return;
+    this.internal.draftWorkspace = trimmed;
+    if (trimmed !== "") {
+      writeStoredWorkspace(trimmed);
+    }
+    this.publish();
+  }
+
+  clearDraftWorkspace(): void {
+    if (this.internal.draftWorkspace === "") return;
+    this.internal.draftWorkspace = "";
+    this.publish();
+  }
+
   selectWorkspace(workspace: string): void {
     const trimmed = workspace.trim();
     if (trimmed === "") return;
@@ -337,7 +358,8 @@ export class WorkspaceService extends Service {
     if (!isTauriEnvironment()) return this.internal.projects;
     try {
       const projects = await agent.listProjects();
-      this.internal.projects = projects.filter((project) => !project.hidden);
+      // Preserve hidden projects in the catalog so Sidebar can filter out sessions of removed projects.
+      this.internal.projects = [...projects];
       this.publish();
     } catch {
       // Keep last known project list when backend is unavailable.
@@ -432,5 +454,40 @@ export class WorkspaceService extends Service {
       return;
     }
     await agent.openWorkspaceInFileManager(target);
+  }
+
+  async stageGitFiles(paths: string[], cwd?: string): Promise<void> {
+    const target = (cwd ?? this.effectiveCwd()).trim();
+    if (target === "" || paths.length === 0) return;
+    await agent.gitStageFiles(target, paths);
+    await this.refreshGit(target);
+  }
+
+  async unstageGitFiles(paths: string[], cwd?: string): Promise<void> {
+    const target = (cwd ?? this.effectiveCwd()).trim();
+    if (target === "" || paths.length === 0) return;
+    await agent.gitUnstageFiles(target, paths);
+    await this.refreshGit(target);
+  }
+
+  async createWorktree(cwd?: string, branch?: string): Promise<string> {
+    const target = (cwd ?? this.effectiveCwd()).trim();
+    const created = await agent.createWorktree(target, branch);
+    this.selectWorkspace(created.path);
+    return created.path;
+  }
+
+  async quickChatDir(): Promise<string> {
+    return agent.quickChatDir();
+  }
+
+  async saveProject(project: ProjectConfig): Promise<void> {
+    await agent.saveProject(project);
+    await this.refreshProjects();
+  }
+
+  async removeLocalProject(path: string): Promise<void> {
+    await agent.removeLocalProject(path);
+    await this.refreshProjects();
   }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ShieldAlert, ShieldCheck, Sparkles } from "lucide-react";
 import {
   useClientContributions,
@@ -40,7 +40,7 @@ export function CoreHomeHero(props: SlotComponentProps<HomeHeroSlotProps, "root"
   const sessionSnap = useSessionState(ctx);
   const workspaceSnap = useWorkspaceState(ctx);
 
-  const cwd = props.cwd ?? workspaceSnap?.cwd ?? sessionSnap?.cwd ?? "";
+  const cwd = props.cwd !== undefined ? props.cwd : (workspaceSnap?.draftWorkspace ?? "");
   const workspaceName = extractWorkspaceName(cwd);
   const headline = workspaceName === "" ? "接下来聊些什么？" : `接下来在 ${workspaceName} 做什么？`;
   const lastError = sessionSnap?.lastError ?? null;
@@ -172,36 +172,67 @@ export function CoreHomeStage(props: SlotComponentProps<CoreShellStageProps, "se
   );
   useSyncExternalStore(subscribeSlots, getSlotsVersion, getSlotsVersion);
 
-  const effectiveCwd = props.cwd ?? workspaceSnap?.cwd ?? sessionSnap?.cwd ?? "";
+  const effectiveCwd = props.cwd !== undefined ? props.cwd : (workspaceSnap?.draftWorkspace ?? "");
+  const isQuickChat = effectiveCwd.trim() === "";
+  const [environment, setEnvironment] = useState<"local" | "worktree">("local");
+  if (isQuickChat && environment !== "local") {
+    setEnvironment("local");
+  }
   const sessionFile = props.sessionFile !== undefined ? props.sessionFile : (sessionSnap?.sessionFile ?? null);
   const workspaceOptions = workspaceSnap?.workspaceOptions ?? [];
   const trust = workspaceSnap?.trust;
   const hasQuickActionsSlot = (slotsRegistry?.getEntries("home.quickActions").length ?? 0) > 0;
   const showQuickActions = hasQuickActionsSlot || contributions.homeQuickActions.length > 0;
 
+  // Keep Home preview session synced when user switches draftWorkspace (models, commands, git branch).
+  useEffect(() => {
+    const target = effectiveCwd.trim();
+    if (target === "" || sessionService === undefined) return;
+    const snap = sessionService.getSnapshot();
+    if (snap.isStreaming) return;
+    const normalize = (value: string) => value.replace(/[\\/]+$/, "").toLowerCase();
+    if (snap.connection === "running" && normalize(snap.cwd) === normalize(target)) return;
+    void sessionService.connect(target);
+  }, [effectiveCwd, sessionService]);
+
   const handleSendFromHome = useCallback(
     async (text: string, attachments?: AttachmentPayload[]): Promise<boolean> => {
       const trimmed = text.trim();
-      if (trimmed === "" || sessionService === undefined) return false;
+      const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+      if ((trimmed === "" && !hasAttachments) || sessionService === undefined) return false;
       const snap = sessionService.getSnapshot();
       const wsSnap = workspaceService?.getSnapshot();
-      let targetCwd = (
-        effectiveCwd ||
-        wsSnap?.draftWorkspace ||
-        wsSnap?.workspaceOptions[0] ||
-        snap.cwd ||
-        ""
-      ).trim();
+      let targetCwd = effectiveCwd.trim();
+      if (targetCwd === "" && workspaceService !== undefined) {
+        try {
+          targetCwd = (await workspaceService.quickChatDir()).trim();
+        } catch {
+          targetCwd = "";
+        }
+      }
       if (targetCwd === "" && workspaceService !== undefined) {
         targetCwd = (await workspaceService.pickFolder()) ?? "";
       }
+      if (targetCwd === "") return false;
+
+      if (!isQuickChat && environment === "worktree" && workspaceService !== undefined) {
+        try {
+          targetCwd = await workspaceService.createWorktree(targetCwd, wsSnap?.git?.branch);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          navigationService?.showToast(`创建 Worktree 失败：${msg}`, "error");
+          return false;
+        }
+      }
+
       const normalize = (value: string) => value.replace(/[\\/]+$/, "").toLowerCase();
       if (
         snap.connection !== "running" ||
-        (targetCwd !== "" && normalize(snap.cwd) !== normalize(targetCwd))
+        normalize(snap.cwd) !== normalize(targetCwd)
       ) {
-        if (targetCwd === "") return false;
-        workspaceService?.selectWorkspace(targetCwd);
+        if (!isQuickChat || environment === "worktree") {
+          workspaceService?.selectWorkspace(targetCwd);
+        }
         navigationService?.setDraftMode(false);
         await sessionService.connect(targetCwd);
         if (sessionService.getSnapshot().connection !== "running") {
@@ -217,7 +248,7 @@ export function CoreHomeStage(props: SlotComponentProps<CoreShellStageProps, "se
       }
       return sent;
     },
-    [effectiveCwd, navigationService, sessionService, workspaceService],
+    [effectiveCwd, environment, isQuickChat, navigationService, sessionService, workspaceService],
   );
 
   const quickCtx: HomeQuickActionSlotContext = {
@@ -273,6 +304,13 @@ export function CoreHomeStage(props: SlotComponentProps<CoreShellStageProps, "se
                     sessionFile,
                     variant: "task-start",
                     isStreaming: sessionSnap?.isStreaming ?? false,
+                    quickChat: isQuickChat,
+                    environment,
+                    onQuickChat: () => {
+                      setEnvironment("local");
+                      workspaceService?.clearDraftWorkspace();
+                    },
+                    onEnvironmentChange: setEnvironment,
                     onSend: handleSendFromHome,
                   }}
                   fallback={<DefaultHomeComposerFallback onSend={handleSendFromHome} />}

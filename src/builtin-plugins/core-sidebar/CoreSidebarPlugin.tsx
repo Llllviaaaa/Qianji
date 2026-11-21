@@ -5,6 +5,7 @@ import {
   useFrontendService,
   useNavigationState,
   useSessionState,
+  useThemeState,
   useWorkspaceState,
 } from "@qianji/client";
 import type {
@@ -12,15 +13,19 @@ import type {
   SidebarFooterSlotProps,
   SlotComponentProps,
 } from "@qianji/client-slots";
-import { LegacySidebarSectionHost } from "./sidebarHelpers";
+import { dispatchSidebarClosePopovers, dispatchSidebarClosePreview, LegacySidebarSectionHost } from "./sidebarHelpers";
 
 const NOOP_UNSUB = (): void => undefined;
 
 export function CoreSidebarFooter(props: SlotComponentProps<SidebarFooterSlotProps, "root">) {
   const { ctx } = props;
   const navigationService = useFrontendService("navigationService", ctx);
+  const themeSnap = useThemeState(ctx);
+  const settingsShortcut = themeSnap?.shortcutSettings || "Ctrl+,";
 
   const handleOpenSettings = () => {
+    dispatchSidebarClosePopovers();
+    dispatchSidebarClosePreview();
     if (props.onOpenSettings !== undefined) {
       props.onOpenSettings("general");
     } else {
@@ -34,14 +39,16 @@ export function CoreSidebarFooter(props: SlotComponentProps<SidebarFooterSlotPro
         type="button"
         className="footer-account dsh-claude-account-btn"
         onClick={handleOpenSettings}
-        title="设置 (Ctrl+,)"
+        title={settingsShortcut ? `设置 (${settingsShortcut})` : "设置"}
         aria-label="设置"
       >
         <Settings size={15} strokeWidth={1.7} aria-hidden="true" />
         <span className="dsh-claude-account-user">设置</span>
-        <span className="sidebar-footer-shortcut" aria-hidden="true">
-          Ctrl+,
-        </span>
+        {settingsShortcut !== "" && (
+          <span className="sidebar-footer-shortcut" aria-hidden="true">
+            {settingsShortcut}
+          </span>
+        )}
       </button>
     </div>
   );

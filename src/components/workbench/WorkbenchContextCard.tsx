@@ -20,6 +20,7 @@ import { useWorkbenchStore } from "../../stores/workbenchStore";
 export interface WorkbenchContextCardProps {
   cwd: string;
   sessionFile: string | null;
+  mode?: "all" | "context" | "diagnostics";
   children?: ReactNode;
 }
 
@@ -34,10 +35,19 @@ interface DiagnosticsExportResult {
 
 const RULE_FILE_NAMES = new Set(["agents.md", "claude.md", ".cursorrules"]);
 
-export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchContextCardProps) {
+export function WorkbenchContextCard({
+  cwd,
+  sessionFile,
+  mode = "all",
+  children,
+}: WorkbenchContextCardProps) {
+  const showContext = mode === "all" || mode === "context";
+  const showDiagnostics = mode === "all" || mode === "diagnostics";
   const messages = useAppStore((state) => state.messages);
   const stats = useAppStore((state) => state.stats);
   const model = useAppStore((state) => state.model);
+  const sessionId = useAppStore((state) => state.sessionId);
+  const isStreaming = useAppStore((state) => state.isStreaming);
   const logs = useAppStore((state) => state.hostLog);
   const summaryFocus = useWorkbenchStore((state) => state.summaryFocus);
   const diagnosticsRef = useRef<HTMLElement>(null);
@@ -50,14 +60,41 @@ export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchCo
   });
 
   useEffect(() => {
-    if (summaryFocus === "diagnostics") {
+    if (showDiagnostics && summaryFocus === "diagnostics") {
       diagnosticsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [summaryFocus]);
+  }, [showDiagnostics, summaryFocus]);
+
+  const rawStatsTokens = stats?.contextUsage?.tokens ?? stats?.tokens.total ?? 0;
+
+  const liveUsageQuery = useQuery({
+    queryKey: ["workbench-live-context-usage", sessionFile, messages.length, isStreaming],
+    queryFn: async () => {
+      try {
+        return await harnessRuntimes.call<{
+          context?: { usedTokens?: number; contextWindow?: number; percent?: number };
+        }>("sessionUsage.inspect", {
+          ...(sessionId ? { sessionId } : {}),
+          ...(cwd ? { cwd } : {}),
+          ...(model?.provider ? { provider: model.provider } : {}),
+          ...(model?.id ? { model: model.id } : {}),
+          ...(typeof model?.contextWindow === "number" && model.contextWindow > 0
+            ? { contextWindowHint: model.contextWindow }
+            : {}),
+        });
+      } catch {
+        return null;
+      }
+    },
+    enabled: showContext && messages.length > 0 && rawStatsTokens === 0,
+    staleTime: 3_000,
+    refetchInterval: showContext && isStreaming && rawStatsTokens === 0 ? 4_000 : false,
+  });
 
   const mcpQuery = useQuery({
     queryKey: ["workbench-mcp"],
     queryFn: () => agent.mcpStatus(),
+    enabled: showContext,
     staleTime: 10_000,
   });
 
@@ -71,7 +108,7 @@ export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchCo
         return [];
       }
     },
-    enabled: Boolean(cwd),
+    enabled: showContext && Boolean(cwd),
     staleTime: 30_000,
   });
 
@@ -84,14 +121,14 @@ export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchCo
         return [];
       }
     },
-    enabled: Boolean(cwd),
+    enabled: showContext && Boolean(cwd),
     staleTime: 30_000,
   });
 
   const hostInfoQuery = useQuery({
     queryKey: ["workbench-host-info"],
     queryFn: () => harnessRuntimes.call<HostInfoResult>("host.info"),
-    enabled: diagExpanded,
+    enabled: showDiagnostics && diagExpanded,
     staleTime: 30_000,
   });
 
@@ -105,7 +142,7 @@ export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchCo
         throw error;
       }
     },
-    enabled: diagExpanded,
+    enabled: showDiagnostics && diagExpanded,
     staleTime: 60_000,
   });
 
@@ -139,9 +176,16 @@ export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchCo
     }
   }, [cwd, logs, sessionFile]);
 
-  const contextTokens = stats?.contextUsage?.tokens ?? stats?.tokens.total ?? 0;
-  const contextWindow = stats?.contextUsage?.contextWindow ?? model?.contextWindow ?? 0;
-  const rawContextPercent = stats?.contextUsage?.percent;
+  const fallbackUsage = liveUsageQuery.data?.context;
+  const contextTokens = rawStatsTokens > 0 ? rawStatsTokens : (fallbackUsage?.usedTokens ?? 0);
+  const contextWindow =
+    stats?.contextUsage?.contextWindow ??
+    fallbackUsage?.contextWindow ??
+    model?.contextWindow ??
+    0;
+  const rawContextPercent =
+    stats?.contextUsage?.percent ??
+    (rawStatsTokens === 0 ? fallbackUsage?.percent : undefined);
   const contextPct = typeof rawContextPercent === "number"
     ? Math.min(100, Math.max(0, Math.round(rawContextPercent)))
     : contextWindow > 0 && contextTokens > 0
@@ -175,85 +219,95 @@ export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchCo
 
   return (
     <>
-      <section className="pid-wb-inspector-section">
-        <header className="pid-wb-inspector-head">
-          <span>上下文</span>
-          {contextPct !== null && (
-            <span className={`pid-wb-inspector-metric${meterTone !== "normal" ? ` ${meterTone}` : ""}`}>
-              {contextPct}%
-            </span>
-          )}
-        </header>
-
-        {!hasContextActivity ? (
-          <p className="pid-wb-inspector-empty">发送消息后查看上下文用量。</p>
-        ) : (
-          <div className="pid-wb-inspector-context">
-            {contextPct !== null && (
-              <div className="pid-wb-progress-track" aria-hidden="true">
-                <div className={`pid-wb-progress-fill tone-${meterTone}`} style={{ width: `${contextPct}%` }} />
-              </div>
-            )}
-            <div className="pid-wb-inspector-token-row">
-              <span>{contextTokens.toLocaleString()} tokens</span>
-              {contextWindow > 0 && (
-                <span className="pid-wb-muted">/ {contextWindow.toLocaleString()}</span>
+      {showContext && (
+        <>
+          <section className="pid-wb-inspector-section" data-inspector-section="context">
+            <header className="pid-wb-inspector-head">
+              <span>上下文</span>
+              {contextPct !== null && (
+                <span className={`pid-wb-inspector-metric${meterTone !== "normal" ? ` ${meterTone}` : ""}`}>
+                  {contextPct}%
+                </span>
               )}
-            </div>
-            {(ruleFiles.length > 0 || skillCount > 0 || extCount > 0) && (
-              <div className="pid-wb-inspector-chips">
-                {ruleFiles.map((entry) => (
-                  <button
-                    key={entry.path}
-                    type="button"
-                    className="pid-wb-inspector-chip is-clickable"
-                    title={`打开规则文件 ${entry.path}`}
-                    onClick={() => void useWorkbenchStore.getState().openFile(cwd, entry.path)}
-                  >
-                    <FileText size={11} />
-                    <span>{entry.name}</span>
-                  </button>
-                ))}
-                {skillCount > 0 && <span className="pid-wb-inspector-chip">{skillCount} Skills</span>}
-                {extCount > 0 && <span className="pid-wb-inspector-chip">{extCount} Extensions</span>}
+            </header>
+
+            {!hasContextActivity ? (
+              <p className="pid-wb-inspector-empty">发送消息后查看上下文用量。</p>
+            ) : (
+              <div className="pid-wb-inspector-context">
+                {contextPct !== null && (
+                  <div className="pid-wb-progress-track" aria-hidden="true">
+                    <div className={`pid-wb-progress-fill tone-${meterTone}`} style={{ width: `${contextPct}%` }} />
+                  </div>
+                )}
+                <div className="pid-wb-inspector-token-row">
+                  <span>{contextTokens.toLocaleString()} tokens</span>
+                  {contextWindow > 0 && (
+                    <span className="pid-wb-muted">/ {contextWindow.toLocaleString()}</span>
+                  )}
+                </div>
+                {(ruleFiles.length > 0 || skillCount > 0 || extCount > 0) && (
+                  <div className="pid-wb-inspector-chips">
+                    {ruleFiles.map((entry) => (
+                      <button
+                        key={entry.path}
+                        type="button"
+                        className="pid-wb-inspector-chip is-clickable"
+                        title={`打开规则文件 ${entry.path}`}
+                        onClick={() => void useWorkbenchStore.getState().openFile(cwd, entry.path)}
+                      >
+                        <FileText size={11} />
+                        <span>{entry.name}</span>
+                      </button>
+                    ))}
+                    {skillCount > 0 && <span className="pid-wb-inspector-chip">{skillCount} Skills</span>}
+                    {extCount > 0 && <span className="pid-wb-inspector-chip">{extCount} Extensions</span>}
+                  </div>
+                )}
               </div>
             )}
-          </div>
-        )}
-      </section>
+          </section>
 
-      <section className="pid-wb-inspector-section">
-        <header className="pid-wb-inspector-head">
-          <span>连接器</span>
-          <button
-            type="button"
-            className="pid-wb-icon-btn small"
-            title="重连 MCP 服务"
-            aria-label="重连 MCP 服务"
-            onClick={() => void handleReconnectMcp()}
-          >
-            <RefreshCw size={11} />
-          </button>
-        </header>
+          <section className="pid-wb-inspector-section" data-inspector-section="connectors">
+            <header className="pid-wb-inspector-head">
+              <span>连接器</span>
+              <button
+                type="button"
+                className="pid-wb-icon-btn small"
+                title="重连 MCP 服务"
+                aria-label="重连 MCP 服务"
+                onClick={() => void handleReconnectMcp()}
+              >
+                <RefreshCw size={11} />
+              </button>
+            </header>
 
-        {mcpServers.length === 0 ? (
-          <p className="pid-wb-inspector-empty">暂未连接外部扩展服务。</p>
-        ) : (
-          <ul className="pid-wb-inspector-list">
-            {mcpServers.map((server) => (
-              <li key={server.id} className="pid-wb-connector-row">
-                <span className={`pid-wb-status-dot${server.connected ? " online" : " offline"}`} />
-                <span className="pid-wb-connector-name">{server.name}</span>
-                <span className="pid-wb-muted">{server.toolCount} 工具</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+            {mcpServers.length === 0 ? (
+              <p className="pid-wb-inspector-empty">暂未连接外部扩展服务。</p>
+            ) : (
+              <ul className="pid-wb-inspector-list">
+                {mcpServers.map((server) => (
+                  <li key={server.id} className="pid-wb-connector-row">
+                    <span className={`pid-wb-status-dot${server.connected ? " online" : " offline"}`} />
+                    <span className="pid-wb-connector-name">{server.name}</span>
+                    <span className="pid-wb-muted">{server.toolCount} 工具</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-      {children}
+          {children}
+        </>
+      )}
 
-      <section ref={diagnosticsRef} className="pid-wb-inspector-section is-footer" data-diagnostics-section>
+      {showDiagnostics && (
+        <section
+          ref={diagnosticsRef}
+          className="pid-wb-inspector-section is-footer"
+          data-diagnostics-section=""
+          data-inspector-section="diagnostics"
+        >
         <div className="pid-wb-inspector-head">
           <button
             type="button"
@@ -327,7 +381,8 @@ export function WorkbenchContextCard({ cwd, sessionFile, children }: WorkbenchCo
             )}
           </div>
         )}
-      </section>
+        </section>
+      )}
     </>
   );
 }

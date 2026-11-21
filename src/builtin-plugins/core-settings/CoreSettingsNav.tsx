@@ -18,6 +18,7 @@ export interface SettingsNavEntry {
 export interface CoreSettingsNavProps {
   readonly isPage: boolean;
   readonly shownPage: string;
+  readonly shortcutLabel?: string;
   readonly builtinNav: readonly SettingsNavEntry[];
   readonly extensionNav: readonly SettingsNavEntry[];
   readonly onSelectPage: (pageId: string) => void;
@@ -27,6 +28,7 @@ export interface CoreSettingsNavProps {
 export function CoreSettingsNav({
   isPage,
   shownPage,
+  shortcutLabel = "Ctrl+,",
   builtinNav,
   extensionNav,
   onSelectPage,
@@ -34,6 +36,26 @@ export function CoreSettingsNav({
 }: CoreSettingsNavProps): ReactElement {
   const [extensionsOpen, setExtensionsOpen] = useState(true);
   const [extFilterQuery, setExtFilterQuery] = useState("");
+  const [lastSyncedPage, setLastSyncedPage] = useState(shownPage);
+
+  if (lastSyncedPage !== shownPage) {
+    setLastSyncedPage(shownPage);
+    if (extensionNav.some((item) => item.id === shownPage)) {
+      if (!extensionsOpen) setExtensionsOpen(true);
+      const needle = extFilterQuery.trim().toLowerCase();
+      if (needle !== "") {
+        const activeExt = extensionNav.find((item) => item.id === shownPage);
+        if (
+          activeExt !== undefined &&
+          !`${activeExt.label} ${activeExt.heading} ${activeExt.contributedBy ?? ""}`
+            .toLowerCase()
+            .includes(needle)
+        ) {
+          setExtFilterQuery("");
+        }
+      }
+    }
+  }
 
   const extNeedle = extFilterQuery.trim().toLowerCase();
   const filteredExtNav = extNeedle === ""
@@ -122,7 +144,7 @@ export function CoreSettingsNav({
 
       <div className="settings-nav-footer">
         <span className="settings-nav-app">千机</span>
-        <kbd>Ctrl+,</kbd>
+        <kbd>{shortcutLabel}</kbd>
       </div>
     </aside>
   );

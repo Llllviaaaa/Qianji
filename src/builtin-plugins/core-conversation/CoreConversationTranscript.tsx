@@ -37,10 +37,16 @@ export function CoreConversationTurn({
 }: SlotComponentProps<ConversationTurnSlotProps, "session">): ReactNode {
   const sessionService = useFrontendService("sessionService");
   const composerService = useFrontendService("composerService");
+  const navigationService = useFrontendService("navigationService");
   const { handle } = useSessionHandle(sessionId);
+  const canRewind = composerService?.hasRewindHandler() === true;
 
   const handleRewind = useCallback(
     (message: UiMessage) => {
+      if (isStreaming) {
+        navigationService?.showToast("请等待当前回复完成后再回退消息", "warning");
+        return;
+      }
       if (composerService !== undefined && composerService.hasRewindHandler()) {
         void composerService.tryHandleRewind(message);
         return;
@@ -52,18 +58,22 @@ export function CoreConversationTurn({
         void sessionService?.rewind(message.entryId);
       }
     },
-    [composerService, handle, sessionService],
+    [composerService, handle, isStreaming, navigationService, sessionService],
   );
 
   const handleEditAndResend = useCallback(
     (entryId: string, text: string) => {
+      if (isStreaming) {
+        navigationService?.showToast("请等待当前回复完成后再编辑消息", "warning");
+        return;
+      }
       if (handle !== null) {
         void handle.editAndResend(entryId, text);
       } else {
         void sessionService?.editAndResend(entryId, text);
       }
     },
-    [handle, sessionService],
+    [handle, isStreaming, navigationService, sessionService],
   );
 
   let lastAssistantIdx = -1;
@@ -100,7 +110,7 @@ export function CoreConversationTurn({
           isStreaming: false,
           isLast: isLastTurn && assistantMessages.length === 0,
           isLastUserTurn,
-          onRewind: handleRewind,
+          ...(canRewind ? { onRewind: handleRewind } : {}),
           onEditAndResend: handleEditAndResend,
         })}
 

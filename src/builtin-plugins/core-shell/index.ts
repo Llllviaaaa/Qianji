@@ -61,61 +61,125 @@ export const coreShellPlugin: Plugin.Object = {
       component: CoreShellTopbar,
     });
 
-    // Global shell shortcuts wired through ShortcutService (automatically disposed on Fiber unmount).
-    let activeToggleKey = ctx.themeService.getSnapshot().shortcutToggleSidebar || "Ctrl+B";
-    let disposeToggleShortcut = ctx.shortcutService.register({
-      id: `${CORE_SHELL_PLUGIN_ID}:toggle-sidebar`,
-      pluginId: CORE_SHELL_PLUGIN_ID,
-      key: activeToggleKey,
-      label: "切换左侧栏",
-      when: (sc) => !sc.inEditable && !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
-      run: () => {
-        ctx.navigationService.toggleSidebar();
-      },
-    });
-    const offThemeShortcut = ctx.themeService.subscribe(() => {
-      const nextKey = ctx.themeService.getSnapshot().shortcutToggleSidebar || "Ctrl+B";
-      if (nextKey === activeToggleKey) return;
-      activeToggleKey = nextKey;
-      disposeToggleShortcut();
-      disposeToggleShortcut = ctx.shortcutService.register({
-        id: `${CORE_SHELL_PLUGIN_ID}:toggle-sidebar`,
-        pluginId: CORE_SHELL_PLUGIN_ID,
-        key: activeToggleKey,
-        label: "切换左侧栏",
-        when: (sc) => !sc.inEditable && !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
-        run: () => {
-          ctx.navigationService.toggleSidebar();
+    const dispatchTerminalShortcut = () => {
+      ctx.navigationService.closeSettings();
+      ctx.navigationService.setHubView(null);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("qianji:toggle-terminal-shortcut"));
+      } else {
+        ctx.workbenchService.toggleBottom();
+      }
+    };
+
+    const isPaneAvailable = (paneId: string): boolean => {
+      const reg = ctx.slots?.registry;
+      if (reg === undefined) return true;
+      return reg.getKeyedCandidates("workbench.panes", paneId).length > 0;
+    };
+
+    // Dynamically re-bind all 5 user-customizable shortcuts whenever themeService settings change.
+    const registerDynamicShortcuts = (): {
+      readonly keysSig: string;
+      readonly dispose: () => void;
+    } => {
+      const snap = ctx.themeService.getSnapshot();
+      const kToggleSidebar = snap.shortcutToggleSidebar || "Ctrl+B";
+      const kSettings = snap.shortcutSettings || "Ctrl+,";
+      const kNewChat = snap.shortcutNewChat || "Ctrl+Shift+N";
+      const kTerminal = snap.shortcutTerminal || "Ctrl+Shift+T";
+      const kChanges = snap.shortcutChanges || "Ctrl+Shift+G";
+      const keysSig = [kToggleSidebar, kSettings, kNewChat, kTerminal, kChanges].join("|");
+
+      const disposers = [
+        ctx.shortcutService.register({
+          id: `${CORE_SHELL_PLUGIN_ID}:toggle-sidebar`,
+          pluginId: CORE_SHELL_PLUGIN_ID,
+          key: kToggleSidebar,
+          label: "切换左侧栏",
+          when: (sc) => !sc.inEditable && !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
+          run: () => {
+            if (typeof window !== "undefined") {
+              const ev = new CustomEvent("qianji:sidebar-toggle-request", { cancelable: true });
+              window.dispatchEvent(ev);
+              if (!ev.defaultPrevented) {
+                ctx.navigationService.toggleSidebar();
+              }
+            } else {
+              ctx.navigationService.toggleSidebar();
+            }
+          },
+        }),
+        ctx.shortcutService.register({
+          id: `${CORE_SHELL_PLUGIN_ID}:open-settings`,
+          pluginId: CORE_SHELL_PLUGIN_ID,
+          key: kSettings,
+          label: "打开设置",
+          allowInEditable: true,
+          run: () => {
+            ctx.navigationService.openSettings("general");
+          },
+        }),
+        ctx.shortcutService.register({
+          id: `${CORE_SHELL_PLUGIN_ID}:new-task`,
+          pluginId: CORE_SHELL_PLUGIN_ID,
+          key: kNewChat,
+          label: "新建对话",
+          allowInEditable: true,
+          run: () => {
+            ctx.navigationService.closeSettings();
+            const cwd = ctx.workspaceService.getSnapshot().cwd;
+            ctx.navigationService.navigate({ kind: "home", workspace: cwd });
+          },
+        }),
+        ctx.shortcutService.register({
+          id: `${CORE_SHELL_PLUGIN_ID}:toggle-terminal-custom`,
+          pluginId: CORE_SHELL_PLUGIN_ID,
+          key: kTerminal,
+          label: "切换集成终端",
+          allowInEditable: true,
+          when: (sc) => !sc.inTerminal,
+          run: dispatchTerminalShortcut,
+        }),
+        ctx.shortcutService.register({
+          id: `${CORE_SHELL_PLUGIN_ID}:open-review`,
+          pluginId: CORE_SHELL_PLUGIN_ID,
+          key: kChanges,
+          label: "打开代码变更审查",
+          allowInEditable: true,
+          when: (sc) => !sc.inTerminal && isPaneAvailable("review"),
+          run: () => {
+            ctx.navigationService.closeSettings();
+            ctx.navigationService.setHubView(null);
+            ctx.workbenchService.openReview();
+          },
+        }),
+      ];
+
+      return {
+        keysSig,
+        dispose: () => {
+          for (const d of disposers) d();
         },
-      });
+      };
+    };
+
+    let dynamicShortcuts = registerDynamicShortcuts();
+    const offThemeShortcut = ctx.themeService.subscribe(() => {
+      const snap = ctx.themeService.getSnapshot();
+      const nextSig = [
+        snap.shortcutToggleSidebar || "Ctrl+B",
+        snap.shortcutSettings || "Ctrl+,",
+        snap.shortcutNewChat || "Ctrl+Shift+N",
+        snap.shortcutTerminal || "Ctrl+Shift+T",
+        snap.shortcutChanges || "Ctrl+Shift+G",
+      ].join("|");
+      if (nextSig === dynamicShortcuts.keysSig) return;
+      dynamicShortcuts.dispose();
+      dynamicShortcuts = registerDynamicShortcuts();
     });
     ctx.effect(() => () => {
       offThemeShortcut();
-      disposeToggleShortcut();
-    });
-
-    ctx.shortcutService.register({
-      id: `${CORE_SHELL_PLUGIN_ID}:open-settings`,
-      pluginId: CORE_SHELL_PLUGIN_ID,
-      key: "Ctrl+,",
-      label: "打开设置",
-      allowInEditable: true,
-      run: () => {
-        ctx.navigationService.openSettings("general");
-      },
-    });
-
-    ctx.shortcutService.register({
-      id: `${CORE_SHELL_PLUGIN_ID}:new-task`,
-      pluginId: CORE_SHELL_PLUGIN_ID,
-      key: "Ctrl+Shift+N",
-      label: "新建对话",
-      allowInEditable: true,
-      run: () => {
-        ctx.navigationService.closeSettings();
-        const cwd = ctx.workspaceService.getSnapshot().cwd;
-        ctx.navigationService.navigate({ kind: "home", workspace: cwd });
-      },
+      dynamicShortcuts.dispose();
     });
 
     ctx.shortcutService.register({
@@ -123,11 +187,13 @@ export const coreShellPlugin: Plugin.Object = {
       pluginId: CORE_SHELL_PLUGIN_ID,
       key: "Ctrl+K",
       label: "搜索会话与项目",
+      allowInEditable: true,
       when: (sc) => !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
       run: () => {
-        ctx.navigationService.setSidebarVisible(true);
         if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("qianji:sidebar-search-request"));
+          window.dispatchEvent(new CustomEvent("qianji:sidebar-search-open"));
+        } else {
+          ctx.navigationService.setSidebarVisible(true);
         }
       },
     });
@@ -137,6 +203,7 @@ export const coreShellPlugin: Plugin.Object = {
       pluginId: CORE_SHELL_PLUGIN_ID,
       key: "Ctrl+O",
       label: "切换对话密度",
+      allowInEditable: true,
       when: (sc) => !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
       run: async () => {
         await ctx.themeService.cycleTranscriptDensity();
@@ -144,15 +211,36 @@ export const coreShellPlugin: Plugin.Object = {
     });
 
     ctx.shortcutService.register({
-      id: `${CORE_SHELL_PLUGIN_ID}:toggle-bottom`,
+      id: `${CORE_SHELL_PLUGIN_ID}:toggle-terminal-ctrl-j`,
       pluginId: CORE_SHELL_PLUGIN_ID,
       key: "Ctrl+J",
-      label: "切换底部工作台",
+      label: "切换集成终端",
+      allowInEditable: true,
       when: (sc) => !sc.inTerminal,
+      run: dispatchTerminalShortcut,
+    });
+
+    ctx.shortcutService.register({
+      id: `${CORE_SHELL_PLUGIN_ID}:toggle-terminal-backquote`,
+      pluginId: CORE_SHELL_PLUGIN_ID,
+      key: "Ctrl+`",
+      label: "切换集成终端",
+      allowInEditable: true,
+      when: (sc) => !sc.inTerminal,
+      run: dispatchTerminalShortcut,
+    });
+
+    ctx.shortcutService.register({
+      id: `${CORE_SHELL_PLUGIN_ID}:open-browser-preview`,
+      pluginId: CORE_SHELL_PLUGIN_ID,
+      key: "Ctrl+T",
+      label: "打开网页预览",
+      allowInEditable: true,
+      when: (sc) => !sc.inTerminal && isPaneAvailable("preview"),
       run: () => {
         ctx.navigationService.closeSettings();
         ctx.navigationService.setHubView(null);
-        ctx.workbenchService.toggleBottom();
+        ctx.workbenchService.openPane("preview");
       },
     });
 
@@ -173,23 +261,19 @@ export const coreShellPlugin: Plugin.Object = {
       id: `${CORE_SHELL_PLUGIN_ID}:open-workspace`,
       pluginId: CORE_SHELL_PLUGIN_ID,
       key: "Ctrl+Shift+O",
-      label: "在文件资源管理器中打开工作区",
+      label: "打开工作区目录",
+      allowInEditable: true,
       when: (sc) => !sc.inTerminal && ctx.workspaceService.getSnapshot().cwd !== "",
       run: async () => {
-        await ctx.workspaceService.openInFileManager();
-      },
-    });
-
-    ctx.shortcutService.register({
-      id: `${CORE_SHELL_PLUGIN_ID}:open-review`,
-      pluginId: CORE_SHELL_PLUGIN_ID,
-      key: "Ctrl+Shift+G",
-      label: "打开代码变更审查",
-      when: (sc) => !sc.inTerminal,
-      run: () => {
-        ctx.navigationService.closeSettings();
-        ctx.navigationService.setHubView(null);
-        ctx.workbenchService.openReview();
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("qianji:open-workspace-preferred", {
+              detail: { cwd: ctx.workspaceService.getSnapshot().cwd },
+            }),
+          );
+        } else {
+          await ctx.workspaceService.openInFileManager();
+        }
       },
     });
 

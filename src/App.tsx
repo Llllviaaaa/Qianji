@@ -27,12 +27,25 @@ export default function App() {
           onNotify={fileActions.onNotify}
         >
           <WorkspaceFileOpenContext.Provider value={fileActions.onOpenPreview}>
-            <SafeModeBanner />
-            <SlotRoot
-              registry={clientSlotsRegistry}
-              ctx={root}
-              props={{ safeMode: safeMode.active }}
-            />
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                width: "100%",
+                height: "100%",
+                minHeight: 0,
+                overflow: "hidden",
+              }}
+            >
+              <SafeModeBanner />
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                <SlotRoot
+                  registry={clientSlotsRegistry}
+                  ctx={root}
+                  props={{ safeMode: safeMode.active }}
+                />
+              </div>
+            </div>
           </WorkspaceFileOpenContext.Provider>
         </FileActionsProvider>
       </SlotKernelProvider>

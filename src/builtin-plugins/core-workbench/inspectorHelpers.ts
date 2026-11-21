@@ -71,16 +71,25 @@ export function derivePlanSteps(messages: readonly UiMessage[]): DerivedPlanItem
       if (call === undefined) continue;
       const lower = call.name.toLowerCase();
       if (lower !== "update_plan" && lower !== "plan_update" && lower !== "todo_write") continue;
-      const rawSteps = Array.isArray(call.args.plan)
-        ? call.args.plan
-        : Array.isArray(call.args.todos)
-          ? call.args.todos
-          : [];
+      const rawSteps = Array.isArray(call.args.items)
+        ? call.args.items
+        : Array.isArray(call.args.plan)
+          ? call.args.plan
+          : Array.isArray(call.args.todos)
+            ? call.args.todos
+            : [];
       const parsed: DerivedPlanItem[] = [];
       rawSteps.forEach((raw, idx) => {
         if (typeof raw !== "object" || raw === null) return;
         const rec = raw as Record<string, unknown>;
-        const text = typeof rec.step === "string" ? rec.step : typeof rec.content === "string" ? rec.content : "";
+        const text =
+          typeof rec.text === "string"
+            ? rec.text
+            : typeof rec.step === "string"
+              ? rec.step
+              : typeof rec.content === "string"
+                ? rec.content
+                : "";
         if (text.trim() === "") return;
         const status =
           rec.status === "completed" || rec.status === "in_progress" ? rec.status : "pending";

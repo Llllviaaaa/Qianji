@@ -1,17 +1,5 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
-import {
-  ChevronDown,
-  Folder,
-  MoreHorizontal,
-  SquarePen,
-} from "lucide-react";
-import {
-  useFrontendService,
-  useMenusState,
-  useNavigationState,
-  useSessionState,
-  useWorkspaceState,
-} from "@qianji/client";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { useFrontendService, useMenusState } from "@qianji/client";
 import {
   SlotHost,
   type SidebarThreadsSlotProps,
@@ -22,211 +10,56 @@ import {
   SidebarContextMenus,
   SidebarProjectsHeader,
 } from "./CoreSidebarMenus";
+import { CoreSidebarProjectSection } from "./CoreSidebarProjectSection";
 import { CoreSidebarSessionRow } from "./CoreSidebarSessionRow";
 import {
-  buildSidebarProjectGroups,
-  COLLAPSED_PROJECTS_KEY,
+  dispatchSidebarClosePreview,
   formatSessionTitle,
   groupSessionsByTimeBucket,
-  PINNED_SESSIONS_KEY,
-  readGroupMode,
-  readStringList,
-  repoName,
   sameLocalPath,
-  sortSidebarSessions,
   VISIBLE_RECENT_THREADS,
-  VISIBLE_THREADS_PER_PROJECT,
-  writeGroupMode,
-  writeStringList,
-  type SidebarGroupMode,
+  visibleProjectSessions,
   type SidebarSessionItem,
 } from "./sidebarHelpers";
+import { useCoreSidebarThreads } from "./useCoreSidebarThreads";
 
 export { CoreSidebarSessionRow };
 
+function computeMenuTop(event: ReactMouseEvent<HTMLElement>): number {
+  const sidebar = event.currentTarget.closest<HTMLElement>("[data-slot='sidebar']");
+  const sidebarTop = sidebar?.getBoundingClientRect().top ?? 0;
+  return Math.max(54, event.clientY - sidebarTop - 7);
+}
+
 export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotProps, "root">) {
-  const { ctx } = props;
-  const navigationService = useFrontendService("navigationService", ctx);
-  const sessionService = useFrontendService("sessionService", ctx);
-  const workspaceService = useFrontendService("workspaceService", ctx);
-  const menuService = useFrontendService("menuService", ctx);
+  const menuService = useFrontendService("menuService", props.ctx);
+  useMenusState(props.ctx);
+  const state = useCoreSidebarThreads(props);
 
-  const navSnap = useNavigationState(ctx);
-  const sessionSnap = useSessionState(ctx);
-  const workspaceSnap = useWorkspaceState(ctx);
-  useMenusState(ctx);
+  const renderSessionRow = (session: SidebarSessionItem, projectLabel?: string) => {
+    const isActive = !state.newTaskActive && sameLocalPath(session.file, state.activeSessionFile);
+    const isRunning = state.runningSessionFiles.some((file) => sameLocalPath(file, session.file));
+    const isApproval = state.approvalSessionFiles.some((file) => sameLocalPath(file, session.file));
+    const isPinned = state.pinnedFiles.some((file) => sameLocalPath(file, session.file));
+    const snippet =
+      state.trimmedQuery !== ""
+        ? state.snippetByFile.get(session.file.replace(/\\/g, "/").toLowerCase())
+        : undefined;
+    const isEditing =
+      state.editingSessionFile !== null && sameLocalPath(session.file, state.editingSessionFile);
+    const isMenuOpen =
+      state.threadMenu !== null && sameLocalPath(state.threadMenu.session.file, session.file);
 
-  const [query, setQuery] = useState(props.searchQuery ?? "");
-  const [workspaceView, setWorkspaceView] = useState<"active" | "archived">("active");
-  const [groupMode, setGroupMode] = useState<SidebarGroupMode>(() => readGroupMode());
-  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
-  const [pinnedFiles, setPinnedFiles] = useState<string[]>(() => readStringList(PINNED_SESSIONS_KEY));
-  const [collapsedProjects, setCollapsedProjects] = useState<string[]>(() => readStringList(COLLAPSED_PROJECTS_KEY));
-  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
-  const [recentExpanded, setRecentExpanded] = useState(false);
-  const [archivedSessions, setArchivedSessions] = useState<SidebarSessionItem[]>([]);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const [projectMenu, setProjectMenu] = useState<{ workspace: string; top: number } | null>(null);
-  const [threadMenu, setThreadMenu] = useState<{ session: SidebarSessionItem; top: number } | null>(null);
-  const [ftsMatches, setFtsMatches] = useState<{
-    readonly query: string;
-    readonly items: ReadonlyArray<{ readonly file: string; readonly cwd: string; readonly snippet: string; readonly title: string }>;
-  }>({ query: "", items: [] });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const onQuery = (event: Event) => {
-      const custom = event as CustomEvent<string>;
-      if (typeof custom.detail === "string") setQuery(custom.detail);
+    const openMenu = (event: ReactMouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.setProjectMenu(null);
+      state.setFilterMenuOpen(false);
+      state.setThreadMenu({ session, top: computeMenuTop(event) });
     };
-    window.addEventListener("qianji:sidebar-search-query", onQuery);
-    return () => window.removeEventListener("qianji:sidebar-search-query", onQuery);
-  }, []);
 
-  useEffect(() => {
-    if (workspaceView !== "archived" || sessionService === undefined) return undefined;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await sessionService.listArchivedSessions();
-        if (!cancelled) {
-          setArchivedSessions(list);
-          setArchivedLoading(false);
-        }
-      } catch {
-        if (!cancelled) setArchivedLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionService, workspaceView]);
-
-  const effectiveQuery = props.searchQuery !== undefined && props.searchQuery !== "" ? props.searchQuery : query;
-  const trimmedQuery = effectiveQuery.trim();
-
-  useEffect(() => {
-    if (trimmedQuery === "" || sessionService === undefined) return undefined;
-    let cancelled = false;
-    const timer = typeof window !== "undefined"
-      ? window.setTimeout(() => {
-          void sessionService
-            .searchSessions(trimmedQuery, { limit: 24 })
-            .then((matches) => {
-              if (cancelled) return;
-              setFtsMatches({
-                query: trimmedQuery,
-                items: matches.map((m) => ({
-                  file: m.session.file,
-                  cwd: m.session.cwd,
-                  snippet: m.snippet,
-                  title: m.session.name || m.session.firstMessage || m.session.file,
-                })),
-              });
-            })
-            .catch(() => undefined);
-        }, 80)
-      : undefined;
-    return () => {
-      cancelled = true;
-      if (timer !== undefined && typeof window !== "undefined") window.clearTimeout(timer);
-    };
-  }, [sessionService, trimmedQuery]);
-
-  const activeFtsMatches = useMemo(
-    () => (trimmedQuery !== "" && ftsMatches.query === trimmedQuery ? ftsMatches.items : []),
-    [ftsMatches, trimmedQuery],
-  );
-  const snippetByFile = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const item of activeFtsMatches) {
-      if (item.snippet.trim() !== "") map.set(item.file.replace(/\\/g, "/").toLowerCase(), item.snippet);
-    }
-    return map;
-  }, [activeFtsMatches]);
-
-  const sessions = useMemo(() => sessionSnap?.sessions ?? [], [sessionSnap?.sessions]);
-  const projects = useMemo(() => workspaceSnap?.projects ?? [], [workspaceSnap?.projects]);
-  const activeSessionFile = props.activeSessionFile !== undefined
-    ? props.activeSessionFile
-    : (sessionSnap?.sessionFile ?? null);
-  const activeCwd = props.cwd ?? workspaceSnap?.cwd ?? sessionSnap?.cwd ?? "";
-  const newTaskActive = (navSnap?.newTask ?? true) && (navSnap?.hubView ?? null) === null;
-  const isStreaming = sessionSnap?.isStreaming ?? false;
-
-  const groups = useMemo(() => {
-    const base = buildSidebarProjectGroups({ query: effectiveQuery, sessions, projects, pinnedFiles });
-    if (activeFtsMatches.length === 0) return base;
-    const existingFiles = new Set(base.flatMap(([, chats]) => chats.map((c) => c.file.replace(/\\/g, "/").toLowerCase())));
-    const byWorkspace = new Map<string, SidebarSessionItem[]>(base.map(([ws, chats]) => [ws, [...chats]]));
-    for (const match of activeFtsMatches) {
-      const key = match.file.replace(/\\/g, "/").toLowerCase();
-      if (existingFiles.has(key)) continue;
-      const found = sessions.find((s) => sameLocalPath(s.file, match.file));
-      if (found === undefined) continue;
-      existingFiles.add(key);
-      const list = byWorkspace.get(found.cwd) ?? [];
-      list.push(found);
-      byWorkspace.set(found.cwd, list);
-    }
-    return [...byWorkspace.entries()];
-  }, [activeFtsMatches, effectiveQuery, pinnedFiles, projects, sessions]);
-  const recentSessions = useMemo(
-    () => sortSidebarSessions(groups.flatMap(([, chats]) => chats), pinnedFiles),
-    [groups, pinnedFiles],
-  );
-
-  const togglePinned = (file: string) => {
-    setPinnedFiles((prev) => {
-      const exists = prev.some((item) => sameLocalPath(item, file));
-      const next = exists ? prev.filter((item) => !sameLocalPath(item, file)) : [file, ...prev];
-      writeStringList(PINNED_SESSIONS_KEY, next);
-      return next;
-    });
-  };
-
-  const toggleCollapsedProject = (workspace: string) => {
-    setCollapsedProjects((prev) => {
-      const exists = prev.some((item) => sameLocalPath(item, workspace));
-      const next = exists ? prev.filter((item) => !sameLocalPath(item, workspace)) : [...prev, workspace];
-      writeStringList(COLLAPSED_PROJECTS_KEY, next);
-      return next;
-    });
-  };
-
-  const handleOpenSession = (session: SidebarSessionItem) => {
-    setProjectMenu(null);
-    setThreadMenu(null);
-    navigationService?.navigate({ kind: "session", cwd: session.cwd, file: session.file });
-  };
-
-  const handleArchiveSession = (session: SidebarSessionItem) => {
-    void sessionService?.archiveSession(session.file).then(() => {
-      navigationService?.forgetSessions([session.file]);
-      navigationService?.showToast("已归档对话", "info");
-    });
-  };
-
-  const handleDeleteSession = (session: SidebarSessionItem) => {
-    void sessionService?.deleteSession(session.file).then(() => {
-      navigationService?.forgetSessions([session.file]);
-      navigationService?.showToast("已删除对话", "info");
-    });
-  };
-
-  const renderSessionRow = (session: SidebarSessionItem) => {
-    const isActive = !newTaskActive && sameLocalPath(session.file, activeSessionFile);
-    const isRunning = isStreaming && sameLocalPath(session.file, activeSessionFile);
-    const snippet = snippetByFile.get(session.file.replace(/\\/g, "/").toLowerCase());
     return (
-      <div
-        key={session.file}
-        onContextMenu={(event: ReactMouseEvent<HTMLDivElement>) => {
-          event.preventDefault();
-          setProjectMenu(null);
-          setThreadMenu({ session, top: Math.max(54, event.clientY - 40) });
-        }}
-      >
+      <div key={session.file} style={{ display: "contents" }}>
         <SlotHost
           slotKey="sidebar.sessionRow"
           kind="chain"
@@ -235,242 +68,266 @@ export function CoreSidebarThreads(props: SlotComponentProps<SidebarThreadsSlotP
             session,
             active: isActive,
             running: isRunning,
-            onSelect: () => handleOpenSession(session),
-            onRename: (nextTitle: string) => void sessionService?.renameSession(nextTitle, session.file),
-            onArchive: () => handleArchiveSession(session),
-            onDelete: () => handleDeleteSession(session),
+            approval: isApproval,
+            pinned: isPinned,
+            ...(projectLabel === undefined ? {} : { projectLabel }),
+            ...(snippet === undefined ? {} : { snippet }),
+            menuOpen: isMenuOpen,
+            editing: isEditing,
+            renameDraft: isEditing ? state.sessionTitleDraft : "",
+            onChangeRenameDraft: state.setSessionTitleDraft,
+            onCommitRename: state.commitSessionRename,
+            onCancelRename: () => state.setEditingSessionFile(null),
+            onSelect: () => state.handleOpenSession(session),
+            onTogglePinned: () => state.togglePinned(session.file),
+            onRename: (nextTitle: string) => void state.sessionService?.renameSession(nextTitle, session.file),
+            onArchive: () => state.handleArchiveSession(session),
+            onDelete: () => state.handleDeleteSession(session),
+            onOpenMenu: openMenu,
+            onContextMenu: openMenu,
           }}
         />
-        {snippet !== undefined && snippet !== "" && (
-          <button
-            type="button"
-            className="thread-search-snippet"
-            onClick={() => handleOpenSession(session)}
-          >
-            {snippet}
-          </button>
-        )}
       </div>
     );
   };
 
-  const projectMenuChats = projectMenu !== null
-    ? (groups.find(([workspace]) => sameLocalPath(workspace, projectMenu.workspace))?.[1] ?? [])
-    : [];
-  const projectPluginItems = projectMenu !== null
-    ? (menuService?.getItems("sidebar.project", {
-        workspace: projectMenu.workspace,
-        sessionFiles: projectMenuChats.map((item) => item.file),
-      }) ?? [])
-    : [];
-  const threadPluginItems = threadMenu !== null
-    ? (menuService?.getItems("sidebar.thread", {
-        cwd: threadMenu.session.cwd,
-        sessionFile: threadMenu.session.file,
-        title: formatSessionTitle(threadMenu.session),
-      }) ?? [])
-    : [];
+  const projectMenuChats =
+    state.projectMenu !== null
+      ? (state.groups.find(([ws]) => sameLocalPath(ws, state.projectMenu?.workspace))?.[1] ?? [])
+      : [];
+  const projectPluginItems =
+    state.projectMenu !== null
+      ? (menuService?.getItems("sidebar.project", {
+          workspace: state.projectMenu.workspace,
+          sessionFiles: projectMenuChats.map((item) => item.file),
+        }) ?? [])
+      : [];
+  const threadPluginItems =
+    state.threadMenu !== null
+      ? (menuService?.getItems("sidebar.thread", {
+          cwd: state.threadMenu.session.cwd,
+          sessionFile: state.threadMenu.session.file,
+          title: formatSessionTitle(state.threadMenu.session),
+        }) ?? [])
+      : [];
+
+  const showAllRecent = state.recentExpanded || state.trimmedQuery !== "";
+  const { visible: visibleRecent, hiddenCount: hiddenRecentCount } = visibleProjectSessions(
+    state.recentSessions,
+    showAllRecent,
+    state.isImportantSession,
+    VISIBLE_RECENT_THREADS,
+  );
+  const canCollapseRecent =
+    state.trimmedQuery === "" &&
+    state.recentExpanded &&
+    visibleProjectSessions(
+      state.recentSessions,
+      false,
+      state.isImportantSession,
+      VISIBLE_RECENT_THREADS,
+    ).hiddenCount > 0;
 
   return (
     <>
       <SidebarProjectsHeader
-        workspaceView={workspaceView}
-        groupMode={groupMode}
-        filterMenuOpen={filterMenuOpen}
-        onToggleFilterMenu={() => setFilterMenuOpen((prev) => !prev)}
-        onSelectGroupMode={(mode) => {
-          setGroupMode(mode);
-          writeGroupMode(mode);
-          setWorkspaceView("active");
-          setFilterMenuOpen(false);
+        workspaceView={state.workspaceView}
+        groupMode={state.groupMode}
+        filterMenuOpen={state.filterMenuOpen}
+        onToggleFilterMenu={() => {
+          state.setProjectMenu(null);
+          state.setThreadMenu(null);
+          state.setFilterMenuOpen((prev) => !prev);
         }}
+        onCloseFilterMenu={() => state.setFilterMenuOpen(false)}
+        onSelectGroupMode={state.selectGroupMode}
         onToggleArchivedView={() => {
-          const nextView = workspaceView === "archived" ? "active" : "archived";
-          if (nextView === "archived") setArchivedLoading(true);
-          setWorkspaceView(nextView);
-          setFilterMenuOpen(false);
+          const nextView = state.workspaceView === "archived" ? "active" : "archived";
+          if (nextView === "archived") state.setArchivedLoading(true);
+          state.setWorkspaceView(nextView);
+          state.setFilterMenuOpen(false);
         }}
-        onBackFromArchived={() => setWorkspaceView("active")}
+        onBackFromArchived={() => state.setWorkspaceView("active")}
         onPickFolder={() => {
-          setFilterMenuOpen(false);
-          void workspaceService?.pickFolder().then((selected) => {
-            if (selected) navigationService?.navigate({ kind: "home", workspace: selected });
+          state.setFilterMenuOpen(false);
+          void state.workspaceService?.pickFolder().then((selected) => {
+            if (selected) {
+              dispatchSidebarClosePreview();
+              state.navigationService?.navigate({ kind: "home", workspace: selected });
+            }
           });
         }}
       />
 
-      <div className="sidebar-scroll" data-dsh-claude-ws-view={workspaceView}>
-        {workspaceView === "archived" ? (
+      <div className="sidebar-scroll" data-dsh-claude-ws-view={state.workspaceView}>
+        {state.workspaceView === "archived" ? (
           <SidebarArchivedList
-            loading={archivedLoading}
-            sessions={archivedSessions}
+            loading={state.archivedLoading}
+            sessions={state.filteredArchivedSessions}
+            displayProjectName={state.displayProjectName}
             onOpen={(session) => {
-              setWorkspaceView("active");
-              handleOpenSession(session);
+              state.setWorkspaceView("active");
+              state.handleOpenSession(session);
             }}
             onRestore={(session) => {
-              void sessionService?.restoreSession(session.file).then(() => {
-                setArchivedSessions((prev) => prev.filter((item) => item.file !== session.file));
-              });
+              void state.sessionService
+                ?.restoreSession(session.file)
+                .then(() => {
+                  state.setArchivedSessions((prev) => prev.filter((item) => item.file !== session.file));
+                  state.navigationService?.showToast("已恢复对话", "info");
+                })
+                .catch((error) => {
+                  const msg = error instanceof Error ? error.message : String(error);
+                  state.navigationService?.showToast(`恢复失败：${msg}`, "error");
+                });
             }}
             onDelete={(session) => {
-              void sessionService?.deleteSession(session.file).then(() => {
-                setArchivedSessions((prev) => prev.filter((item) => item.file !== session.file));
-              });
+              void state.sessionService
+                ?.deleteSession(session.file)
+                .then(() => {
+                  state.setArchivedSessions((prev) => prev.filter((item) => item.file !== session.file));
+                  state.navigationService?.showToast("已删除对话", "info");
+                })
+                .catch((error) => {
+                  const msg = error instanceof Error ? error.message : String(error);
+                  state.navigationService?.showToast(`删除失败：${msg}`, "error");
+                });
             }}
           />
-        ) : groups.length === 0 ? (
+        ) : state.groups.length === 0 ? (
           <div className="sidebar-empty">
-            <span>{trimmedQuery !== "" ? "没有匹配项" : "打开项目以开始"}</span>
+            <span>{state.trimmedQuery !== "" ? "没有匹配项" : "打开项目以开始"}</span>
             <button
               type="button"
               className="text-link"
               onClick={() => {
-                void workspaceService?.pickFolder().then((selected) => {
-                  if (selected) navigationService?.navigate({ kind: "home", workspace: selected });
+                void state.workspaceService?.pickFolder().then((selected) => {
+                  if (selected) {
+                    dispatchSidebarClosePreview();
+                    state.navigationService?.navigate({ kind: "home", workspace: selected });
+                  }
                 });
               }}
             >
               选择文件夹
             </button>
           </div>
-        ) : groupMode === "recent" ? (
+        ) : state.groupMode === "recent" ? (
           <div className="thread-list-recent">
-            {groupSessionsByTimeBucket(
-              recentExpanded || trimmedQuery !== ""
-                ? recentSessions
-                : recentSessions.slice(0, VISIBLE_RECENT_THREADS),
-              pinnedFiles,
-            ).map((bucket) => (
+            {groupSessionsByTimeBucket(visibleRecent, state.pinnedFiles).map((bucket) => (
               <section key={bucket.id} className="thread-bucket-section">
                 <div className="thread-bucket-label">{bucket.label}</div>
-                <div className="thread-list">{bucket.sessions.map((session) => renderSessionRow(session))}</div>
+                <div className="thread-list">
+                  {bucket.sessions.map((session) =>
+                    renderSessionRow(session, state.displayProjectName(session.cwd)),
+                  )}
+                </div>
               </section>
             ))}
-            {trimmedQuery === "" && recentSessions.length > VISIBLE_RECENT_THREADS && (
-              <button type="button" className="expand-threads" onClick={() => setRecentExpanded((prev) => !prev)}>
-                {recentExpanded ? "收起" : `展开其余 ${recentSessions.length - VISIBLE_RECENT_THREADS} 个会话`}
+            {state.trimmedQuery === "" && (hiddenRecentCount > 0 || canCollapseRecent) && (
+              <button
+                type="button"
+                className="expand-threads"
+                onClick={() => state.setRecentExpanded((prev) => !prev)}
+              >
+                {state.recentExpanded ? "收起" : `展开其余 ${hiddenRecentCount} 个会话`}
               </button>
             )}
           </div>
         ) : (
-          groups.map(([workspace, chats]) => {
-            const collapsed = trimmedQuery === "" && collapsedProjects.some((p) => sameLocalPath(p, workspace));
-            const expanded = trimmedQuery !== "" || Boolean(expandedProjects[workspace]);
-            const visibleChats = expanded ? chats : chats.slice(0, VISIBLE_THREADS_PER_PROJECT);
-            const hiddenCount = Math.max(0, chats.length - visibleChats.length);
-            const isCurrentWorkspace = sameLocalPath(workspace, activeCwd);
-            const isMenuOpen = projectMenu !== null && sameLocalPath(projectMenu.workspace, workspace);
-            const projectName = repoName(workspace);
-
+          state.groups.map(([workspace, chats]) => {
+            const cfg = state.projectConfigFor(workspace);
+            const collapsed =
+              state.trimmedQuery === "" &&
+              state.collapsedProjects.some((p) => sameLocalPath(p, workspace));
             return (
-              <section
+              <CoreSidebarProjectSection
                 key={workspace}
-                className={`project-block${isCurrentWorkspace ? " is-current" : ""}${isMenuOpen ? " is-menu-open" : ""}`}
-                data-workspace={workspace}
-              >
-                <div className="project-header-row">
-                  {chats.length > 0 ? (
-                    <button
-                      type="button"
-                      className={`project-collapse-toggle${collapsed ? " is-collapsed" : ""}`}
-                      title={collapsed ? "展开会话" : "折叠会话"}
-                      aria-label={`${collapsed ? "展开" : "折叠"} ${projectName} 的会话`}
-                      aria-expanded={!collapsed}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleCollapsedProject(workspace);
-                      }}
-                    >
-                      <Folder className="project-folder-glyph" size={14} strokeWidth={1.75} aria-hidden="true" />
-                      <ChevronDown className="project-chevron-glyph" size={13.5} strokeWidth={1.9} aria-hidden="true" />
-                    </button>
-                  ) : (
-                    <span className="project-folder-static" aria-hidden="true">
-                      <Folder size={14} strokeWidth={1.75} />
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    className="project-header"
-                    title={workspace}
-                    onClick={() => {
-                      setProjectMenu(null);
-                      setThreadMenu(null);
-                      if (collapsed) toggleCollapsedProject(workspace);
-                      workspaceService?.selectWorkspace(workspace);
-                      navigationService?.navigate({ kind: "home", workspace });
-                    }}
-                  >
-                    <span className="project-name">{projectName}</span>
-                    {collapsed && chats.length > 0 && <span className="project-count">{chats.length}</span>}
-                  </button>
-                  <div className="project-actions">
-                    <button
-                      type="button"
-                      title="在此项目中新建对话"
-                      aria-label={`在 ${projectName} 中新建对话`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setProjectMenu(null);
-                        setThreadMenu(null);
-                        workspaceService?.selectWorkspace(workspace);
-                        navigationService?.navigate({ kind: "home", workspace });
-                      }}
-                    >
-                      <SquarePen size={13.5} />
-                    </button>
-                    <button
-                      type="button"
-                      title="项目操作"
-                      aria-label={`${projectName} 项目操作`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setThreadMenu(null);
-                        setProjectMenu((prev) =>
-                          prev !== null && sameLocalPath(prev.workspace, workspace)
-                            ? null
-                            : { workspace, top: Math.max(54, event.clientY - 40) },
-                        );
-                      }}
-                    >
-                      <MoreHorizontal size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                {!collapsed && chats.length > 0 && (
-                  <div className="thread-list">
-                    {visibleChats.map((session) => renderSessionRow(session))}
-                    {hiddenCount > 0 && (
-                      <button
-                        type="button"
-                        className="expand-threads"
-                        onClick={() => setExpandedProjects((prev) => ({ ...prev, [workspace]: true }))}
-                      >
-                        展开其余 {hiddenCount} 个会话
-                      </button>
-                    )}
-                  </div>
-                )}
-              </section>
+                workspace={workspace}
+                chats={chats}
+                projectName={state.displayProjectName(workspace)}
+                projectPinned={cfg.pinned}
+                isCurrentWorkspace={sameLocalPath(workspace, state.activeCwd)}
+                isMenuOpen={
+                  state.projectMenu !== null && sameLocalPath(state.projectMenu.workspace, workspace)
+                }
+                collapsed={collapsed}
+                expanded={Boolean(state.expandedProjects[workspace])}
+                trimmedQuery={state.trimmedQuery}
+                isEditing={
+                  state.editingProject !== null && sameLocalPath(state.editingProject, workspace)
+                }
+                aliasDraft={state.aliasDraft}
+                runningSessionFiles={state.runningSessionFiles}
+                approvalSessionFiles={state.approvalSessionFiles}
+                isImportantSession={state.isImportantSession}
+                onChangeAliasDraft={state.setAliasDraft}
+                onCommitRename={state.handleCommitProjectRename}
+                onCancelRename={() => state.setEditingProject(null)}
+                onToggleCollapse={() => state.toggleCollapsedProject(workspace)}
+                onSelectProject={() => {
+                  state.setProjectMenu(null);
+                  state.setThreadMenu(null);
+                  if (collapsed) state.toggleCollapsedProject(workspace);
+                  dispatchSidebarClosePreview();
+                  state.workspaceService?.selectWorkspace(workspace);
+                  state.navigationService?.navigate({ kind: "home", workspace });
+                }}
+                onNewProjectSession={() => {
+                  state.setProjectMenu(null);
+                  state.setThreadMenu(null);
+                  dispatchSidebarClosePreview();
+                  state.workspaceService?.selectWorkspace(workspace);
+                  state.navigationService?.navigate({ kind: "home", workspace });
+                }}
+                onOpenProjectMenu={(event) => {
+                  state.setThreadMenu(null);
+                  state.setFilterMenuOpen(false);
+                  state.setProjectMenu((prev) =>
+                    prev !== null && sameLocalPath(prev.workspace, workspace)
+                      ? null
+                      : { workspace, top: computeMenuTop(event) },
+                  );
+                }}
+                onToggleExpand={() =>
+                  state.setExpandedProjects((prev) => ({ ...prev, [workspace]: !prev[workspace] }))
+                }
+                renderSessionRow={(session) => renderSessionRow(session)}
+              />
             );
           })
         )}
       </div>
 
       <SidebarContextMenus
-        projectMenu={projectMenu}
+        projectMenu={state.projectMenu}
+        projectPinned={
+          state.projectMenu !== null && state.projectConfigFor(state.projectMenu.workspace).pinned
+        }
         projectItems={projectPluginItems}
-        onOpenProjectFolder={(workspace) => void workspaceService?.openInFileManager(workspace, { reveal: true })}
-        onCloseProjectMenu={() => setProjectMenu(null)}
-        threadMenu={threadMenu}
+        onTogglePinProject={state.handleTogglePinProject}
+        onOpenProjectFolder={(workspace) => void state.workspaceService?.openInFileManager(workspace)}
+        onCreateWorktree={state.handleCreateWorktree}
+        onBeginRenameProject={(workspace) => {
+          state.setEditingSessionFile(null);
+          state.setEditingProject(workspace);
+          state.setAliasDraft(state.displayProjectName(workspace));
+        }}
+        onArchiveProject={state.handleArchiveProject}
+        onRemoveProject={state.handleRemoveProject}
+        onCloseProjectMenu={() => state.setProjectMenu(null)}
+        threadMenu={state.threadMenu}
         threadItems={threadPluginItems}
-        pinnedFiles={pinnedFiles}
-        onTogglePinned={togglePinned}
-        onArchiveSession={handleArchiveSession}
-        onDeleteSession={handleDeleteSession}
-        onCloseThreadMenu={() => setThreadMenu(null)}
+        pinnedFiles={state.pinnedFiles}
+        onBeginRenameSession={(session) => {
+          state.setEditingProject(null);
+          state.setEditingSessionFile(session.file);
+          state.setSessionTitleDraft(formatSessionTitle(session));
+        }}
+        onTogglePinned={state.togglePinned}
+        onArchiveSession={state.handleArchiveSession}
+        onDeleteSession={state.handleDeleteSession}
+        onCloseThreadMenu={() => state.setThreadMenu(null)}
       />
     </>
   );

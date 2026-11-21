@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { Context } from "@deepseek-ai/cordis";
 import { preferredEditorFor } from "../../lib/workspaceEditors";
 import { useRuntimeBootstrap } from "../../hooks/useRuntimeBootstrap";
@@ -17,15 +18,19 @@ import { clientContributions } from "../../lib/clientContributions";
 import { ensureClientPluginRuntime, getClientRootContext } from "../../lib/clientPluginBootstrap";
 import { describeError } from "../../lib/errors";
 import { harnessRuntimes } from "../../lib/harnessRuntime";
+import { INTELLIGENT_UI_CANVAS_TAB_ID } from "../../lib/intelligentUi";
 import { installPluginKeybindings } from "../../lib/pluginKeybindings";
-import { hasActiveStreamingTasks } from "../../lib/quitGuard";
+import { hasActiveStreamingTasks, requestAppQuit } from "../../lib/quitGuard";
 import { rewindController } from "../../lib/rewindController";
 import { scheduleClient } from "../../lib/scheduleClient";
 import { bindShellNavigation } from "../../lib/shellBridge";
 import { useAppStore } from "../../store";
 import { useIntelligentUiStore } from "../../stores/intelligentUiStore";
+import { useWorkbenchLayoutStore } from "../../stores/workbenchLayoutStore";
 import { bindWorkbenchNotifications, useWorkbenchStore } from "../../stores/workbenchStore";
 import type { WorkspaceEditorInfo } from "../../types";
+import { clientSlotsRegistry } from "../slots/registry";
+import { isWorkbenchPaneAvailable } from "./featureSlotQueries";
 import { useSafeMode, type SafeModeSnapshot } from "./safeMode";
 
 const DEV_CONVERSATION_FIXTURES = new Set([
@@ -149,15 +154,43 @@ export function useMicrokernelBootstrap(): MicrokernelBootstrapResult {
   });
 
   // Pre-connect the draft workspace after Tauri runtime recovery so models, slash commands,
-  // and workspace status are ready immediately on the home screen.
+  // and workspace status are ready immediately on the home screen (falling back to quickChatDir on fresh install).
   useEffect(() => {
-    const targetWorkspace = (wsSnap?.draftWorkspace || settings?.defaultWorkspace || "").trim();
-    if (!isTauri || targetWorkspace === "") return;
-    if (!runtimeRecoveryDone || !draftMode || hubView !== null || connection !== "disconnected" || startupAutoConnectRef.current) {
+    if (!isTauri || !runtimeRecoveryDone || !draftMode || hubView !== null || connection !== "disconnected" || startupAutoConnectRef.current) {
       return;
     }
-    void useAppStore.getState().connect(targetWorkspace).catch(() => undefined);
-  }, [connection, draftMode, hubView, isTauri, runtimeRecoveryDone, settings?.defaultWorkspace, startupAutoConnectRef, wsSnap?.draftWorkspace]);
+    const directWorkspace = (wsSnap?.draftWorkspace || settings?.defaultWorkspace || "").trim();
+    if (directWorkspace !== "") {
+      void useAppStore.getState().connect(directWorkspace).catch(() => undefined);
+      return;
+    }
+    let cancelled = false;
+    const firstSessionCwd = sessions.find((item) => item.cwd.trim() !== "")?.cwd.trim() ?? "";
+    const resolveTarget = firstSessionCwd !== ""
+      ? Promise.resolve(firstSessionCwd)
+      : agent.quickChatDir().catch(() => "");
+    void resolveTarget.then((resolved) => {
+      if (cancelled || resolved.trim() === "") return;
+      root.workspaceService?.syncDraftWorkspace(resolved);
+      void useAppStore.getState().connect(resolved).catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, draftMode, hubView, isTauri, root, runtimeRecoveryDone, sessions, settings?.defaultWorkspace, startupAutoConnectRef, wsSnap?.draftWorkspace]);
+
+  // Keep `useIntelligentUiStore.pluginEnabled` synced with live SlotRegistry availability so
+  // disabling the `intelligent-ui` plugin also disables ```intelligent-ui Markdown fences.
+  useEffect(() => {
+    const syncIntelligentUiGate = () => {
+      const available = isWorkbenchPaneAvailable(INTELLIGENT_UI_CANVAS_TAB_ID);
+      if (useIntelligentUiStore.getState().pluginEnabled !== available) {
+        useIntelligentUiStore.getState().setPluginEnabled(available);
+      }
+    };
+    syncIntelligentUiGate();
+    return clientSlotsRegistry.subscribe(syncIntelligentUiGate);
+  }, []);
 
   // Preserve dev fixture conversation routes (`?fixture=thread|performance|stream|...`).
   useEffect(() => {
@@ -318,6 +351,65 @@ export function useMicrokernelBootstrap(): MicrokernelBootstrapResult {
     () => preferredEditorFor(effectiveWorkspace, workspaceEditors, settings?.defaultFileOpener),
     [effectiveWorkspace, settings?.defaultFileOpener, workspaceEditors],
   );
+  const preferredEditorRef = useRef<WorkspaceEditorInfo | null>(preferredEditor);
+  useEffect(() => {
+    preferredEditorRef.current = preferredEditor;
+  }, [preferredEditor]);
+
+  // Shell-level desktop event bridges for core-shell menubar/topbar/shortcuts (quit guard,
+  // Markdown export, preferred-IDE workspace opening, and terminal shortcut target).
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onQuitRequest = () => {
+      void requestAppQuit().catch((error) => {
+        useAppStore.getState().showToast(`退出失败：${describeError(error)}`, "error");
+      });
+    };
+    const onExportMarkdown = () => {
+      const current = useAppStore.getState();
+      const baseName = (current.sessionName || "conversation")
+        .replace(/[<>:"/\\|?*]+/g, "-")
+        .slice(0, 64);
+      void saveDialog({
+        title: "导出对话为 Markdown",
+        defaultPath: `${baseName}.md`,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      })
+        .then(async (destination) => {
+          if (typeof destination !== "string" || destination.trim() === "") return;
+          const savedPath = await useAppStore.getState().exportSession(destination);
+          useAppStore.getState().showToast(`已导出到 ${savedPath}`, "info");
+        })
+        .catch((error) => {
+          useAppStore.getState().showToast(`导出失败：${describeError(error)}`, "error");
+        });
+    };
+    const onOpenWorkspacePreferred = (event: Event) => {
+      const detailCwd = (event as CustomEvent<{ cwd?: string }>).detail?.cwd;
+      const target = (detailCwd || activeWorkspaceRef.current || "").trim();
+      if (target === "") return;
+      const editor = preferredEditorRef.current;
+      const action = editor !== null
+        ? agent.openFileInEditor(target, editor.id, { workspace: target })
+        : agent.openWorkspaceInFileManager(target);
+      void action.catch((error) => {
+        useAppStore.getState().showToast(`打开工作区失败：${describeError(error)}`, "error");
+      });
+    };
+    const onToggleTerminalShortcut = () => {
+      useWorkbenchLayoutStore.getState().toggleTerminalShortcutPanel();
+    };
+    window.addEventListener("qianji:app-quit-request", onQuitRequest);
+    window.addEventListener("qianji:export-markdown-request", onExportMarkdown);
+    window.addEventListener("qianji:open-workspace-preferred", onOpenWorkspacePreferred);
+    window.addEventListener("qianji:toggle-terminal-shortcut", onToggleTerminalShortcut);
+    return () => {
+      window.removeEventListener("qianji:app-quit-request", onQuitRequest);
+      window.removeEventListener("qianji:export-markdown-request", onExportMarkdown);
+      window.removeEventListener("qianji:open-workspace-preferred", onOpenWorkspacePreferred);
+      window.removeEventListener("qianji:toggle-terminal-shortcut", onToggleTerminalShortcut);
+    };
+  }, []);
 
   const onOpenPreview = useCallback(
     (path: string, line?: number) => {

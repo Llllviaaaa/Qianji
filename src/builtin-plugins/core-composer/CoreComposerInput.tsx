@@ -5,7 +5,7 @@
  * state so draft text survives both `overlay: true` chain takeover under
  * `display: none` and standalone rendering.
  */
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   useComposerState,
   useFrontendService,
@@ -22,15 +22,59 @@ import {
 } from "./composerHelpers";
 
 export function CoreComposerInput({
+  cwd = "",
   placeholder = "输入消息…",
   disabled = false,
   sessionKey,
   sessionFile,
   sessionId,
+  isolated = false,
+  quickChat = false,
   onSubmit,
+  renderFactory,
 }: SlotComponentProps<ComposerInputSlotProps, "session-maybe">): ReactNode {
-  const composerService = useFrontendService("composerService");
   const resolvedKey = resolveComposerSessionKey(sessionKey, sessionId, sessionFile);
+  return renderFactory(
+    "host.composer.input",
+    {
+      cwd,
+      sessionFile: sessionFile ?? null,
+      sessionKey: resolvedKey,
+      sessionId: sessionId ?? null,
+      placeholder,
+      disabled,
+      isolated,
+      quickChat,
+      ...(onSubmit === undefined ? {} : { onSubmit }),
+    },
+    {
+      fallback: (
+        <CoreComposerInputFallback
+          placeholder={placeholder}
+          disabled={disabled}
+          resolvedKey={resolvedKey}
+          sessionId={sessionId}
+          onSubmit={onSubmit}
+        />
+      ),
+    },
+  );
+}
+
+function CoreComposerInputFallback({
+  placeholder,
+  disabled,
+  resolvedKey,
+  sessionId,
+  onSubmit,
+}: {
+  readonly placeholder: string;
+  readonly disabled: boolean;
+  readonly resolvedKey: string;
+  readonly sessionId: string | null;
+  readonly onSubmit?: () => void;
+}): ReactNode {
+  const composerService = useFrontendService("composerService");
   const composerSnap = useComposerState(resolvedKey);
   const sessionState = useSessionState();
   const themeState = useThemeState();
@@ -49,6 +93,18 @@ export function CoreComposerInput({
     setSyncedServiceDraft(serviceDraft);
     setText(serviceDraft);
   }
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el === null || typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [text]);
 
   const isStreaming = handleSnap !== null ? handleSnap.isStreaming : (sessionState?.isStreaming ?? false);
   const composerCommands = composerSnap?.commands;

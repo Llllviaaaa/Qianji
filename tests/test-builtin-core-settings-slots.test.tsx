@@ -305,7 +305,8 @@ describe("core-settings plugin & SlotOwnershipPanel", () => {
 
     const shell = container.querySelector("[data-testid='core-settings-shell']");
     expect(shell).not.toBeNull();
-    expect(shell?.className).toContain("settings-modal");
+    expect(shell?.className).toContain("settings-center");
+    expect(shell?.className).not.toContain("settings-modal");
     expect(shell?.textContent).toContain("核心槽位与接管");
     expect(shell?.textContent).toContain("查看核心界面槽位归属、切换冲突胜出插件或一键恢复内置默认");
     expect(container.querySelector("[data-testid='slot-ownership-panel']")).not.toBeNull();
@@ -471,6 +472,8 @@ describe("core-settings plugin & SlotOwnershipPanel", () => {
     expect(container.querySelector("[data-testid='core-settings-shell']")).toBeNull();
 
     act(() => { root.navigationService.openSettings("general"); });
+    // Toggle to modal display mode so backdrop click dismisses the settings dialog.
+    clickElement(container.querySelector(".settings-mode-toggle-btn"));
     act(() => { container.querySelector("[data-testid='core-settings-backdrop']")?.dispatchEvent(new MiniEvent("mousedown", { bubbles: true, cancelable: true })); });
     expect(root.navigationService.getSnapshot().settingsOpen).toBe(false);
   });

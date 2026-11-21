@@ -102,13 +102,40 @@ export function InspectorEnvSection({
 export function InspectorContextSection({
   cwd: propCwd,
   sessionFile: propSessionFile,
+  renderFactory,
   ctx,
 }: SlotComponentProps<WorkbenchSlotBaseProps, "session-maybe">): ReactElement {
   const session = useSessionState(ctx);
   const workspace = useWorkspaceState(ctx);
-  const rpcService = useFrontendService("rpcService", ctx);
   const cwd = propCwd ?? workspace?.cwd ?? "";
   const sessionFile = propSessionFile !== undefined ? propSessionFile : (session?.sessionFile ?? null);
+
+  return renderFactory(
+    "host.workbench.inspector.context",
+    { cwd, sessionFile },
+    {
+      fallback: (
+        <InspectorContextSectionFallback
+          cwd={cwd}
+          sessionFile={sessionFile}
+          ctx={ctx}
+        />
+      ),
+    },
+  ) as ReactElement;
+}
+
+function InspectorContextSectionFallback({
+  cwd,
+  sessionFile,
+  ctx,
+}: {
+  readonly cwd: string;
+  readonly sessionFile: string | null;
+  readonly ctx: SlotComponentProps<WorkbenchSlotBaseProps, "session-maybe">["ctx"];
+}): ReactElement {
+  const session = useSessionState(ctx);
+  const rpcService = useFrontendService("rpcService", ctx);
   const messages = session?.messages ?? EMPTY_MESSAGES;
   const stats = session?.stats ?? null;
   const model = session?.model ?? null;
@@ -136,6 +163,28 @@ export function InspectorContextSection({
       // Ignore when offline or method unavailable.
     }
   }, [hostSessionId, rpcService]);
+
+  useEffect(() => {
+    if (rpcService === undefined || hostSessionId === undefined || hostSessionId === "") return undefined;
+    let cancelled = false;
+    void rpcService
+      .call<PlanGetResult>("plan.get", { sessionId: hostSessionId })
+      .then((result) => {
+        if (cancelled) return;
+        const items = result?.plan?.items ?? [];
+        setRpcPlanItems(
+          items.map((item) => ({
+            id: item.id,
+            text: item.text,
+            status: item.status === "completed" || item.status === "in_progress" ? item.status : "pending",
+          })),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [hostSessionId, messages.length, rpcService]);
 
   const contextTokens = stats?.contextUsage?.tokens ?? stats?.tokens.total ?? 0;
   const contextWindow = stats?.contextUsage?.contextWindow ?? model?.contextWindow ?? 0;
@@ -331,8 +380,28 @@ export function InspectorExtensionsSection({
 
 /** 5. Diagnostics footer section (`diagnostics`). */
 export function InspectorDiagnosticsSection({
+  cwd: propCwd,
+  sessionFile: propSessionFile,
+  renderFactory,
   ctx,
 }: SlotComponentProps<WorkbenchSlotBaseProps, "session-maybe">): ReactElement {
+  const workspace = useWorkspaceState(ctx);
+  const session = useSessionState(ctx);
+  const cwd = propCwd ?? workspace?.cwd ?? "";
+  const sessionFile = propSessionFile !== undefined ? propSessionFile : (session?.sessionFile ?? null);
+
+  return renderFactory(
+    "host.workbench.inspector.diagnostics",
+    { cwd, sessionFile },
+    { fallback: <InspectorDiagnosticsSectionFallback ctx={ctx} /> },
+  ) as ReactElement;
+}
+
+function InspectorDiagnosticsSectionFallback({
+  ctx,
+}: {
+  readonly ctx: SlotComponentProps<WorkbenchSlotBaseProps, "session-maybe">["ctx"];
+}): ReactElement {
   const workbench = useWorkbenchState(ctx);
   const rpcService = useFrontendService("rpcService", ctx);
   const summaryFocus = workbench?.summaryFocus ?? "overview";

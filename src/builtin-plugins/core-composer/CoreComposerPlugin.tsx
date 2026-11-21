@@ -9,7 +9,7 @@
  * Designed to survive `overlay: true` chain takeover under `display: none`
  * without unmounting or losing typed draft state.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUp,
   Check,
@@ -52,6 +52,10 @@ export function CoreComposerMain({
   sessionKey: ownerSessionKey,
   isolated,
   isStreaming: ownerStreaming,
+  quickChat = false,
+  environment = "local",
+  onQuickChat,
+  onEnvironmentChange,
   onSend: ownerOnSend,
   sessionId,
   renderSlot,
@@ -64,6 +68,7 @@ export function CoreComposerMain({
   const themeState = useThemeState();
   const workspaceState = useWorkspaceState();
   const requireCtrlEnter = themeState?.requireCtrlEnter === true;
+  const defaultFollowUpBehavior = themeState?.followUpBehavior ?? "steer";
 
   const handleOptions = useMemo(
     () => (isolated === true ? { isolated: true, cwd: ownerCwd } : undefined),
@@ -71,7 +76,10 @@ export function CoreComposerMain({
   );
   const { handle, snapshot: handleSnap } = useSessionHandle(sessionId, handleOptions);
 
-  const resolvedCwd = ownerCwd ?? handleSnap?.cwd ?? sessionState?.cwd ?? workspaceState?.cwd ?? "";
+  const resolvedCwd =
+    ownerCwd !== undefined
+      ? ownerCwd
+      : (handleSnap?.cwd ?? sessionState?.cwd ?? workspaceState?.cwd ?? "");
   const resolvedSessionFile =
     ownerSessionFile !== undefined
       ? ownerSessionFile
@@ -92,9 +100,42 @@ export function CoreComposerMain({
     ownerStreaming ??
     (handleSnap !== null ? handleSnap.isStreaming : (sessionState?.isStreaming ?? false));
   const isSwitchingModel = sessionState?.isSwitchingModel ?? false;
-  const [streamingBehavior, setStreamingBehavior] = useState<"steer" | "followUp">("steer");
+  const [streamingBehavior, setStreamingBehavior] = useState<"steer" | "followUp">(defaultFollowUpBehavior);
+  const [syncedFollowUpDefault, setSyncedFollowUpDefault] = useState(defaultFollowUpBehavior);
   const [streamingMenuOpen, setStreamingMenuOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const streamingWrapRef = useRef<HTMLDivElement>(null);
+
+  if (syncedFollowUpDefault !== defaultFollowUpBehavior) {
+    setSyncedFollowUpDefault(defaultFollowUpBehavior);
+    setStreamingBehavior(defaultFollowUpBehavior);
+  }
+  if (!isStreaming && streamingMenuOpen) {
+    setStreamingMenuOpen(false);
+  }
+
+  useEffect(() => {
+    if (!streamingMenuOpen || typeof document === "undefined") return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target !== null && streamingWrapRef.current !== null && streamingWrapRef.current.contains(target)) {
+        return;
+      }
+      setStreamingMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setStreamingMenuOpen(false);
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [streamingMenuOpen]);
 
   // Apply external prefill requests cleanly via composerService (no setState in effect)
   useEffect(() => {
@@ -196,6 +237,7 @@ export function CoreComposerMain({
     sessionFile: resolvedSessionFile,
     variant,
     sessionKey: resolvedSessionKey,
+    ...(isolated === true ? { isolated: true } : {}),
   };
 
   return (
@@ -211,10 +253,19 @@ export function CoreComposerMain({
           workspace={resolvedCwd}
           workspaceOptions={workspaceState?.workspaceOptions ?? []}
           branchLabel={branchLabel}
+          quickChat={quickChat}
+          environment={environment}
           onSelectWorkspace={(next) => workspaceService?.selectWorkspace(next)}
           onPickWorkspace={() => {
             void workspaceService?.pickFolder();
           }}
+          onQuickChat={
+            onQuickChat ??
+            (() => {
+              workspaceService?.clearDraftWorkspace();
+            })
+          }
+          onEnvironmentChange={onEnvironmentChange}
         />
       )}
 
@@ -244,6 +295,7 @@ export function CoreComposerMain({
           ...baseChildProps,
           placeholder,
           disabled: false,
+          quickChat,
           onSubmit: () => {
             void handleSubmit();
           },
@@ -254,7 +306,7 @@ export function CoreComposerMain({
             {renderSlot("composer.toolbar", baseChildProps)}
 
             {isStreaming && (
-              <div className="streaming-behavior-wrap permission-context-wrap">
+              <div className="streaming-behavior-wrap permission-context-wrap" ref={streamingWrapRef}>
                 <button
                   type="button"
                   className={`chip chip-permission chip-streaming-behavior ${streamingMenuOpen ? "active" : ""}`}
