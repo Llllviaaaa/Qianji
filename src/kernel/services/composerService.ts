@@ -6,7 +6,8 @@
  * slash interceptors and rewind handlers.
  */
 import { Context, Service } from "@deepseek-ai/cordis";
-import { mergeAttachments } from "../../lib/attachments";
+import { loadAttachmentFiles, mergeAttachments } from "../../lib/attachments";
+import { describeError } from "../../lib/errors";
 import {
   clientContributions,
   ClientContributionRegistry,
@@ -68,7 +69,20 @@ const EMPTY_UNKNOWN_QUEUE: readonly unknown[] = [];
 
 function activeSessionKey(): string {
   const s = useAppStore.getState();
-  return s.sessionFile ?? s.sessionId ?? DRAFT_COMPOSER_KEY;
+  if (s.sessionId !== null && s.sessionId.trim() !== "") return s.sessionId.trim();
+  if (s.sessionFile !== null && s.sessionFile.trim() !== "") return s.sessionFile.trim();
+  return DRAFT_COMPOSER_KEY;
+}
+
+function isActiveSessionAlias(rawKey: string): boolean {
+  const trimmed = rawKey.trim();
+  if (trimmed === "" || trimmed === "active") return true;
+  const s = useAppStore.getState();
+  const active = activeSessionKey();
+  if (trimmed === active) return true;
+  if (s.sessionId !== null && s.sessionId.trim() !== "" && trimmed === s.sessionId.trim()) return true;
+  if (s.sessionFile !== null && s.sessionFile.trim() !== "" && trimmed === s.sessionFile.trim()) return true;
+  return false;
 }
 
 interface ComposerInternalState {
@@ -128,11 +142,11 @@ export class ComposerService extends Service {
 
   private resolveKey(sessionKey?: string): { key: string; isActive: boolean } {
     const active = activeSessionKey();
-    if (sessionKey === undefined || sessionKey.trim() === "") {
+    if (sessionKey === undefined || isActiveSessionAlias(sessionKey)) {
       return { key: active, isActive: true };
     }
     const trimmed = sessionKey.trim();
-    return { key: trimmed, isActive: trimmed === active };
+    return { key: trimmed, isActive: false };
   }
 
   private getOrCreateBucket(key: string): ComposerSessionBucket {
@@ -145,12 +159,13 @@ export class ComposerService extends Service {
   }
 
   private computeSnapshot(key: string): ComposerSnapshot {
-    const isActive = key === activeSessionKey();
-    const bucket = this.internal.buckets.get(key);
+    const isActive = isActiveSessionAlias(key);
+    const resolvedKey = isActive ? activeSessionKey() : key;
+    const bucket = this.internal.buckets.get(resolvedKey);
     const app = useAppStore.getState();
     const contrib = this.internal.registry.getSnapshot();
     return {
-      sessionKey: key,
+      sessionKey: resolvedKey,
       draft: bucket?.draft ?? "",
       prefill: isActive ? app.composerPrefill : (bucket?.prefill ?? null),
       attachments: bucket ? bucket.attachments : EMPTY_ATTACHMENTS,
@@ -254,6 +269,39 @@ export class ComposerService extends Service {
     if (!bucket || bucket.attachments.length === 0) return;
     bucket.attachments = [];
     this.invalidateAndEmit(key);
+  }
+
+  async attachFiles(paths: readonly string[], sessionKey?: string): Promise<AttachmentPayload[]> {
+    if (paths.length === 0) return [];
+    const loaded = await loadAttachmentFiles([...paths], (error) => {
+      const store = useAppStore.getState();
+      const message = describeError(error);
+      store.appendLog(`附件读取失败：${message}`);
+      store.showToast(`无法添加附件：${message}`, "error");
+    });
+    if (loaded.length > 0) {
+      this.addAttachments(loaded, sessionKey);
+    }
+    return loaded;
+  }
+
+  async pickAttachments(sessionKey?: string): Promise<AttachmentPayload[]> {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+      return [];
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        title: "向任务添加文件",
+      });
+      const paths = typeof selected === "string" ? [selected] : (selected ?? []);
+      return this.attachFiles(paths, sessionKey);
+    } catch (error) {
+      useAppStore.getState().showToast(`打开文件选择器失败：${describeError(error)}`, "error");
+      return [];
+    }
   }
 
   moveQueuedMessage(id: string, direction: -1 | 1): void {

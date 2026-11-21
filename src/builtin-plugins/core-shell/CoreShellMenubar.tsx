@@ -85,6 +85,7 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
   );
   useSyncExternalStore(subscribeSlots, getSlotsVersion, getSlotsVersion);
   const hasWorkbenchControls = (slotsRegistry?.getEntries("workbench.topbarControls").length ?? 0) > 0;
+  const hasWebPreview = (slotsRegistry?.getKeyedCandidates("workbench.panes", "preview").length ?? 0) > 0;
 
   const [appMenu, setAppMenu] = useState<AppMenuKey | null>(null);
 
@@ -92,9 +93,12 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
   const settingsOpen = navSnap?.settingsOpen ?? false;
   const canNavigateBack = navSnap?.canGoBack ?? false;
   const canNavigateForward = navSnap?.canGoForward ?? false;
-  const cwd = workspaceSnap?.cwd ?? sessionSnap?.cwd ?? "";
+  const cwd = navSnap?.draftMode
+    ? (workspaceSnap?.draftWorkspace || workspaceSnap?.cwd || sessionSnap?.cwd || "")
+    : (workspaceSnap?.cwd || sessionSnap?.cwd || "");
   const sessionFile = sessionSnap?.sessionFile ?? null;
   const connected = sessionSnap?.connection === "running";
+  const hasMessages = (sessionSnap?.messages.length ?? 0) > 0;
   const transcriptDensity = themeSnap?.transcriptDensity ?? "normal";
 
   const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -224,10 +228,26 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
                   disabled={cwd === ""}
                   onClick={() => {
                     closeMenu();
-                    void workspaceService?.openInFileManager(cwd);
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("qianji:open-workspace-preferred", { detail: { cwd } }));
+                    } else {
+                      void workspaceService?.openInFileManager(cwd);
+                    }
                   }}
                 >
-                  在文件资源管理器中打开  Ctrl+Shift+O
+                  打开工作区目录  Ctrl+Shift+O
+                </button>
+                <button
+                  type="button"
+                  disabled={!connected || !hasMessages}
+                  onClick={() => {
+                    closeMenu();
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("qianji:export-markdown-request"));
+                    }
+                  }}
+                >
+                  导出为 Markdown...
                 </button>
                 {renderPluginMenuItems(getMenuItems("menubar.file"), closeMenu, true)}
                 <div className="menu-separator" />
@@ -235,7 +255,11 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
                   type="button"
                   onClick={() => {
                     closeMenu();
-                    void appWindow?.close();
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("qianji:app-quit-request"));
+                    } else {
+                      void appWindow?.close();
+                    }
                   }}
                 >
                   退出
@@ -320,11 +344,28 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
                     closeMenu();
                     navigationService?.closeSettings();
                     navigationService?.setHubView(null);
-                    workbenchService?.toggleBottom();
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("qianji:toggle-terminal-shortcut"));
+                    } else {
+                      workbenchService?.toggleBottom();
+                    }
                   }}
                 >
-                  底部面板  Ctrl+J
+                  集成终端  Ctrl+J
                 </button>
+                {hasWebPreview && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeMenu();
+                      navigationService?.closeSettings();
+                      navigationService?.setHubView(null);
+                      workbenchService?.openPane("preview");
+                    }}
+                  >
+                    浏览器  Ctrl+T
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -362,7 +403,6 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
                 </button>
                 <button
                   type="button"
-                  disabled={!connected && cwd === ""}
                   onClick={() => {
                     closeMenu();
                     navigationService?.closeSettings();

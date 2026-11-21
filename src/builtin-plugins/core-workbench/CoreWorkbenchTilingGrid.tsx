@@ -361,7 +361,19 @@ export function CoreWorkbenchTilingGrid({
                   </div>
                 </header>
               )}
-              <div className="pid-wb-pane-content">
+              <div
+                className="pid-wb-pane-content"
+                onPointerDown={
+                  paneId === "preview"
+                    ? (event) => {
+                        const target = event.target instanceof Element ? event.target : null;
+                        if (target?.closest(".pid-wb-preview-bar") !== null) {
+                          beginPaneHeaderDrag(paneId, title, event);
+                        }
+                      }
+                    : undefined
+                }
+              >
                 {renderSlot(
                   "workbench.panes",
                   {
@@ -371,6 +383,48 @@ export function CoreWorkbenchTilingGrid({
                     active: visible,
                     maximized: paneMaximized,
                     onClose: () => workbenchService?.closePane(paneId),
+                    ...(paneId === "preview"
+                      ? {
+                          paneControls: (
+                            <>
+                              {activePanes.length === 2 && !paneMaximized && (
+                                <button
+                                  type="button"
+                                  className="pid-wb-icon-btn"
+                                  title={twoPaneDirection === "horizontal" ? "切换为上下分屏" : "切换为左右分屏"}
+                                  aria-label={twoPaneDirection === "horizontal" ? "切换为上下分屏" : "切换为左右分屏"}
+                                  onClick={() =>
+                                    workbenchService?.setTwoPaneDirection(
+                                      twoPaneDirection === "horizontal" ? "vertical" : "horizontal",
+                                    )
+                                  }
+                                >
+                                  {twoPaneDirection === "horizontal" ? <Rows2 size={13} /> : <Columns2 size={13} />}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="pid-wb-icon-btn"
+                                title={maxTitle}
+                                aria-label={maxTitle}
+                                aria-pressed={paneMaximized}
+                                onClick={() => workbenchService?.toggleMaximizePane(paneId)}
+                              >
+                                {paneMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                              </button>
+                              <button
+                                type="button"
+                                className="pid-wb-icon-btn"
+                                title={closeTitle}
+                                aria-label={closeTitle}
+                                onClick={() => workbenchService?.closePane(paneId)}
+                              >
+                                <X size={13} />
+                              </button>
+                            </>
+                          ),
+                        }
+                      : {}),
                   },
                   { key: paneId, fallback: legacyFallback },
                 )}

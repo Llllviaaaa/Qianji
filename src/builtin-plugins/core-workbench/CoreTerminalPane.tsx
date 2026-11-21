@@ -303,34 +303,50 @@ function TerminalPanelBody({
 export function CoreTerminalPane({
   cwd: propCwd,
   active,
+  renderFactory,
   ctx,
 }: SlotComponentProps<WorkbenchPaneSlotProps, "session-maybe">): ReactElement {
   const workspace = useWorkspaceState(ctx);
   const workbench = useWorkbenchState(ctx);
-  return (
-    <TerminalPanelBody
-      cwd={propCwd ?? workspace?.cwd ?? ""}
-      visible={active}
-      compactHeader
-      terminalCreateNonce={workbench?.terminalCreateNonce ?? 0}
-    />
-  );
+  const cwd = propCwd ?? workspace?.cwd ?? "";
+  return renderFactory(
+    "host.workbench.terminal",
+    { cwd, visible: active, compactHeader: true },
+    {
+      fallback: (
+        <TerminalPanelBody
+          cwd={cwd}
+          visible={active}
+          compactHeader
+          terminalCreateNonce={workbench?.terminalCreateNonce ?? 0}
+        />
+      ),
+    },
+  ) as ReactElement;
 }
 
 /** Bottom-drawer keyed `"terminal"` tab. */
 export function CoreBottomTerminalTab({
   cwd: propCwd,
   active,
+  renderFactory,
   ctx,
 }: SlotComponentProps<WorkbenchBottomTabSlotProps, "session-maybe">): ReactElement {
   const workspace = useWorkspaceState(ctx);
   const workbench = useWorkbenchState(ctx);
-  return (
-    <TerminalPanelBody
-      cwd={propCwd ?? workspace?.cwd ?? ""}
-      visible={active}
-      compactHeader={false}
-      terminalCreateNonce={workbench?.terminalCreateNonce ?? 0}
-    />
-  );
+  const cwd = propCwd ?? workspace?.cwd ?? "";
+  return renderFactory(
+    "host.workbench.terminal",
+    { cwd, visible: active, compactHeader: false },
+    {
+      fallback: (
+        <TerminalPanelBody
+          cwd={cwd}
+          visible={active}
+          compactHeader={false}
+          terminalCreateNonce={workbench?.terminalCreateNonce ?? 0}
+        />
+      ),
+    },
+  ) as ReactElement;
 }

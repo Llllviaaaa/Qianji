@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Code2,
@@ -12,6 +12,7 @@ import {
   Save,
   X,
 } from "lucide-react";
+import { SlotHost, clientSlotsRegistry } from "@qianji/client-slots";
 import { SlotEntryHost } from "../common/ErrorBoundary";
 import { useFileActions } from "../WorkspaceOpeners";
 import { agent } from "../../lib/agent";
@@ -43,6 +44,11 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
   const contributions = useClientContributions();
   const fileActions = useFileActions();
   const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  useSyncExternalStore(
+    (listener) => clientSlotsRegistry.subscribe(listener),
+    () => clientSlotsRegistry.getVersion(),
+    () => clientSlotsRegistry.getVersion(),
+  );
 
   const workspaceFiles = useMemo(
     () => openFiles.filter((item) => matchesWorkbenchFileCwd(item.cwd, cwd)),
@@ -154,10 +160,14 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
     path: activeFile.path,
     mimeType: activeFile.mimeType,
   });
+  const hasSlotFileViewer =
+    clientSlotsRegistry.getKeyedCandidates("workbench.fileViewer", activeFile.path).length > 0;
+  const hasCustomViewer = hasSlotFileViewer || customViewer !== undefined;
   const isDirty = activeFile.content !== activeFile.savedContent;
-  const canRenderPreview = customViewer !== undefined || (previewKind !== null && (!activeFile.isBinary || previewKind === "svg"));
+  const canRenderPreview =
+    hasCustomViewer || (previewKind !== null && (!activeFile.isBinary || previewKind === "svg"));
   const defaultMode: WorkbenchFileViewMode =
-    customViewer !== undefined || previewKind === "html" || previewKind === "svg" ? "preview" : "code";
+    hasCustomViewer || previewKind === "html" || previewKind === "svg" ? "preview" : "code";
   const effectiveMode: WorkbenchFileViewMode = !canRenderPreview
     ? "code"
     : activeFile.isBinary
@@ -165,6 +175,51 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
       : (activeFile.viewMode ?? defaultMode);
   const showBrowserExternal = effectiveMode !== "code" && (previewKind === "html" || previewKind === "svg");
   const pdfSrc = previewHttpUrl ?? (activeFile.data ? `data:application/pdf;base64,${activeFile.data}` : null);
+
+  const renderCustomFileViewer = () => {
+    if (hasSlotFileViewer) {
+      return (
+        <div className="pid-wb-plugin-file-viewer" style={{ height: "100%", overflow: "auto" }}>
+          <SlotHost
+            slotKey="workbench.fileViewer"
+            kind="keyed"
+            scope="session-maybe"
+            routeKey={activeFile.path}
+            props={{
+              cwd: effectiveFileCwd,
+              sessionFile,
+              path: activeFile.path,
+              content: activeFile.content,
+              isBinary: activeFile.isBinary,
+              mimeType: activeFile.mimeType,
+              dataBase64: activeFile.data,
+              size: activeFile.size,
+              truncated: activeFile.truncated,
+            }}
+          />
+        </div>
+      );
+    }
+    if (customViewer === undefined) return null;
+    return (
+      <SlotEntryHost
+        entry={customViewer}
+        context={{
+          cwd: effectiveFileCwd,
+          sessionFile,
+          path: activeFile.path,
+          content: activeFile.content,
+          isBinary: activeFile.isBinary,
+          mimeType: activeFile.mimeType,
+          dataBase64: activeFile.data,
+          size: activeFile.size,
+        }}
+        slotName="file.viewer"
+        className="pid-wb-plugin-file-viewer"
+        style={{ height: "100%", overflow: "auto" }}
+      />
+    );
+  };
 
   const setMode = (mode: WorkbenchFileViewMode) => {
     useWorkbenchStore.getState().setFileViewMode(activeFile.path, mode, effectiveFileCwd);
@@ -351,23 +406,8 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
               </button>
             </div>
           </div>
-        ) : canRenderPreview && effectiveMode === "preview" && customViewer !== undefined ? (
-          <SlotEntryHost
-            entry={customViewer}
-            context={{
-              cwd: effectiveFileCwd,
-              sessionFile,
-              path: activeFile.path,
-              content: activeFile.content,
-              isBinary: activeFile.isBinary,
-              mimeType: activeFile.mimeType,
-              dataBase64: activeFile.data,
-              size: activeFile.size,
-            }}
-            slotName="file.viewer"
-            className="pid-wb-plugin-file-viewer"
-            style={{ height: "100%", overflow: "auto" }}
-          />
+        ) : canRenderPreview && effectiveMode === "preview" && hasCustomViewer ? (
+          renderCustomFileViewer()
         ) : canRenderPreview && previewKind !== null && effectiveMode === "preview" ? (
           <DynamicDocumentPreview
             file={activeFile}
@@ -375,7 +415,7 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
             previewHttpUrl={previewHttpUrl}
             reloadNonce={previewNonce}
           />
-        ) : canRenderPreview && effectiveMode === "split" && (customViewer !== undefined || previewKind !== null) ? (
+        ) : canRenderPreview && effectiveMode === "split" && (hasCustomViewer || previewKind !== null) ? (
           <div className="pid-wb-split-view">
             <div className="pid-wb-split-pane is-code">
               <Suspense fallback={<div className="pid-wb-empty">正在加载编辑器…</div>}>
@@ -383,23 +423,8 @@ export function CodeEditorTab({ cwd }: CodeEditorTabProps) {
               </Suspense>
             </div>
             <div className="pid-wb-split-pane is-preview">
-              {customViewer !== undefined ? (
-                <SlotEntryHost
-                  entry={customViewer}
-                  context={{
-                    cwd: effectiveFileCwd,
-                    sessionFile,
-                    path: activeFile.path,
-                    content: activeFile.content,
-                    isBinary: activeFile.isBinary,
-                    mimeType: activeFile.mimeType,
-                    dataBase64: activeFile.data,
-                    size: activeFile.size,
-                  }}
-                  slotName="file.viewer"
-                  className="pid-wb-plugin-file-viewer"
-                  style={{ height: "100%", overflow: "auto" }}
-                />
+              {hasCustomViewer ? (
+                renderCustomFileViewer()
               ) : previewKind !== null ? (
                 <DynamicDocumentPreview
                   file={activeFile}

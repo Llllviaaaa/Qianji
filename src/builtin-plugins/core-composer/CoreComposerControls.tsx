@@ -2,8 +2,8 @@
  * Workspace breadcrumb trail and model/thinking picker controls for
  * `core-composer` (ADR 0023 Wave 2B).
  */
-import { useMemo, useState, type ReactNode } from "react";
-import { Check, ChevronDown, Folder, GitBranch, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Check, ChevronDown, Folder, GitBranch, Monitor, Search } from "lucide-react";
 import {
   useFrontendService,
   useSessionHandle,
@@ -16,35 +16,84 @@ export function CoreComposerBreadcrumb({
   workspace,
   workspaceOptions,
   branchLabel,
+  quickChat = false,
+  environment = "local",
   onSelectWorkspace,
   onPickWorkspace,
+  onQuickChat,
+  onEnvironmentChange,
 }: {
   readonly workspace: string;
   readonly workspaceOptions: readonly string[];
   readonly branchLabel: string;
+  readonly quickChat?: boolean;
+  readonly environment?: "local" | "worktree";
   readonly onSelectWorkspace: (next: string) => void;
   readonly onPickWorkspace: () => void;
+  readonly onQuickChat?: () => void;
+  readonly onEnvironmentChange?: (next: "local" | "worktree") => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const [envOpen, setEnvOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const workspaceName = formatWorkspaceName(workspace);
+  const workspaceWrapRef = useRef<HTMLDivElement>(null);
+  const envWrapRef = useRef<HTMLDivElement>(null);
+
+  const isDefaultWorkspaceMode = quickChat || workspace.trim() === "";
+  const workspaceName = isDefaultWorkspaceMode ? "默认工作区" : formatWorkspaceName(workspace);
+
+  useEffect(() => {
+    if ((!open && !envOpen) || typeof document === "undefined") return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target === null) return;
+      if (open && (workspaceWrapRef.current === null || !workspaceWrapRef.current.contains(target))) {
+        setOpen(false);
+        setQuery("");
+      }
+      if (envOpen && (envWrapRef.current === null || !envWrapRef.current.contains(target))) {
+        setEnvOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (open) {
+        setOpen(false);
+        setQuery("");
+        event.stopPropagation();
+      } else if (envOpen) {
+        setEnvOpen(false);
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [envOpen, open]);
 
   const visibleWorkspaces = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return workspaceOptions
+      .filter((item, idx, all) => item !== "" && all.indexOf(item) === idx)
       .filter((item) => normalized === "" || item.toLowerCase().includes(normalized))
       .slice(0, 8);
   }, [query, workspaceOptions]);
 
   return (
     <div className="composer-breadcrumb-trail" aria-label="项目与工作环境">
-      <div className="workspace-context-wrap">
+      <div className="workspace-context-wrap" ref={workspaceWrapRef}>
         <button
           type="button"
           className="chip chip-project"
-          title={workspace !== "" ? workspace : "默认工作区"}
+          title={isDefaultWorkspaceMode ? "默认工作区（快速对话）" : workspace}
           aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => {
+            setEnvOpen(false);
+            setOpen((value) => !value);
+          }}
         >
           <Folder size={13} strokeWidth={1.75} />
           <span>{workspaceName}</span>
@@ -55,6 +104,7 @@ export function CoreComposerBreadcrumb({
             <label>
               <Search size={13} />
               <input
+                autoFocus
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="搜索项目"
@@ -73,7 +123,7 @@ export function CoreComposerBreadcrumb({
                   }}
                 >
                   <span>{formatWorkspaceName(item)}</span>
-                  {item === workspace && <Check size={13} />}
+                  {!isDefaultWorkspaceMode && item === workspace && <Check size={13} />}
                 </button>
               ))}
               {visibleWorkspaces.length === 0 && <small>没有已知项目</small>}
@@ -83,15 +133,81 @@ export function CoreComposerBreadcrumb({
               className="workspace-context-new"
               onClick={() => {
                 setOpen(false);
+                setQuery("");
                 onPickWorkspace();
               }}
             >
               打开其他文件夹…
             </button>
+            {onQuickChat !== undefined && (
+              <button
+                type="button"
+                className="workspace-context-new"
+                onClick={() => {
+                  setOpen(false);
+                  setQuery("");
+                  onQuickChat();
+                }}
+              >
+                <span>默认工作区（快速对话）</span>
+                {isDefaultWorkspaceMode && <Check size={13} />}
+              </button>
+            )}
           </div>
         )}
       </div>
-      {branchLabel !== "" && (
+
+      {!isDefaultWorkspaceMode && onEnvironmentChange !== undefined && (
+        <div className="environment-context-wrap" ref={envWrapRef}>
+          <button
+            type="button"
+            className={`chip chip-env ${environment === "worktree" ? "worktree" : "local"}`}
+            title={environment === "worktree" ? "Worktree 隔离检出" : "本地工作区"}
+            aria-haspopup="menu"
+            aria-expanded={envOpen}
+            onClick={() => {
+              setOpen(false);
+              setEnvOpen((value) => !value);
+            }}
+          >
+            {environment === "worktree" ? <GitBranch size={13} /> : <Monitor size={13} />}
+            <span>{environment === "worktree" ? "Worktree" : "本地"}</span>
+            <ChevronDown size={11} strokeWidth={1.75} />
+          </button>
+          {envOpen && (
+            <div className="workspace-context-menu environment-context-menu" role="menu">
+              <div className="workspace-context-list">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onEnvironmentChange("local");
+                    setEnvOpen(false);
+                  }}
+                >
+                  <Monitor size={13} />
+                  <span>本地</span>
+                  {environment === "local" && <Check size={13} />}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onEnvironmentChange("worktree");
+                    setEnvOpen(false);
+                  }}
+                >
+                  <GitBranch size={13} />
+                  <span>Worktree</span>
+                  {environment === "worktree" && <Check size={13} />}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isDefaultWorkspaceMode && branchLabel !== "" && (
         <span className="chip chip-branch" title="当前分支">
           <GitBranch size={13} strokeWidth={1.75} />
           <span>{branchLabel}</span>
@@ -112,6 +228,28 @@ export function CoreComposerModelPicker({
   const sessionState = useSessionState();
   const { snapshot: handleSnap } = useSessionHandle(sessionId);
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target !== null && wrapRef.current !== null && wrapRef.current.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
 
   const model = handleSnap?.model ?? sessionState?.model ?? null;
   const models = handleSnap?.availableModels ?? sessionState?.availableModels ?? [];
@@ -122,7 +260,7 @@ export function CoreComposerModelPicker({
   const modelLabel = model !== null ? (model.name || model.id) : "选择模型";
 
   return (
-    <div className="model-picker-wrap">
+    <div className="model-picker-wrap" ref={wrapRef}>
       <button
         type="button"
         className={`chip chip-model${open ? " active" : ""}`}

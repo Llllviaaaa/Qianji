@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactElement,
@@ -54,9 +55,9 @@ export interface BuiltinSettingsPageMeta {
 }
 
 export const BUILTIN_SETTINGS_PAGE_META: readonly BuiltinSettingsPageMeta[] = [
-  { id: "general", label: "通用", heading: "通用", subtitle: "管理智能体模式、工具权限策略与工作区偏好", wide: false },
-  { id: "appearance", label: "外观", heading: "外观", subtitle: "定制工作台明暗主题、界面显示比例与消息阅读密度", wide: false },
-  { id: "providers", label: "模型", heading: "模型与密钥", subtitle: "配置当前对话模型与推理思考等级偏好", wide: false },
+  { id: "general", label: "通用", heading: "通用", subtitle: "常规偏好、默认工作区、发送快捷键与运行行为", wide: false },
+  { id: "appearance", label: "外观", heading: "外观", subtitle: "定制主题、界面显示比例、字体与消息阅读密度", wide: false },
+  { id: "providers", label: "模型", heading: "模型与密钥", subtitle: "配置模型提供商、API 密钥、默认模型与思考强度", wide: false },
   { id: "plugins", label: "插件", heading: "扩展插件", subtitle: "统一管理扩展插件、核心能力、Agent 技能 (Skills) 与 MCP 工具服务", wide: true },
   {
     id: "slots",
@@ -218,7 +219,8 @@ export function CoreSettingsShell({
   const registryVersion = useSyncExternalStore(registry.subscribe, registry.getVersion, registry.getVersion);
   const { settingsPages: legacyPages, settingsSections: legacySections } = useClientContributions();
 
-  const [localDisplayMode, setLocalDisplayMode] = useState<"modal" | "page">("modal");
+  const [localDisplayMode, setLocalDisplayMode] = useState<"modal" | "page">("page");
+  const pageScrollRef = useRef<HTMLDivElement>(null);
   const displayMode: "modal" | "page" = themeState?.settingsDisplayMode ?? localDisplayMode;
   const toggleDisplayMode = useCallback((): void => {
     const next: "modal" | "page" = displayMode === "page" ? "modal" : "page";
@@ -230,6 +232,12 @@ export function CoreSettingsShell({
   const requestedPage = onSelectPage !== undefined
     ? normalizeSettingsPageKey(page)
     : normalizeSettingsPageKey(uncontrolledPage);
+
+  useEffect(() => {
+    if (pageScrollRef.current !== null) {
+      pageScrollRef.current.scrollTop = 0;
+    }
+  }, [requestedPage]);
 
   const closeSettings = useCallback((): void => {
     if (onClose !== undefined) {
@@ -299,7 +307,14 @@ export function CoreSettingsShell({
 
   if (!open) return null;
 
-  const activeMeta = [...allBuiltinMeta, ...extensionNav].find((item) => item.id === requestedPage) ?? allBuiltinMeta[0];
+  const strippedRequested = pluginSettingsPageId(requestedPage);
+  const allNavItems = [...allBuiltinMeta, ...extensionNav];
+  const activeMeta =
+    allNavItems.find((item) => item.id === requestedPage) ??
+    (strippedRequested !== undefined
+      ? allNavItems.find((item) => item.id === strippedRequested)
+      : allNavItems.find((item) => item.id === `plugin:${requestedPage}`)) ??
+    allBuiltinMeta[0];
   const shownPage = activeMeta?.id ?? "general";
   const isWideGrid = activeMeta?.wide === true;
   const isPage = displayMode === "page";
@@ -316,7 +331,7 @@ export function CoreSettingsShell({
       }}
     >
       <div
-        className={`settings-modal settings-center ${isPage ? "is-page" : "is-modal"}`}
+        className={`settings-center ${isPage ? "is-page" : "is-modal"}`}
         data-testid="core-settings-shell"
         data-settings-mode={displayMode}
         role={isPage ? "region" : "dialog"}
@@ -326,6 +341,7 @@ export function CoreSettingsShell({
         <CoreSettingsNav
           isPage={isPage}
           shownPage={shownPage}
+          shortcutLabel={themeState?.shortcutSettings ?? "Ctrl+,"}
           builtinNav={builtinNav}
           extensionNav={extensionNav}
           onSelectPage={selectPage}
@@ -365,7 +381,7 @@ export function CoreSettingsShell({
             </div>
           </header>
 
-          <div className="settings-page-scroll">
+          <div ref={pageScrollRef} className="settings-page-scroll">
             <div className={`settings-page ${isWideGrid ? "is-wide" : ""}`} data-active-settings-page={shownPage}>
               {activeMeta?.subtitle !== undefined && activeMeta.subtitle !== "" && (
                 <p className="settings-header-sub">{activeMeta.subtitle}</p>

@@ -184,12 +184,30 @@ export class NavigationService extends Service {
     }
   }
 
+  private syncDraftWorkspace(workspace: string): void {
+    const trimmed = workspace.trim();
+    if (trimmed === "") return;
+    const ws = (this.ctx as { get?(name: string): unknown }).get?.("workspaceService") as
+      | { syncDraftWorkspace?(path: string): void }
+      | undefined;
+    ws?.syncDraftWorkspace?.(trimmed);
+  }
+
+  private resolveDraftWorkspace(): string {
+    const ws = (this.ctx as { get?(name: string): unknown }).get?.("workspaceService") as
+      | { getSnapshot?(): { draftWorkspace: string; cwd: string } }
+      | undefined;
+    const snap = ws?.getSnapshot?.();
+    return snap?.draftWorkspace || snap?.cwd || useAppStore.getState().cwd || "";
+  }
+
   private applyRoute(target: NavigationRoute, syncStore: boolean): void {
     switch (target.kind) {
       case "home":
         this.internal.activeRoute = { kind: "home", workspace: target.workspace };
         this.internal.hubView = null;
         this.internal.draftMode = true;
+        this.syncDraftWorkspace(target.workspace);
         if (syncStore) {
           useAppStore.getState().prepareNewTask();
         }
@@ -198,6 +216,7 @@ export class NavigationService extends Service {
         this.internal.activeRoute = { kind: "session", cwd: target.cwd, file: target.file };
         this.internal.hubView = null;
         this.internal.draftMode = false;
+        this.syncDraftWorkspace(target.cwd);
         if (syncStore) {
           const current = useAppStore.getState();
           if (current.sessionFile !== target.file || current.connection !== "running") {
@@ -324,7 +343,7 @@ export class NavigationService extends Service {
       this.internal.hubView = null;
       this.internal.activeRoute = !this.internal.draftMode && app.sessionFile !== null
         ? { kind: "session", cwd: app.cwd, file: app.sessionFile }
-        : { kind: "home", workspace: app.cwd };
+        : { kind: "home", workspace: this.resolveDraftWorkspace() };
       this.publish();
       return;
     }
@@ -336,7 +355,7 @@ export class NavigationService extends Service {
     const app = useAppStore.getState();
     if (draftMode) {
       this.internal.hubView = null;
-      this.internal.activeRoute = { kind: "home", workspace: app.cwd };
+      this.internal.activeRoute = { kind: "home", workspace: this.resolveDraftWorkspace() };
     } else if (this.internal.hubView === null) {
       this.internal.activeRoute = { kind: "session", cwd: app.cwd, file: app.sessionFile ?? "" };
     }

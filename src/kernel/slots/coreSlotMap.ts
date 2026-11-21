@@ -5,7 +5,7 @@
  * `kind`, `scope`, and typed owner props so Wave 2B built-in plugins and
  * external user/workspace plugins share a single strongly-typed contract.
  */
-import type { ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type {
   AttachmentPayload,
   ExtensionUIRequest,
@@ -102,10 +102,23 @@ export interface SidebarSessionRowSlotProps {
   readonly session: SessionInfo;
   readonly active: boolean;
   readonly running?: boolean;
+  readonly approval?: boolean;
+  readonly pinned?: boolean;
+  readonly projectLabel?: string;
+  readonly snippet?: string;
+  readonly menuOpen?: boolean;
+  readonly editing?: boolean;
+  readonly renameDraft?: string;
+  readonly onChangeRenameDraft?: (next: string) => void;
+  readonly onCommitRename?: () => void;
+  readonly onCancelRename?: () => void;
   readonly onSelect: () => void;
+  readonly onTogglePinned?: () => void;
   readonly onRename?: (title: string) => void;
   readonly onArchive?: () => void;
   readonly onDelete?: () => void;
+  readonly onOpenMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
+  readonly onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
 }
 
 export interface SidebarSectionSlotProps {
@@ -240,12 +253,16 @@ export interface ComposerSlotBaseProps {
   readonly sessionFile?: string | null;
   readonly variant?: "task-start" | "follow-up";
   readonly sessionKey?: string;
+  readonly isolated?: boolean;
 }
 
 export interface ComposerMainSlotProps extends ComposerSlotBaseProps {
-  readonly isolated?: boolean;
   readonly isStreaming?: boolean;
   readonly pendingApproval?: boolean;
+  readonly quickChat?: boolean;
+  readonly environment?: "local" | "worktree";
+  readonly onQuickChat?: () => void;
+  readonly onEnvironmentChange?: (environment: "local" | "worktree") => void;
   readonly onSend?: (text: string, attachments?: AttachmentPayload[]) => void | Promise<boolean>;
 }
 
@@ -257,6 +274,7 @@ export interface ComposerAttachmentsSlotProps extends ComposerSlotBaseProps {
 export interface ComposerInputSlotProps extends ComposerSlotBaseProps {
   readonly placeholder?: string;
   readonly disabled?: boolean;
+  readonly quickChat?: boolean;
   readonly onSubmit?: () => void;
 }
 
@@ -281,6 +299,8 @@ export interface WorkbenchPaneSlotProps extends WorkbenchSlotBaseProps {
   readonly active: boolean;
   readonly maximized?: boolean;
   readonly onClose?: () => void;
+  readonly paneControls?: ReactNode;
+  readonly onHeaderPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
 }
 
 export interface WorkbenchFileViewerSlotProps extends WorkbenchSlotBaseProps {

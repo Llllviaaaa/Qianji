@@ -20,6 +20,7 @@ import {
   useFrontendService,
   useNavigationState,
   useSessionState,
+  useThemeState,
   useWorkspaceState,
   type ClientPageContribution,
   type NavigationHubView,
@@ -29,7 +30,13 @@ import type {
   SidebarNavSlotProps,
   SlotComponentProps,
 } from "@qianji/client-slots";
-import { sameLocalPath } from "./sidebarHelpers";
+import {
+  compactTimestamp,
+  dispatchSidebarClosePopovers,
+  dispatchSidebarClosePreview,
+  dispatchSidebarSearchActive,
+  sameLocalPath,
+} from "./sidebarHelpers";
 
 const COLLAPSED_PLUGIN_PAGE_LIMIT = 3;
 const COLLAPSED_PLUGIN_PAGE_HEAD = 2;
@@ -40,16 +47,30 @@ export function dispatchSidebarSearchQuery(query: string): void {
   }
 }
 
+function readIsNarrowViewport(): boolean {
+  return typeof window !== "undefined" && window.innerWidth > 0 && window.innerWidth <= 760;
+}
+
 export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotProps, "root">) {
   const { ctx } = props;
   const navigationService = useFrontendService("navigationService", ctx);
   const navSnap = useNavigationState(ctx);
   const sessionSnap = useSessionState(ctx);
   const workspaceSnap = useWorkspaceState(ctx);
+  const themeSnap = useThemeState(ctx);
 
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const win = window as Window & { __qianjiSidebarSearchPending?: boolean };
+    if (win.__qianjiSidebarSearchPending === true) {
+      win.__qianjiSidebarSearchPending = false;
+      return true;
+    }
+    return false;
+  });
   const [query, setQuery] = useState("");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [isNarrow, setIsNarrow] = useState(readIsNarrowViewport);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const notifications = navSnap?.notifications ?? [];
@@ -57,19 +78,82 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
   const cwd = props.cwd ?? workspaceSnap?.cwd ?? sessionSnap?.cwd ?? "";
   const unreadCount = notifications.filter((item) => !item.read).length;
   const sidebarPinned = navSnap?.sidebarVisible ?? true;
-  const isNarrow = typeof window !== "undefined" && window.innerWidth > 0 && window.innerWidth <= 760;
   const isPreviewMode = !sidebarPinned || isNarrow;
+  const toggleSidebarShortcut = themeSnap?.shortcutToggleSidebar || "Ctrl+B";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onResize = () => setIsNarrow(readIsNarrowViewport());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    dispatchSidebarSearchActive(searchOpen);
+    if (searchOpen && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    }
+  }, [searchOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const onSearchRequested = () => {
+      const win = window as Window & { __qianjiSidebarSearchPending?: boolean };
+      win.__qianjiSidebarSearchPending = false;
       setSearchOpen(true);
       setNotificationsOpen(false);
       window.requestAnimationFrame(() => searchInputRef.current?.focus());
     };
+    const onClearSearch = () => {
+      setQuery("");
+      setSearchOpen(false);
+      dispatchSidebarSearchQuery("");
+    };
+    const onClosePopovers = () => {
+      setSearchOpen(false);
+      setNotificationsOpen(false);
+    };
     window.addEventListener("qianji:sidebar-search-request", onSearchRequested);
-    return () => window.removeEventListener("qianji:sidebar-search-request", onSearchRequested);
+    window.addEventListener("qianji:sidebar-clear-search", onClearSearch);
+    window.addEventListener("qianji:sidebar-close-popovers", onClosePopovers);
+    return () => {
+      window.removeEventListener("qianji:sidebar-search-request", onSearchRequested);
+      window.removeEventListener("qianji:sidebar-clear-search", onClearSearch);
+      window.removeEventListener("qianji:sidebar-close-popovers", onClosePopovers);
+    };
   }, []);
+
+  useEffect(() => {
+    if ((!searchOpen && !notificationsOpen) || typeof document === "undefined") return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target === null) return;
+      if (searchOpen && target.closest('[data-slot="sidebar"]') === null) {
+        setSearchOpen(false);
+      }
+      if (notificationsOpen && target.closest("[data-sidebar-popover], .sidebar-brand-actions") === null) {
+        setNotificationsOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (notificationsOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        setNotificationsOpen(false);
+      } else if (searchOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [notificationsOpen, searchOpen]);
 
   const updateQuery = (next: string) => {
     setQuery(next);
@@ -78,6 +162,8 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
 
   const handleNewTask = () => {
     setNotificationsOpen(false);
+    dispatchSidebarClosePopovers();
+    dispatchSidebarClosePreview();
     if (props.onNewTask !== undefined) {
       props.onNewTask();
     } else {
@@ -99,37 +185,31 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
         </button>
 
         <div className="sidebar-brand-actions">
-          {isPreviewMode && (
-            <>
-              {!isNarrow && (
-                <button
-                  type="button"
-                  className="icon-button sidebar-pin-button"
-                  title="固定侧栏"
-                  aria-label="固定侧栏"
-                  onClick={() => {
-                    if (typeof window !== "undefined") {
-                      window.dispatchEvent(new Event("qianji:sidebar-pin"));
-                    }
-                  }}
-                >
-                  <Pin size={14} strokeWidth={1.75} />
-                </button>
-              )}
-              <button
-                type="button"
-                className="icon-button sidebar-close-button"
-                title="收起侧栏"
-                aria-label="收起侧栏"
-                onClick={() => {
-                  if (typeof window !== "undefined") {
-                    window.dispatchEvent(new Event("qianji:sidebar-close-preview"));
-                  }
-                }}
-              >
-                <X size={14} strokeWidth={1.75} />
-              </button>
-            </>
+          {isPreviewMode && !isNarrow && (
+            <button
+              type="button"
+              className="icon-button sidebar-pin-button"
+              title={`固定侧栏 (${toggleSidebarShortcut})`}
+              aria-label="固定侧栏"
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.dispatchEvent(new Event("qianji:sidebar-pin"));
+                }
+              }}
+            >
+              <Pin size={14} strokeWidth={1.75} />
+            </button>
+          )}
+          {isPreviewMode && isNarrow && (
+            <button
+              type="button"
+              className="icon-button sidebar-close-button"
+              title="收起侧栏"
+              aria-label="收起侧栏"
+              onClick={dispatchSidebarClosePreview}
+            >
+              <X size={14} strokeWidth={1.75} />
+            </button>
           )}
           <button
             type="button"
@@ -138,13 +218,14 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
             aria-label="搜索会话与项目"
             aria-expanded={searchOpen}
             onClick={() => {
-              setSearchOpen((prev) => !prev);
+              const next = !searchOpen;
+              dispatchSidebarClosePopovers();
+              setSearchOpen(next);
               setNotificationsOpen(false);
             }}
           >
             <Search size={15} strokeWidth={1.7} />
           </button>
-
           <button
             type="button"
             className={`icon-button notification-button ${notificationsOpen ? "active" : ""}`}
@@ -152,7 +233,9 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
             aria-label="通知"
             aria-expanded={notificationsOpen}
             onClick={() => {
-              setNotificationsOpen((prev) => !prev);
+              const next = !notificationsOpen;
+              dispatchSidebarClosePopovers();
+              setNotificationsOpen(next);
               setSearchOpen(false);
             }}
           >
@@ -180,6 +263,16 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
             }}
             placeholder="搜索会话标题、正文或项目…"
           />
+          {query !== "" && (
+            <button
+              type="button"
+              className="session-search-clear"
+              aria-label="清空搜索"
+              onClick={() => { updateQuery(""); searchInputRef.current?.focus(); }}
+            >
+              <X size={12} />
+            </button>
+          )}
         </label>
       )}
 
@@ -188,11 +281,7 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
           <div className="sidebar-popover-heading">
             <strong>通知</strong>
             {unreadCount > 0 && (
-              <button
-                type="button"
-                onClick={() => navigationService?.markAllNotificationsRead()}
-                title="全部标为已读"
-              >
+              <button type="button" onClick={() => navigationService?.markAllNotificationsRead()} title="全部标为已读">
                 <Check size={13} />
                 全部已读
               </button>
@@ -201,56 +290,46 @@ export function CoreSidebarHeader(props: SlotComponentProps<SidebarHeaderSlotPro
           {notifications.length === 0 ? (
             <div className="sidebar-notification-empty">暂无新通知</div>
           ) : (
-            notifications.map((notification) => (
-              <div
-                key={notification.id}
-                className={`sidebar-notification-row${notification.read ? "" : " unread"}`}
-              >
-                <button
-                  type="button"
-                  className="sidebar-notification-open"
-                  onClick={() => {
-                    setNotificationsOpen(false);
-                    navigationService?.markNotificationRead(notification.id);
-                    const targetSession = notification.sessionFile
-                      ? sessions.find((item) => sameLocalPath(item.file, notification.sessionFile))
-                      : undefined;
-                    if (targetSession !== undefined) {
-                      navigationService?.navigate({
-                        kind: "session",
-                        cwd: targetSession.cwd,
-                        file: targetSession.file,
-                      });
-                    } else if (notification.cwd) {
-                      navigationService?.navigate({ kind: "home", workspace: notification.cwd });
-                    }
-                  }}
-                >
-                  <span className={`sidebar-notification-icon ${notification.kind}`}>
-                    {notification.kind === "completion" ? (
-                      <CheckCircle2 size={15} />
-                    ) : notification.kind === "approval" ? (
-                      <ShieldCheck size={15} />
-                    ) : (
-                      <MessageCircleQuestion size={15} />
-                    )}
-                  </span>
-                  <span className="sidebar-notification-copy">
-                    <strong>{notification.title}</strong>
-                    <small>{notification.body}</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-notification-dismiss"
-                  title="移除通知"
-                  aria-label="移除通知"
-                  onClick={() => navigationService?.dismissNotification(notification.id)}
-                >
-                  <X size={13} />
-                </button>
-              </div>
-            ))
+            notifications.map((notification) => {
+              const timeLabel = compactTimestamp(notification.createdAt);
+              return (
+                <div key={notification.id} className={`sidebar-notification-row${notification.read ? "" : " unread"}`}>
+                  <button
+                    type="button"
+                    className="sidebar-notification-open"
+                    onClick={() => {
+                      setNotificationsOpen(false);
+                      dispatchSidebarClosePreview();
+                      navigationService?.markNotificationRead(notification.id);
+                      const targetSession = notification.sessionFile
+                        ? sessions.find((item) => sameLocalPath(item.file, notification.sessionFile))
+                        : undefined;
+                      if (targetSession !== undefined) {
+                        navigationService?.navigate({ kind: "session", cwd: targetSession.cwd, file: targetSession.file });
+                      } else if (notification.cwd) {
+                        navigationService?.navigate({ kind: "home", workspace: notification.cwd });
+                      } else {
+                        navigationService?.showToast("该会话已不存在", "info");
+                      }
+                    }}
+                  >
+                    <span className={`sidebar-notification-icon ${notification.kind}`}>
+                      {notification.kind === "completion" ? <CheckCircle2 size={15} /> : notification.kind === "approval" ? <ShieldCheck size={15} /> : <MessageCircleQuestion size={15} />}
+                    </span>
+                    <span className="sidebar-notification-copy">
+                      <strong>
+                        <span>{notification.title}</span>
+                        {timeLabel !== "" && <span className="sidebar-notification-time">{timeLabel}</span>}
+                      </strong>
+                      <small>{notification.body}</small>
+                    </span>
+                  </button>
+                  <button type="button" className="sidebar-notification-dismiss" title="移除通知" aria-label="移除通知" onClick={() => navigationService?.dismissNotification(notification.id)}>
+                    <X size={13} />
+                  </button>
+                </div>
+              );
+            })
           )}
         </div>
       )}
@@ -331,30 +410,45 @@ export function CoreSidebarPrimaryNav(props: SlotComponentProps<SidebarNavSlotPr
   const navigationService = useFrontendService("navigationService", ctx);
   const navSnap = useNavigationState(ctx);
   const workspaceSnap = useWorkspaceState(ctx);
+  const themeSnap = useThemeState(ctx);
   const contributions = useClientContributions();
 
   const cwd = props.cwd ?? workspaceSnap?.cwd ?? "";
   const activeHub = navSnap?.hubView ?? null;
   const newTaskActive = (navSnap?.newTask ?? true) && activeHub === null;
+  const newChatShortcut = themeSnap?.shortcutNewChat || "Ctrl+Shift+N";
+
+  const closeOverlays = () => {
+    dispatchSidebarClosePopovers();
+    dispatchSidebarClosePreview();
+  };
 
   return (
     <>
       <button
         type="button"
         className={`nav-item dsh-claude-new-session ${newTaskActive ? "active" : ""}`}
-        onClick={() => navigationService?.navigate({ kind: "home", workspace: cwd })}
+        onClick={() => {
+          closeOverlays();
+          navigationService?.navigate({ kind: "home", workspace: cwd });
+        }}
       >
         <Plus size={15} strokeWidth={1.85} aria-hidden="true" />
         <span className="dsh-claude-new-session-label">新会话</span>
-        <span className="dsh-claude-new-session-shortcut" aria-hidden="true">
-          Ctrl+Shift+N
-        </span>
+        {newChatShortcut !== "" && (
+          <span className="dsh-claude-new-session-shortcut" aria-hidden="true">
+            {newChatShortcut}
+          </span>
+        )}
       </button>
 
       <button
         type="button"
         className={`nav-item ${activeHub === "scheduled" ? "active" : ""}`}
-        onClick={() => navigationService?.navigate({ kind: "hub", view: "scheduled" })}
+        onClick={() => {
+          closeOverlays();
+          navigationService?.navigate({ kind: "hub", view: "scheduled" });
+        }}
       >
         <Clock3 size={15} strokeWidth={1.75} />
         <span>定时任务</span>
@@ -363,7 +457,10 @@ export function CoreSidebarPrimaryNav(props: SlotComponentProps<SidebarNavSlotPr
       <button
         type="button"
         className={`nav-item ${activeHub === "plugins" ? "active" : ""}`}
-        onClick={() => navigationService?.navigate({ kind: "hub", view: "plugins" })}
+        onClick={() => {
+          closeOverlays();
+          navigationService?.navigate({ kind: "hub", view: "plugins" });
+        }}
       >
         <Boxes size={15} strokeWidth={1.75} />
         <span>扩展插件</span>
@@ -372,7 +469,10 @@ export function CoreSidebarPrimaryNav(props: SlotComponentProps<SidebarNavSlotPr
       <SidebarPluginNavItems
         pages={contributions.pages}
         activeHub={activeHub}
-        onSelectPage={(pageId) => navigationService?.openPluginPage(pageId)}
+        onSelectPage={(pageId) => {
+          closeOverlays();
+          navigationService?.openPluginPage(pageId);
+        }}
       />
     </>
   );

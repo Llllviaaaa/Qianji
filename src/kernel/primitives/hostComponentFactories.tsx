@@ -8,7 +8,7 @@
  * core/feature plugins via `renderFactory(...)` with zero ESLint boundary
  * violations and full user-plugin override support.
  */
-import { createElement, useCallback, useMemo, useState, type ReactElement } from "react";
+import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import type {
   ClientSlotsService,
   SlotComponentProps,
@@ -18,26 +18,31 @@ import type {
 import { IntelligentUiCard } from "../../components/IntelligentUiCard";
 import { ModelPicker } from "../../components/ModelPicker";
 import { ModelsPage } from "../../components/ModelsPage";
+import { PluginsHubPage } from "../../components/PluginsHubPage";
 import { PluginsSettingsPanel } from "../../components/PluginsSettingsPanel";
 import { ScheduledTasksPage } from "../../components/ScheduledTasksPage";
-import { DEFAULTS } from "../../components/settings/settingsPrimitives";
 import { AppearancePage } from "../../components/settings/AppearanceSettingsPage";
 import { GeneralPage } from "../../components/settings/GeneralSettingsPage";
 import { SideChatTab as HostSideChatTab } from "../../components/SideChatTab";
 import { CodeWorkspacePane } from "../../components/workbench/CodeWorkspacePane";
 import { IntelligentUiCanvasTab as HostIntelligentUiCanvasTab } from "../../components/workbench/IntelligentUiCanvasTab";
+import { useSyncOnChange } from "../../hooks/useSyncOnChange";
+import { agent } from "../../lib/agent";
 import { mergeAppearanceCatalog } from "../../lib/appearanceCatalog";
 import { useClientContributions } from "../../lib/clientContributions";
 import { describeError } from "../../lib/errors";
-import { deriveSessionIntelligentUis, INTELLIGENT_UI_CANVAS_TAB_ID } from "../../lib/intelligentUi";
+import {
+  deriveSessionIntelligentUis,
+  normalizeWidgetId,
+} from "../../lib/intelligentUi";
 import { filterHiddenModels } from "../../lib/modelProviders";
 import { groupTranscriptMessages } from "../../lib/transcriptTurns";
 import { useAppStore } from "../../store";
-import { useIntelligentUiStore } from "../../stores/intelligentUiStore";
-import { useWorkbenchStore } from "../../stores/workbenchStore";
-import type { AppSettings, ModelInfo, UiMessage, UiToolCall } from "../../types";
-import { isWorkbenchPaneAvailable } from "../runtime/featureSlotQueries";
+import type { ModelInfo, UiToolCall } from "../../types";
 import type { SessionHandle } from "../services/sessionHandle";
+import { installIntelligentUiAutoOpenSync } from "./hostIntelligentUiSync";
+
+export { installIntelligentUiAutoOpenSync };
 import {
   registerHostConversationFactories,
   type HostAssistantMessageFactoryProps,
@@ -45,6 +50,10 @@ import {
   type HostToolCallFactoryProps,
   type HostUserMessageFactoryProps,
 } from "./hostConversationFactories";
+import { useLiveAppSettingsForm } from "./hostSettingsForm";
+import { registerHostComposerFactories } from "./hostComposerFactories";
+import { registerHostShellFactories } from "./hostShellFactories";
+import { registerHostWorkbenchFactories } from "./hostWorkbenchFactories";
 
 export type {
   HostAssistantMessageFactoryProps,
@@ -55,6 +64,13 @@ export type {
 
 export interface HostSettingsPageFactoryProps {
   readonly cwd?: string;
+  readonly onClose?: () => void;
+  readonly initialExpandPluginId?: string;
+}
+
+export interface HostHubPluginsFactoryProps {
+  readonly cwd?: string;
+  readonly onReturnToChat?: () => void;
 }
 
 export interface HostComposerModelPickerFactoryProps {
@@ -92,6 +108,7 @@ declare module "@qianji/client-slots" {
     "host.settings.plugins": SlotFactorySpec<HostSettingsPageFactoryProps, "root">;
     "host.composer.modelPicker": SlotFactorySpec<HostComposerModelPickerFactoryProps, "root">;
     "host.hub.scheduled": SlotFactorySpec<HostScheduledHubFactoryProps, "root">;
+    "host.hub.plugins": SlotFactorySpec<HostHubPluginsFactoryProps, "root">;
     "host.workbench.codeWorkspace": SlotFactorySpec<HostCodeWorkspaceFactoryProps, "root">;
     "host.workbench.sideChat": SlotFactorySpec<HostSideChatFactoryProps, "root">;
     "host.intelligentUi.inlineCard": SlotFactorySpec<HostIntelligentUiInlineFactoryProps, "root">;
@@ -100,30 +117,6 @@ declare module "@qianji/client-slots" {
 }
 
 const HOST_FACTORIES_PLUGIN_ID = "core-host-factories";
-
-function useLiveAppSettingsForm(): {
-  form: AppSettings;
-  update: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
-} {
-  const settings = useAppStore((s) => s.settings);
-  const saveSettings = useAppStore((s) => s.saveSettings);
-  const form = useMemo<AppSettings>(
-    () => ({ ...DEFAULTS, ...settings, language: "zh-CN" }),
-    [settings],
-  );
-
-  const update = useCallback(
-    <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-      const current = useAppStore.getState().settings;
-      const next: AppSettings = { ...DEFAULTS, ...current, [key]: value, language: "zh-CN" };
-      useAppStore.setState({ settings: next });
-      void saveSettings(next).catch(() => undefined);
-    },
-    [saveSettings],
-  );
-
-  return { form, update };
-}
 
 function HostGeneralSettingsFactory(): ReactElement {
   const { form, update } = useLiveAppSettingsForm();
@@ -151,6 +144,20 @@ function HostPluginsSettingsFactory(
     cwd: props.cwd ?? storeCwd,
     form,
     onSyncAppSetting: update,
+    ...(props.onClose === undefined ? {} : { onDismissHub: props.onClose }),
+    ...(props.initialExpandPluginId === undefined
+      ? {}
+      : { initialExpandPluginId: props.initialExpandPluginId }),
+  });
+}
+
+function HostHubPluginsFactory(
+  props: SlotComponentProps<HostHubPluginsFactoryProps, "root">,
+): ReactElement {
+  const storeCwd = useAppStore((s) => s.cwd);
+  return createElement(PluginsHubPage, {
+    cwd: props.cwd ?? storeCwd,
+    ...(props.onReturnToChat === undefined ? {} : { onReturnToChat: props.onReturnToChat }),
   });
 }
 
@@ -158,12 +165,38 @@ function HostComposerModelPickerFactory(
   props: SlotComponentProps<HostComposerModelPickerFactoryProps, "root">,
 ): ReactElement {
   const [open, setOpen] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
   const settings = useAppStore((s) => s.settings);
   const storeModel = useAppStore((s) => s.model);
   const storeModels = useAppStore((s) => s.availableModels);
   const storeThinking = useAppStore((s) => s.thinkingLevel);
   const storeThinkingLevels = useAppStore((s) => s.availableThinkingLevels);
   const isSwitchingModel = useAppStore((s) => s.isSwitchingModel);
+
+  useSyncOnChange([isSwitchingModel], () => {
+    if (isSwitchingModel) setOpen(false);
+  });
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target !== null && hostRef.current !== null && hostRef.current.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
 
   const handle = props.handle ?? null;
   const handleSnap = handle?.getSnapshot() ?? null;
@@ -205,24 +238,29 @@ function HostComposerModelPickerFactory(
     [handle],
   );
 
-  return createElement(ModelPicker, {
-    model,
-    models,
-    thinkingLevel,
-    thinkingLevels,
-    isSwitchingModel,
-    open,
-    onToggle: () => setOpen((v) => !v),
-    onClose: () => setOpen(false),
-    onModelChange: handleModelChange,
-    onThinkingChange: handleThinkingChange,
-  });
+  return (
+    <div ref={hostRef} style={{ display: "inline-flex", alignItems: "center" }}>
+      <ModelPicker
+        model={model}
+        models={models}
+        thinkingLevel={thinkingLevel}
+        thinkingLevels={thinkingLevels}
+        isSwitchingModel={isSwitchingModel}
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+        onClose={() => setOpen(false)}
+        onModelChange={handleModelChange}
+        onThinkingChange={handleThinkingChange}
+      />
+    </div>
+  );
 }
 
 function HostScheduledHubFactory(
   props: SlotComponentProps<HostScheduledHubFactoryProps, "root">,
 ): ReactElement {
   const cwd = useAppStore((s) => s.cwd);
+  const defaultWorkspace = useAppStore((s) => s.settings?.defaultWorkspace?.trim() ?? "");
   const sessions = useAppStore((s) => s.sessions);
   const workspaces = useMemo(() => {
     const provided = props.workspaces ?? [];
@@ -232,7 +270,7 @@ function HostScheduledHubFactory(
 
   return createElement(ScheduledTasksPage, {
     workspaces,
-    defaultWorkspace: props.cwd || cwd,
+    defaultWorkspace,
     onTasksChanged: () => {
       void useAppStore.getState().refreshSessions();
     },
@@ -256,7 +294,26 @@ function HostScheduledHubFactory(
 function HostCodeWorkspaceFactory(
   props: SlotComponentProps<HostCodeWorkspaceFactoryProps, "root">,
 ): ReactElement {
-  return createElement(CodeWorkspacePane, { cwd: props.cwd });
+  const onAddToChat = useCallback(
+    (path: string) => {
+      const base = props.cwd || useAppStore.getState().cwd;
+      if (base === "") return;
+      const resolved = /^(?:[A-Za-z]:[\\/]|[\\/])/.test(path)
+        ? path
+        : `${base.replace(/[\\/]+$/, "")}\\${path.replace(/\//g, "\\")}`;
+      void agent
+        .readAttachment(resolved)
+        .then((attachment) => {
+          props.ctx?.get("composerService")?.addAttachments([attachment]);
+          useAppStore.getState().showToast(`${attachment.fileName} 已添加到聊天`, "info");
+        })
+        .catch((error) => {
+          useAppStore.getState().showToast(describeError(error), "error");
+        });
+    },
+    [props.ctx, props.cwd],
+  );
+  return createElement(CodeWorkspacePane, { cwd: props.cwd, onAddToChat });
 }
 
 function HostSideChatFactory(
@@ -264,6 +321,7 @@ function HostSideChatFactory(
 ): ReactElement {
   const sessionFile = props.sessionFile ?? "";
   return createElement(HostSideChatTab, {
+    key: sessionFile || "draft",
     sessionFile,
     fallbackCwd: props.cwd,
     tabId: `side:${sessionFile || props.cwd || "active"}`,
@@ -279,7 +337,13 @@ function HostIntelligentUiInlineFactory(
     () => deriveSessionIntelligentUis(groupTranscriptMessages([...messages])),
     [messages],
   );
-  const widgetId = typeof props.call.args?.id === "string" ? props.call.args.id.trim() : "";
+  const rawId =
+    (typeof props.call.details?.id === "string" && props.call.details.id.trim() !== ""
+      ? props.call.details.id
+      : typeof props.call.args?.id === "string"
+        ? props.call.args.id
+        : "");
+  const widgetId = rawId.trim() !== "" ? normalizeWidgetId(rawId) : "";
   const group = widgetId !== "" ? summary.groupsById.get(widgetId) : undefined;
   if (group === undefined) return null;
   const turnRefs = props.messageId !== undefined ? summary.turnWidgetsByMessageId.get(props.messageId) : undefined;
@@ -293,62 +357,6 @@ function HostIntelligentUiInlineFactory(
 
 function HostIntelligentUiCanvasFactory(): ReactElement {
   return createElement(HostIntelligentUiCanvasTab);
-}
-
-/**
- * Subscribe synchronously to `useAppStore` so live streaming HTML `render_ui`
- * widgets auto-open Right Workbench Canvas (`intelligent-ui-canvas`) while
- * historical artifacts loaded during idle session switches stay quiet.
- * Strictly gated by live `SlotRegistry` availability of `"intelligent-ui-canvas"`.
- */
-export function installIntelligentUiAutoOpenSync(): () => void {
-  let trackedSessionFile: string | null = useAppStore.getState().sessionFile;
-  let seenHtmlKeys = new Set<string>();
-  let lastMessagesRef = useAppStore.getState().messages;
-
-  const collectHtmlKeys = (messages: readonly UiMessage[]) => {
-    const summary = deriveSessionIntelligentUis(groupTranscriptMessages([...messages]));
-    const entries: Array<{ key: string; widgetId: string }> = [];
-    for (const grp of summary.orderedGroups) {
-      for (const ver of grp.versions) {
-        if (ver.engine === "html") {
-          entries.push({ key: `${grp.id}:v${ver.version}`, widgetId: grp.id });
-        }
-      }
-    }
-    return entries;
-  };
-
-  for (const item of collectHtmlKeys(lastMessagesRef)) {
-    seenHtmlKeys.add(item.key);
-  }
-
-  return useAppStore.subscribe((state) => {
-    if (state.sessionFile !== trackedSessionFile) {
-      trackedSessionFile = state.sessionFile;
-      seenHtmlKeys = new Set(collectHtmlKeys(state.messages).map((item) => item.key));
-      lastMessagesRef = state.messages;
-      return;
-    }
-    if (state.messages === lastMessagesRef) return;
-    lastMessagesRef = state.messages;
-
-    const currentItems = collectHtmlKeys(state.messages);
-    const newlyArrived = currentItems.filter((item) => !seenHtmlKeys.has(item.key));
-    for (const item of newlyArrived) {
-      seenHtmlKeys.add(item.key);
-    }
-
-    if (newlyArrived.length === 0 || !state.isStreaming) return;
-    if (!useIntelligentUiStore.getState().pluginEnabled) return;
-    if (!isWorkbenchPaneAvailable(INTELLIGENT_UI_CANVAS_TAB_ID)) return;
-
-    const latest = newlyArrived[newlyArrived.length - 1];
-    if (latest !== undefined) {
-      useIntelligentUiStore.getState().setSelectedWidgetId(latest.widgetId);
-      useWorkbenchStore.getState().openTab(INTELLIGENT_UI_CANVAS_TAB_ID);
-    }
-  });
 }
 
 /** Register Qianji's production host component factories (`tier: "builtin", priority: 0`). */
@@ -404,6 +412,14 @@ export function registerHostComponentFactories(
       scope: "root",
       component: HostScheduledHubFactory,
     }),
+    target.registerFactory("host.hub.plugins", {
+      id: `${HOST_FACTORIES_PLUGIN_ID}:hub-plugins`,
+      pluginId: HOST_FACTORIES_PLUGIN_ID,
+      tier: "builtin",
+      priority: 0,
+      scope: "root",
+      component: HostHubPluginsFactory,
+    }),
     target.registerFactory("host.workbench.codeWorkspace", {
       id: `${HOST_FACTORIES_PLUGIN_ID}:workbench-code-workspace`,
       pluginId: HOST_FACTORIES_PLUGIN_ID,
@@ -437,6 +453,9 @@ export function registerHostComponentFactories(
       component: HostIntelligentUiCanvasFactory,
     }),
     ...registerHostConversationFactories(target),
+    ...registerHostComposerFactories(target),
+    ...registerHostShellFactories(target),
+    ...registerHostWorkbenchFactories(target),
   ];
 
   let disposed = false;

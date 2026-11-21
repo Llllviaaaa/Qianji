@@ -42,7 +42,20 @@ export const diagramViewerPlugin: Plugin<DiagramViewerConfig> = {
         key: ["mermaid"],
         matchKey: (lang) => lang.trim().toLowerCase() === "mermaid",
         priority: 0,
-        component: ({ code }) => createElement(DiagramBlock, { kind: "mermaid", source: code }),
+        component: ({ code, isStreaming, renderFactory }) => {
+          if (isStreaming === true) {
+            return createElement(
+              "pre",
+              { className: "diagram-streaming-fence" },
+              createElement("code", { className: "language-mermaid" }, code),
+            );
+          }
+          return renderFactory(
+            "host.diagram.block",
+            { kind: "mermaid", source: code },
+            { fallback: createElement(DiagramBlock, { kind: "mermaid", source: code }) },
+          );
+        },
       });
 
       ctx.slots.register("workbench.fileViewer", {
@@ -50,8 +63,12 @@ export const diagramViewerPlugin: Plugin<DiagramViewerConfig> = {
         key: [".mmd", ".mermaid"],
         matchKey: (route) => matchesExtensionRoute(route, ["mmd", "mermaid"]),
         priority: 0,
-        component: ({ path, content }) =>
-          createElement(DiagramFileViewer, { kind: "mermaid", path, content }),
+        component: ({ path, content, renderFactory }) =>
+          renderFactory(
+            "host.diagram.block",
+            { kind: "mermaid", source: content },
+            { fallback: createElement(DiagramFileViewer, { kind: "mermaid", path, content }) },
+          ),
       });
     }
 
@@ -64,7 +81,20 @@ export const diagramViewerPlugin: Plugin<DiagramViewerConfig> = {
           return n === "plantuml" || n === "puml" || n === "uml";
         },
         priority: 0,
-        component: ({ code }) => createElement(DiagramBlock, { kind: "plantuml", source: code }),
+        component: ({ code, isStreaming, renderFactory }) => {
+          if (isStreaming === true) {
+            return createElement(
+              "pre",
+              { className: "diagram-streaming-fence" },
+              createElement("code", { className: "language-plantuml" }, code),
+            );
+          }
+          return renderFactory(
+            "host.diagram.block",
+            { kind: "plantuml", source: code },
+            { fallback: createElement(DiagramBlock, { kind: "plantuml", source: code }) },
+          );
+        },
       });
 
       ctx.slots.register("workbench.fileViewer", {
@@ -72,8 +102,12 @@ export const diagramViewerPlugin: Plugin<DiagramViewerConfig> = {
         key: [".puml", ".plantuml"],
         matchKey: (route) => matchesExtensionRoute(route, ["puml", "plantuml", "wsd"]),
         priority: 0,
-        component: ({ path, content }) =>
-          createElement(DiagramFileViewer, { kind: "plantuml", path, content }),
+        component: ({ path, content, renderFactory }) =>
+          renderFactory(
+            "host.diagram.block",
+            { kind: "plantuml", source: content },
+            { fallback: createElement(DiagramFileViewer, { kind: "plantuml", path, content }) },
+          ),
       });
     }
   },

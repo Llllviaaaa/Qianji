@@ -217,6 +217,7 @@ export function CoreComposerDock({
   isolated,
   sessionId,
   renderSlotChain,
+  renderFactory,
 }: SlotComponentProps<ConversationComposerDockSlotProps, "session-maybe">): ReactNode {
   const sessionState = useSessionState();
   const workspaceState = useWorkspaceState();
@@ -242,7 +243,15 @@ export function CoreComposerDock({
       data-slot="conversation.composerDock"
       data-session-id={sessionId ?? undefined}
     >
-      <CoreLivePlanBar sessionId={sessionId} isolated={isolated} />
+      {isolated === true ? (
+        <CoreLivePlanBar sessionId={sessionId} isolated />
+      ) : (
+        renderFactory(
+          "host.conversation.livePlanBar",
+          {},
+          { fallback: <CoreLivePlanBar sessionId={sessionId} isolated={isolated} /> },
+        )
+      )}
       {renderSlotChain(
         "composer.main",
         {

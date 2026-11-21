@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { ChevronDown, Menu } from "lucide-react";
 import {
   useClientContributions,
@@ -6,13 +6,16 @@ import {
   useMenusState,
   useNavigationState,
   useSessionState,
+  useThemeState,
   useWorkspaceState,
 } from "@qianji/client";
 import type { CoreShellTopbarProps, SlotComponentProps } from "@qianji/client-slots";
 import { aggregateDiffStats, LegacyContributionHost, resolveActiveSessionTitle } from "./shellHelpers";
 
+const NOOP_UNSUB = (): void => undefined;
+
 export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, "root">) {
-  const { ctx } = props;
+  const { ctx, renderFactory } = props;
   const navigationService = useFrontendService("navigationService", ctx);
   const sessionService = useFrontendService("sessionService", ctx);
   const workspaceService = useFrontendService("workspaceService", ctx);
@@ -22,8 +25,23 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
   const navSnap = useNavigationState(ctx);
   const sessionSnap = useSessionState(ctx);
   const workspaceSnap = useWorkspaceState(ctx);
+  const themeSnap = useThemeState(ctx);
   useMenusState(ctx);
   const contributions = useClientContributions();
+
+  const slotsRegistry = ctx?.slots?.registry;
+  const subscribeSlots = useCallback(
+    (listener: () => void) => (slotsRegistry === undefined ? NOOP_UNSUB : slotsRegistry.subscribe(listener)),
+    [slotsRegistry],
+  );
+  const getSlotsVersion = useCallback(
+    () => (slotsRegistry === undefined ? 0 : slotsRegistry.getVersion()),
+    [slotsRegistry],
+  );
+  useSyncExternalStore(subscribeSlots, getSlotsVersion, getSlotsVersion);
+  const codeReviewAvailable =
+    slotsRegistry === undefined ||
+    slotsRegistry.getKeyedCandidates("workbench.panes", "review").length > 0;
 
   const [moreOpen, setMoreOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -97,6 +115,9 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
     }
   };
 
+  const toggleSidebarShortcut = themeSnap?.shortcutToggleSidebar || "Ctrl+B";
+  const hasMessages = (sessionSnap?.messages.length ?? 0) > 0;
+
   return (
     <header className={`topbar ${newTask && hubView === null ? "topbar-home" : ""}`} data-tauri-drag-region="">
       <div className="topbar-left" data-tauri-drag-region="">
@@ -105,9 +126,15 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
             type="button"
             className="icon-button"
             data-sidebar-toggle=""
-            onClick={() => navigationService?.toggleSidebar()}
-            title="固定侧栏 (Ctrl+B)"
-            aria-label="固定侧栏"
+            onClick={() => {
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("qianji:sidebar-toggle-request"));
+              } else {
+                navigationService?.toggleSidebar();
+              }
+            }}
+            title={`切换侧栏 (${toggleSidebarShortcut})`}
+            aria-label="切换侧栏"
           >
             <Menu size={17} />
           </button>
@@ -170,10 +197,43 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
                     disabled={cwd === ""}
                     onClick={() => {
                       setMoreOpen(false);
-                      void workspaceService?.openInFileManager(cwd);
+                      if (typeof window !== "undefined") {
+                        window.dispatchEvent(new CustomEvent("qianji:open-workspace-preferred", { detail: { cwd } }));
+                      } else {
+                        void workspaceService?.openInFileManager(cwd);
+                      }
                     }}
                   >
-                    在文件资源管理器中打开
+                    打开工作区目录
+                  </button>
+                  <button
+                    type="button"
+                    disabled={cwd === "" || git === null}
+                    onClick={() => {
+                      setMoreOpen(false);
+                      if (cwd === "") return;
+                      void workspaceService
+                        ?.createWorktree(cwd)
+                        .then((worktreePath) => sessionService?.connect(worktreePath))
+                        .catch((error) => {
+                          const msg = error instanceof Error ? error.message : String(error);
+                          navigationService?.showToast(`创建 Worktree 失败：${msg}`, "error");
+                        });
+                    }}
+                  >
+                    新建 Worktree 任务
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!connected || !hasMessages}
+                    onClick={() => {
+                      setMoreOpen(false);
+                      if (typeof window !== "undefined") {
+                        window.dispatchEvent(new CustomEvent("qianji:export-markdown-request"));
+                      }
+                    }}
+                  >
+                    导出为 Markdown...
                   </button>
                   <button
                     type="button"
@@ -211,11 +271,25 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
                     onClick={() => {
                       setMoreOpen(false);
                       if (sessionFile === null) return;
-                      void sessionService?.archiveSession(sessionFile).then(() => {
-                        navigationService?.forgetSessions([sessionFile]);
-                        navigationService?.navigate({ kind: "home", workspace: cwd });
-                        navigationService?.showToast("已归档对话", "info");
-                      });
+                      void sessionService
+                        ?.archiveSession(sessionFile)
+                        .then(() => {
+                          try {
+                            if (typeof window !== "undefined") {
+                              window.localStorage.removeItem("qianji:active-runtime");
+                              window.localStorage.removeItem("qianji:last-task");
+                            }
+                          } catch {
+                            // Ignore restricted storage environments.
+                          }
+                          navigationService?.forgetSessions([sessionFile]);
+                          navigationService?.navigate({ kind: "home", workspace: cwd });
+                          navigationService?.showToast("已归档对话", "info");
+                        })
+                        .catch((error) => {
+                          const msg = error instanceof Error ? error.message : String(error);
+                          navigationService?.showToast(`归档失败：${msg}`, "error");
+                        });
                     }}
                   >
                     归档任务
@@ -267,7 +341,7 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
       <div className="topbar-right" data-tauri-drag-region="">
         {hubView === null && (
           <div className="panel-toggles codex-layout-chrome">
-            {!newTask && reviewFileCount > 0 && (
+            {!newTask && codeReviewAvailable && reviewFileCount > 0 && (
               <div className="main-pane-controls">
                 <button
                   type="button"
@@ -285,6 +359,8 @@ export function CoreShellTopbar(props: SlotComponentProps<CoreShellTopbarProps, 
                 </button>
               </div>
             )}
+
+            {!newTask && cwd !== "" && git !== null && renderFactory("host.shell.gitAction", { cwd })}
 
             {contributions.topbarActions.length > 0 && (
               <div className="workspace-pane-controls">

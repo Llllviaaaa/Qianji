@@ -3,7 +3,7 @@
  * `composer.attachments`, `composer.toolbar`, and `composer.status`
  * (ADR 0023 `core-composer`).
  */
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Bot,
   Check,
@@ -13,6 +13,7 @@ import {
   Image as ImageIcon,
   ListChecks,
   MessageCircleQuestion,
+  Paperclip,
   Plus,
   X,
 } from "lucide-react";
@@ -99,25 +100,34 @@ export function CoreComposerBanners({
   cwd = "",
   sessionFile = null,
   variant = "follow-up",
+  isolated = false,
 }: SlotComponentProps<ComposerSlotBaseProps, "session-maybe">): ReactNode {
   const contributions = useClientContributions();
-  if (contributions.composerBanners.length === 0) return null;
+  if (isolated || contributions.composerBanners.length === 0) return null;
 
   const ctx: WorkbenchSlotContext = { cwd, sessionFile, variant };
   return (
     <>
-      {contributions.composerBanners.map((banner) => (
-        <div key={banner.id} className="composer-plugin-banner">
-          <LegacyComposerContribBox
-            id={banner.id}
-            pluginId={banner.pluginId}
-            slotKey="composer.banners"
-            legacySlotName="composerBanners"
-            renderFn={banner.render}
-            context={ctx}
-          />
-        </div>
-      ))}
+      {contributions.composerBanners.map((banner) => {
+        const ownerPlugin = banner.pluginId ?? "builtin";
+        return (
+          <div
+            key={banner.id}
+            className="composer-plugin-banner"
+            data-qj-plugin={ownerPlugin}
+            data-qj-slot="composerBanners"
+            data-qj-entry={banner.id}
+          >
+            <SlotKernelErrorBoundary
+              pluginId={ownerPlugin}
+              entryId={banner.id}
+              slotKey="composer.banners"
+            >
+              <LegacyComposerContribRunner renderFn={banner.render} context={ctx} />
+            </SlotKernelErrorBoundary>
+          </div>
+        );
+      })}
     </>
   );
 }
@@ -168,14 +178,57 @@ export function CoreComposerToolbar({
   cwd = "",
   sessionFile = null,
   variant = "follow-up",
+  sessionKey,
+  isolated = false,
   sessionId,
 }: SlotComponentProps<ComposerSlotBaseProps, "session-maybe">): ReactNode {
+  const composerService = useFrontendService("composerService");
   const sessionService = useFrontendService("sessionService");
   const sessionState = useSessionState();
   const { handle, snapshot: handleSnap } = useSessionHandle(sessionId);
   const contributions = useClientContributions();
   const [actionsOpen, setActionsOpen] = useState(false);
   const [permissionOpen, setPermissionOpen] = useState(false);
+  const actionsWrapRef = useRef<HTMLDivElement>(null);
+  const permissionWrapRef = useRef<HTMLDivElement>(null);
+  const resolvedSessionKey = resolveComposerSessionKey(sessionKey, sessionId, sessionFile);
+
+  useEffect(() => {
+    if ((!actionsOpen && !permissionOpen) || typeof document === "undefined") return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target === null) return;
+      if (
+        actionsOpen &&
+        !target.closest(".composer-actions-menu, .composer-add-trigger, .chip-agent-mode") &&
+        (actionsWrapRef.current === null || !actionsWrapRef.current.contains(target))
+      ) {
+        setActionsOpen(false);
+      }
+      if (
+        permissionOpen &&
+        (permissionWrapRef.current === null || !permissionWrapRef.current.contains(target))
+      ) {
+        setPermissionOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (actionsOpen) {
+        setActionsOpen(false);
+        event.stopPropagation();
+      } else if (permissionOpen) {
+        setPermissionOpen(false);
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [actionsOpen, permissionOpen]);
 
   const permissionMode = handleSnap?.permissionMode ?? sessionState?.permissionMode ?? "ask";
   const agentMode = handleSnap?.agentMode ?? sessionState?.agentMode ?? "agent";
@@ -225,13 +278,14 @@ export function CoreComposerToolbar({
             setPermissionOpen(false);
             setActionsOpen((value) => !value);
           }}
+          title={`当前工作模式：${agentMode === "plan" ? "计划（只读梳理方案）" : "问答（只读回答问题）"}`}
         >
           {agentMode === "plan" ? <ListChecks size={13} strokeWidth={1.8} /> : <MessageCircleQuestion size={13} strokeWidth={1.8} />}
           <span>{agentMode === "plan" ? "计划模式" : "问答模式"}</span>
         </button>
       )}
 
-      <div className="permission-context-wrap">
+      <div className="permission-context-wrap" ref={permissionWrapRef}>
         <button
           type="button"
           className={`chip chip-permission ${permissionOpen ? "active" : ""}`}
@@ -272,7 +326,21 @@ export function CoreComposerToolbar({
       </div>
 
       {actionsOpen && (
-        <div className="composer-actions-menu" role="menu" aria-label="工作模式">
+        <div className="composer-actions-menu" role="menu" aria-label="添加附件与工作模式" ref={actionsWrapRef}>
+          <div className="composer-actions-heading">添加</div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setActionsOpen(false);
+              void composerService?.pickAttachments(resolvedSessionKey);
+            }}
+          >
+            <Paperclip size={14} />
+            <span>文件或图片</span>
+            <small className="composer-actions-hint">可直接粘贴或拖入</small>
+          </button>
+          <div className="composer-actions-separator" role="separator" />
           <div className="composer-actions-heading">工作模式</div>
           {AGENT_MODE_OPTIONS.map((option) => {
             const Icon = option.value === "plan" ? ListChecks : option.value === "ask" ? MessageCircleQuestion : Bot;
@@ -295,19 +363,20 @@ export function CoreComposerToolbar({
         </div>
       )}
 
-      {contributions.composerToolbar.map((action) => (
-        <LegacyComposerContribBox
-          key={action.id}
-          id={action.id}
-          pluginId={action.pluginId}
-          slotKey="composer.toolbar"
-          legacySlotName="composerToolbar"
-          renderFn={action.render}
-          context={contribCtx}
-          className="composer-plugin-action"
-          compact
-        />
-      ))}
+      {!isolated &&
+        contributions.composerToolbar.map((action) => (
+          <LegacyComposerContribBox
+            key={action.id}
+            id={action.id}
+            pluginId={action.pluginId}
+            slotKey="composer.toolbar"
+            legacySlotName="composerToolbar"
+            renderFn={action.render}
+            context={contribCtx}
+            className="composer-plugin-action"
+            compact
+          />
+        ))}
     </>
   );
 }
@@ -319,6 +388,7 @@ export function CoreComposerStatus({
   sessionFile = null,
   variant = "follow-up",
   position = "after-model",
+  isolated = false,
   sessionId,
 }: SlotComponentProps<ComposerStatusSlotProps, "session-maybe">): ReactNode {
   const sessionState = useSessionState();
@@ -326,13 +396,23 @@ export function CoreComposerStatus({
   const contributions = useClientContributions();
   const contribCtx: WorkbenchSlotContext = { cwd, sessionFile, variant };
 
-  const matchedContribs = contributions.composerStatus.filter((item) =>
-    position === "before-model" ? item.position === "before-model" : item.position !== "before-model",
-  );
+  const matchedContribs = isolated
+    ? []
+    : contributions.composerStatus.filter((item) =>
+        position === "before-model" ? item.position === "before-model" : item.position !== "before-model",
+      );
 
   const stats = variant === "follow-up" ? (handleSnap?.stats ?? sessionState?.stats ?? null) : null;
   const metrics = computeContextUsageMetrics(stats?.contextUsage);
-  const showBuiltInTelemetry = position === "before-model" && matchedContribs.length === 0;
+  const showBuiltInTelemetry =
+    position === "before-model" && (isolated || contributions.composerStatus.length === 0);
+  const tokens = stats?.tokens;
+  const costTitle =
+    tokens !== undefined
+      ? `会话预估成本 · 输入 ${tokens.input.toLocaleString()} / 输出 ${tokens.output.toLocaleString()}${
+          tokens.reasoning ? `（推理 ${tokens.reasoning.toLocaleString()}）` : ""
+        }`
+      : "会话预估成本";
 
   return (
     <>
@@ -351,7 +431,7 @@ export function CoreComposerStatus({
       ))}
 
       {showBuiltInTelemetry && stats !== null && stats.cost > 0 && (
-        <span className="composer-session-cost" title="会话预估成本">
+        <span className="composer-session-cost" title={costTitle}>
           {stats.cost < 0.01 ? `$${stats.cost.toFixed(4)}` : `$${stats.cost.toFixed(2)}`}
         </span>
       )}
@@ -363,8 +443,26 @@ export function CoreComposerStatus({
             role="img"
             tabIndex={0}
             aria-label={`上下文用量：${metrics.normalizedContextPercent}%`}
+            aria-describedby="composer-context-usage-tooltip"
             style={{ "--context-percent": `${metrics.normalizedContextPercent}%` } as CSSProperties}
           />
+          <span id="composer-context-usage-tooltip" className="composer-context-tooltip" role="tooltip">
+            <span className="composer-context-tooltip-label">上下文窗口：</span>
+            <span
+              className={
+                metrics.normalizedContextPercent >= 50 ? "composer-context-tooltip-muted" : undefined
+              }
+            >
+              {metrics.normalizedContextPercent >= 50
+                ? `${metrics.normalizedContextPercent}% 已用`
+                : `${metrics.normalizedContextPercent}% 已用（剩余 ${metrics.remainingContextPercent}%）`}
+            </span>
+            {metrics.contextUsedThousands !== null && metrics.contextWindowThousands !== null && (
+              <span>
+                已用 {metrics.contextUsedThousands}K token，共 {metrics.contextWindowThousands}K
+              </span>
+            )}
+          </span>
         </span>
       )}
     </>

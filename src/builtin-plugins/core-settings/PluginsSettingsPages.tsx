@@ -11,6 +11,7 @@ import {
   useClientContext,
   useClientContributions,
   useFrontendService,
+  useNavigationState,
   useRpcState,
   useSafeMode,
   useSlotOverrides,
@@ -35,14 +36,27 @@ function buildWorkspaceParams(workspace: string): Record<string, unknown> {
   return trimmed !== "" ? { workspace: trimmed } : {};
 }
 
-export function PluginsSettingsSlotPage({ ctx, cwd, renderFactory }: PageCompProps): ReactElement {
+export function PluginsSettingsSlotPage({ ctx, cwd, closeSettings, renderFactory }: PageCompProps): ReactElement {
   const workspaceState = useWorkspaceState(ctx);
+  const navigationState = useNavigationState(ctx);
   const rpcState = useRpcState(ctx);
   const rpcService = useFrontendService("rpcService", ctx);
   const safeMode = useSafeMode();
   const contributions = useClientContributions();
   const hostConnected = rpcState?.hostStatus === "connected" || workspaceState?.hostConnected === true;
   const effectiveCwd = workspaceState?.cwd || cwd || "";
+  const registry = useMemo<SlotRegistry>(() => {
+    const svc = (ctx as { get?(name: string): unknown } | undefined)?.get?.("slots");
+    if (svc instanceof ClientSlotsService) return svc.registry;
+    if (typeof svc === "object" && svc !== null && "registry" in svc) {
+      return (svc as { registry: SlotRegistry }).registry;
+    }
+    return clientSlotsRegistry;
+  }, [ctx]);
+  const hasHostFactory = registry.getFactoryCandidates("host.settings.plugins").length > 0;
+  const rawNavPage = navigationState?.settingsPage;
+  const initialExpandPluginId =
+    rawNavPage === "mcp" ? "mcp" : rawNavPage === "skills" ? "prompt-context" : undefined;
 
   const [plugins, setPlugins] = useState<readonly PluginInfo[]>([]);
 
@@ -57,17 +71,17 @@ export function PluginsSettingsSlotPage({ ctx, cwd, renderFactory }: PageCompPro
   );
 
   const loadPlugins = useCallback(async (): Promise<void> => {
-    if (!hostConnected) return;
+    if (!hostConnected || hasHostFactory) return;
     try {
       const result = await invokeRpc<PluginListResult>("plugin.list", buildWorkspaceParams(effectiveCwd));
       setPlugins(Array.isArray(result?.plugins) ? result.plugins : []);
     } catch {
       // Keep last known snapshot when Host RPC is unavailable or offline.
     }
-  }, [effectiveCwd, hostConnected, invokeRpc]);
+  }, [effectiveCwd, hasHostFactory, hostConnected, invokeRpc]);
 
   useEffect(() => {
-    if (!hostConnected) return undefined;
+    if (!hostConnected || hasHostFactory) return undefined;
     let cancelled = false;
     void invokeRpc<PluginListResult>("plugin.list", buildWorkspaceParams(effectiveCwd))
       .then((result) => {
@@ -83,7 +97,7 @@ export function PluginsSettingsSlotPage({ ctx, cwd, renderFactory }: PageCompPro
       cancelled = true;
       offChanged?.();
     };
-  }, [effectiveCwd, hostConnected, invokeRpc, loadPlugins, rpcService]);
+  }, [effectiveCwd, hasHostFactory, hostConnected, invokeRpc, loadPlugins, rpcService]);
 
   const handleTogglePlugin = useCallback(
     async (plugin: PluginInfo, nextEnabled: boolean): Promise<void> => {
@@ -162,7 +176,15 @@ export function PluginsSettingsSlotPage({ ctx, cwd, renderFactory }: PageCompPro
 
   return (
     <>
-      {renderFactory("host.settings.plugins", { cwd: effectiveCwd }, { fallback })}
+      {renderFactory(
+        "host.settings.plugins",
+        {
+          cwd: effectiveCwd,
+          onClose: closeSettings,
+          ...(initialExpandPluginId === undefined ? {} : { initialExpandPluginId }),
+        },
+        { fallback },
+      )}
     </>
   );
 }

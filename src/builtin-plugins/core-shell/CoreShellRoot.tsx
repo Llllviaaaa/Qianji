@@ -54,6 +54,7 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
 
   const [sidebarHoverPreview, setSidebarHoverPreview] = useState(false);
   const [hoverCloseScheduled, setHoverCloseScheduled] = useState(false);
+  const [sidebarSearchActive, setSidebarSearchActive] = useState(false);
 
   const sidebarPinned = navSnap?.sidebarVisible ?? true;
   const sidebarWidth = navSnap?.sidebarWidth ?? SIDEBAR_BOUNDS.fallback;
@@ -63,7 +64,9 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
   const activeRoute = navSnap?.activeRoute ?? { kind: "home" as const, workspace: workspaceSnap?.cwd ?? "" };
   const toasts = navSnap?.toasts ?? [];
 
-  const effectiveCwd = workspaceSnap?.cwd ?? sessionSnap?.cwd ?? "";
+  const effectiveCwd = draftMode
+    ? (workspaceSnap?.draftWorkspace || workspaceSnap?.cwd || sessionSnap?.cwd || "")
+    : (workspaceSnap?.cwd || sessionSnap?.cwd || workspaceSnap?.draftWorkspace || "");
   const sessionFile = sessionSnap?.sessionFile ?? null;
   const rightOpen = workbenchSnap?.rightOpen ?? false;
   const bottomOpen = workbenchSnap?.bottomOpen ?? false;
@@ -71,17 +74,25 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
 
   const [isNarrowViewport, setIsNarrowViewport] = useState(() => {
     if (typeof window === "undefined") return false;
-    return window.innerWidth > 0 && window.innerWidth / layoutScale <= 760;
+    return window.innerWidth > 0 && window.innerHeight > 0 && window.innerWidth / layoutScale <= 760;
   });
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const syncViewport = () => {
-      if (window.innerWidth <= 0) return;
+      if (window.innerWidth <= 0 || window.innerHeight <= 0) return;
       setIsNarrowViewport(window.innerWidth / layoutScale <= 760);
     };
+    const raf = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame(syncViewport)
+      : null;
     window.addEventListener("resize", syncViewport);
-    return () => window.removeEventListener("resize", syncViewport);
+    return () => {
+      if (raf !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(raf);
+      }
+      window.removeEventListener("resize", syncViewport);
+    };
   }, [layoutScale]);
 
   const sidebarVisible = sidebarPinned && !isNarrowViewport;
@@ -139,13 +150,14 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
   }, []);
 
   const scheduleHoverClose = useCallback(() => {
+    if (sidebarSearchActive) return;
     if (typeof window === "undefined") {
       setSidebarHoverPreview(false);
       setHoverCloseScheduled(false);
       return;
     }
     setHoverCloseScheduled(true);
-  }, []);
+  }, [sidebarSearchActive]);
 
   const handleToggleSidebar = useCallback(() => {
     setHoverCloseScheduled(false);
@@ -168,13 +180,70 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
       setHoverCloseScheduled(false);
       setSidebarHoverPreview(false);
     };
+    const onToggleRequest = (event: Event) => {
+      event.preventDefault();
+      handleToggleSidebar();
+    };
+    const onSearchOpen = () => {
+      setHoverCloseScheduled(false);
+      if (!sidebarVisible) {
+        setSidebarHoverPreview(true);
+      }
+      (window as Window & { __qianjiSidebarSearchPending?: boolean }).__qianjiSidebarSearchPending = true;
+      const dispatchSearch = () => {
+        window.dispatchEvent(new CustomEvent("qianji:sidebar-search-request"));
+      };
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(dispatchSearch));
+      } else {
+        dispatchSearch();
+      }
+    };
+    const onSearchActive = (event: Event) => {
+      const active = (event as CustomEvent<boolean>).detail === true;
+      setSidebarSearchActive(active);
+      if (active) setHoverCloseScheduled(false);
+    };
     window.addEventListener("qianji:sidebar-pin", onPin);
     window.addEventListener("qianji:sidebar-close-preview", onClosePreview);
+    window.addEventListener("qianji:sidebar-toggle-request", onToggleRequest);
+    window.addEventListener("qianji:sidebar-search-open", onSearchOpen);
+    window.addEventListener("qianji:sidebar-search-active", onSearchActive);
     return () => {
       window.removeEventListener("qianji:sidebar-pin", onPin);
       window.removeEventListener("qianji:sidebar-close-preview", onClosePreview);
+      window.removeEventListener("qianji:sidebar-toggle-request", onToggleRequest);
+      window.removeEventListener("qianji:sidebar-search-open", onSearchOpen);
+      window.removeEventListener("qianji:sidebar-search-active", onSearchActive);
     };
-  }, [navigationService]);
+  }, [handleToggleSidebar, navigationService, sidebarVisible]);
+
+  // Dismiss hover-preview sidebar on outside pointerdown or Escape.
+  useEffect(() => {
+    if (!sidebarHoverPreview || sidebarVisible || typeof document === "undefined" || typeof window === "undefined") {
+      return undefined;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target !== null && target.closest(".primary-sidebar-panel, [data-sidebar-toggle], .sidebar-hover-zone")) {
+        return;
+      }
+      setHoverCloseScheduled(false);
+      setSidebarHoverPreview(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        setHoverCloseScheduled(false);
+        setSidebarHoverPreview(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [sidebarHoverPreview, sidebarVisible]);
 
   const handleSidebarWidthChange = useCallback(
     (nextWidth: number) => {
@@ -299,6 +368,7 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
                   ))}
                 </div>
                 <div style={{ display: "inline-flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                  {renderSlot("shell.statusbar", { cwd: effectiveCwd, sessionFile, align: "right" })}
                   {rightLegacyStatusItems.map((item) => (
                     <LegacyContributionHost
                       key={item.id}

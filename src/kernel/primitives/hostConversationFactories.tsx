@@ -18,7 +18,7 @@ import { ProcessGroup, ReasoningRow } from "../../components/message/MessageProc
 import { UserMessageRow } from "../../components/message/UserMessageRow";
 import { ToolCall } from "../../components/ToolCall";
 import { useAppStore } from "../../store";
-import type { UiMessage, UiToolCall } from "../../types";
+import type { AttachmentPayload, UiMessage, UiToolCall } from "../../types";
 import {
   HostAssistantMessageFactory,
   type HostAssistantMessageFactoryProps,
@@ -73,8 +73,7 @@ function HostUserMessageFactory({
   const requireCtrlEnter = useAppStore((s) => s.settings?.requireCtrlEnter ?? false);
   const storeCwd = useAppStore((s) => s.cwd);
   const storeSessionFile = useAppStore((s) => s.sessionFile);
-  const canEdit =
-    onEditAndResend !== undefined && typeof message.entryId === "string" && message.entryId !== "";
+  const canEdit = onEditAndResend !== undefined;
 
   return (
     <UserMessageRow
@@ -86,22 +85,57 @@ function HostUserMessageFactory({
       sessionId={sessionId}
       actionsReveal={isLastUserTurn ? undefined : "hover"}
       extraSlotActions={extraSlotActions}
-      onEdit={canEdit ? () => setEditing(true) : undefined}
+      onEdit={
+        canEdit
+          ? () => {
+              const current = useAppStore.getState();
+              if (current.isStreaming) {
+                current.showToast("请等待当前回复完成后再编辑消息", "warning");
+                return;
+              }
+              setEditing(true);
+            }
+          : undefined
+      }
       onCancelEdit={() => setEditing(false)}
       onSubmitEdit={
         canEdit
           ? async (msg, text) => {
-              if (msg.entryId === undefined) return false;
-              onEditAndResend(msg.entryId, text);
-              setEditing(false);
-              return true;
+              const current = useAppStore.getState();
+              if (current.isStreaming) {
+                current.showToast("请等待当前回复完成后再编辑消息", "warning");
+                return false;
+              }
+              const point = await current.resolveMessageForkPoint(msg.id).catch(() => null);
+              const targetEntryId = point?.entryId ?? msg.entryId;
+              if (targetEntryId === undefined || targetEntryId === "") {
+                current.showToast("无法定位这条消息的会话检查点", "warning");
+                return false;
+              }
+              const originalImages: AttachmentPayload[] = (msg.images ?? []).map((image, index) => ({
+                path: `message-image-${msg.id}-${index}`,
+                fileName: `image-${index + 1}.${image.mimeType.split("/")[1] || "png"}`,
+                mimeType: image.mimeType,
+                size: Math.floor(image.data.length * 0.75),
+                kind: "image",
+                data: image.data,
+              }));
+              const sent = await current.editAndResend(targetEntryId, text, originalImages);
+              if (sent) setEditing(false);
+              return sent;
             }
           : undefined
       }
       onRewind={
         onRewind !== undefined
           ? async (msg) => {
+              const current = useAppStore.getState();
+              if (current.isStreaming) {
+                current.showToast("请等待当前回复完成后再回退消息", "warning");
+                return false;
+              }
               onRewind(msg);
+              setEditing(false);
               return true;
             }
           : undefined

@@ -71,7 +71,19 @@ export function CodeReviewTopbarButton({
 }
 
 /** Keyed `"review"` pane rendered inside `workbench.panes`. */
-export function ReviewDiffTab({
+export function ReviewDiffTab(
+  props: SlotComponentProps<WorkbenchPaneSlotProps, "session-maybe">,
+): ReactElement {
+  const workspace = useWorkspaceState(props.ctx);
+  const cwd = props.cwd ?? workspace?.cwd ?? "";
+  return props.renderFactory(
+    "host.workbench.review",
+    { cwd },
+    { fallback: <ReviewDiffTabFallback {...props} /> },
+  ) as ReactElement;
+}
+
+function ReviewDiffTabFallback({
   cwd: propCwd,
   ctx,
 }: SlotComponentProps<WorkbenchPaneSlotProps, "session-maybe">): ReactElement {

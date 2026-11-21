@@ -67,7 +67,23 @@ export function WebPreviewTopbarButton({
 }
 
 /** Keyed `"preview"` pane rendered inside `workbench.panes`. */
-export function BrowserPreviewTab({
+export function BrowserPreviewTab(
+  props: SlotComponentProps<WorkbenchPaneSlotProps, "session-maybe">,
+): ReactElement {
+  const workspace = useWorkspaceState(props.ctx);
+  const cwd = props.cwd ?? workspace?.cwd ?? "";
+  return props.renderFactory(
+    "host.workbench.webPreview",
+    {
+      cwd,
+      ...(props.paneControls === undefined ? {} : { paneControls: props.paneControls }),
+      ...(props.onHeaderPointerDown === undefined ? {} : { onHeaderPointerDown: props.onHeaderPointerDown }),
+    },
+    { fallback: <BrowserPreviewTabFallback {...props} /> },
+  ) as ReactElement;
+}
+
+function BrowserPreviewTabFallback({
   cwd: propCwd,
   maximized = false,
   onClose,

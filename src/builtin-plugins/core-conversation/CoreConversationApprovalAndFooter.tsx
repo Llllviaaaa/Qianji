@@ -32,6 +32,7 @@ const VISIBLE_CHANGE_FILES = 4;
 export function CoreApprovalDialog({
   request,
   onAnswer,
+  renderFactory,
 }: SlotComponentProps<ConversationApprovalDialogSlotProps, "session">): ReactNode {
   const initialValue = request.method === "editor" ? (request.prefill ?? "") : "";
   const [value, setValue] = useState(initialValue);
@@ -112,7 +113,7 @@ export function CoreApprovalDialog({
           ? "Enter 提交"
           : null;
 
-  return (
+  const fallbackDialog = (
     <section
       className={`question-card question-${request.method}`}
       role="dialog"
@@ -159,6 +160,7 @@ export function CoreApprovalDialog({
                 type="button"
                 role="radio"
                 aria-checked={active}
+                autoFocus={index === 0}
                 className={`question-option ${active ? "active" : ""}`}
                 onClick={() => setSelected(option)}
                 onDoubleClick={() => onAnswer(request.id, { value: option })}
@@ -174,6 +176,7 @@ export function CoreApprovalDialog({
 
       {request.method === "input" && (
         <input
+          autoFocus
           className="question-field"
           value={value}
           placeholder={request.placeholder}
@@ -184,6 +187,7 @@ export function CoreApprovalDialog({
 
       {request.method === "editor" && (
         <textarea
+          autoFocus
           className="question-field"
           rows={7}
           value={value}
@@ -204,12 +208,19 @@ export function CoreApprovalDialog({
       </footer>
     </section>
   );
+
+  return renderFactory(
+    "host.conversation.approvalDialog",
+    { request, onAnswer },
+    { fallback: fallbackDialog },
+  );
 }
 
 /* ── conversation.turnFooter: SessionChangeCard ── */
 
 export function CoreSessionChangeCard({
   cwd: ownerCwd,
+  renderFactory,
 }: SlotComponentProps<ConversationTurnFooterSlotProps, "session">): ReactNode {
   const workspaceState = useWorkspaceState();
   const workspaceService = useFrontendService("workspaceService");
@@ -218,8 +229,6 @@ export function CoreSessionChangeCard({
   const [showAll, setShowAll] = useState(false);
 
   const files = workspaceState?.git?.files ?? [];
-  if (files.length === 0) return null;
-
   const targetCwd = ownerCwd ?? workspaceState?.cwd ?? "";
   const single = files.length === 1;
   const firstFile = files[0];
@@ -229,70 +238,82 @@ export function CoreSessionChangeCard({
     void workbenchService?.openFile(path, targetCwd !== "" ? { cwd: targetCwd } : undefined);
   };
 
-  return (
-    <section className="conversation-change-card" aria-label="本任务的变更" data-open={!single && open ? "" : undefined}>
-      <div className="conversation-change-heading">
-        <button
-          type="button"
-          className="conversation-change-open"
-          onClick={() => (single && firstFile !== undefined ? openFile(firstFile.path) : setOpen((v) => !v))}
-          title={single && firstFile !== undefined ? firstFile.path : open ? "收起文件列表" : "展开文件列表"}
-          aria-expanded={single ? undefined : open}
-        >
-          <span className="conversation-change-icon">
-            <FileDiff size={15} strokeWidth={1.7} />
-          </span>
-          <div>
-            <strong>
-              {single && firstFile !== undefined
-                ? `已编辑 ${fileBaseName(firstFile.path)}`
-                : `已编辑 ${files.length} 个文件`}
-            </strong>
-          </div>
-          {!single && <ChevronDown className="conversation-change-chevron" size={14} strokeWidth={1.8} aria-hidden="true" />}
-        </button>
-        <button
-          type="button"
-          className="change-card-secondary"
-          onClick={() => {
-            void workspaceService?.restoreGitFiles(
-              files.map((file) => file.path),
-              targetCwd !== "" ? targetCwd : undefined,
-            );
-          }}
-        >
-          撤销
-        </button>
-        <button type="button" onClick={() => workbenchService?.openReview()}>
-          审核
-        </button>
-      </div>
-      {!single && open && (
-        <ul className="conversation-change-files">
-          {visible.map((file) => {
-            const folder = fileFolderOf(file.path);
-            return (
-              <li key={file.path}>
-                <button type="button" onClick={() => openFile(file.path)} title={file.path}>
-                  <span className="conversation-change-file-name">{fileBaseName(file.path)}</span>
-                  {folder !== "" && <span className="conversation-change-file-folder">{folder}</span>}
+  const fallbackCard =
+    files.length === 0 ? null : (
+      <section className="conversation-change-card" aria-label="本任务的变更" data-open={!single && open ? "" : undefined}>
+        <div className="conversation-change-heading">
+          <button
+            type="button"
+            className="conversation-change-open"
+            onClick={() => (single && firstFile !== undefined ? openFile(firstFile.path) : setOpen((v) => !v))}
+            title={single && firstFile !== undefined ? firstFile.path : open ? "收起文件列表" : "展开文件列表"}
+            aria-expanded={single ? undefined : open}
+          >
+            <span className="conversation-change-icon">
+              <FileDiff size={15} strokeWidth={1.7} />
+            </span>
+            <div>
+              <strong>
+                {single && firstFile !== undefined
+                  ? `已编辑 ${fileBaseName(firstFile.path)}`
+                  : `已编辑 ${files.length} 个文件`}
+              </strong>
+            </div>
+            {!single && <ChevronDown className="conversation-change-chevron" size={14} strokeWidth={1.8} aria-hidden="true" />}
+          </button>
+          <button
+            type="button"
+            className="change-card-secondary"
+            onClick={() => {
+              const paths = files.map((file) => file.path);
+              const label = paths.length === 1 ? (paths[0] ?? "") : `${paths.length} 个文件`;
+              if (typeof window !== "undefined" && !window.confirm(`撤销对 ${label} 的本地更改？未提交的改动将丢失。`)) {
+                return;
+              }
+              void workspaceService?.restoreGitFiles(
+                paths,
+                targetCwd !== "" ? targetCwd : undefined,
+              );
+            }}
+          >
+            撤销
+          </button>
+          <button type="button" onClick={() => workbenchService?.openReview()}>
+            审核
+          </button>
+        </div>
+        {!single && open && (
+          <ul className="conversation-change-files">
+            {visible.map((file) => {
+              const folder = fileFolderOf(file.path);
+              return (
+                <li key={file.path}>
+                  <button type="button" onClick={() => openFile(file.path)} title={file.path}>
+                    <span className="conversation-change-file-name">{fileBaseName(file.path)}</span>
+                    {folder !== "" && <span className="conversation-change-file-folder">{folder}</span>}
+                  </button>
+                </li>
+              );
+            })}
+            {files.length > VISIBLE_CHANGE_FILES && (
+              <li>
+                <button
+                  type="button"
+                  className="conversation-change-more"
+                  onClick={() => setShowAll((value) => !value)}
+                >
+                  {showAll ? "收起" : `再显示 ${files.length - VISIBLE_CHANGE_FILES} 个文件`}
                 </button>
               </li>
-            );
-          })}
-          {files.length > VISIBLE_CHANGE_FILES && (
-            <li>
-              <button
-                type="button"
-                className="conversation-change-more"
-                onClick={() => setShowAll((value) => !value)}
-              >
-                {showAll ? "收起" : `再显示 ${files.length - VISIBLE_CHANGE_FILES} 个文件`}
-              </button>
-            </li>
-          )}
-        </ul>
-      )}
-    </section>
+            )}
+          </ul>
+        )}
+      </section>
+    );
+
+  return renderFactory(
+    "host.conversation.sessionChangeCard",
+    { cwd: targetCwd },
+    { fallback: fallbackCard },
   );
 }

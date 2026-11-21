@@ -58,7 +58,12 @@ export interface ThemeServiceSnapshot {
   readonly settingsLoaded: boolean;
   readonly settingsDisplayMode: "page" | "modal";
   readonly requireCtrlEnter: boolean;
+  readonly followUpBehavior: "steer" | "followUp";
   readonly shortcutToggleSidebar: string;
+  readonly shortcutNewChat: string;
+  readonly shortcutSettings: string;
+  readonly shortcutTerminal: string;
+  readonly shortcutChanges: string;
   readonly showThinking: boolean;
 }
 
@@ -117,7 +122,7 @@ export class ThemeService extends Service {
       explicitAccentColor: "",
       localUiScale: 100,
       localTranscriptDensity: "normal",
-      localSettingsDisplayMode: "modal",
+      localSettingsDisplayMode: "page",
       cachedThemesRef: initialThemes,
       cachedCatalog: initialCatalog,
       snapshot: null as unknown as ThemeServiceSnapshot,
@@ -171,7 +176,11 @@ export class ThemeService extends Service {
   private computeSnapshot(): ThemeServiceSnapshot {
     const settings = useAppStore.getState().settings;
     const catalog = this.internal.cachedCatalog;
-    const themeId = settings?.theme ?? this.internal.localThemeId;
+    const devThemeOverride =
+      import.meta.env.DEV && typeof window !== "undefined" && typeof window.location?.search === "string"
+        ? new URLSearchParams(window.location.search).get("theme")?.trim() || ""
+        : "";
+    const themeId = devThemeOverride || settings?.theme || this.internal.localThemeId;
     const activeTheme = resolveAppearanceTheme(catalog, themeId, this.internal.systemDark);
     const resolvedScheme: "light" | "dark" = activeTheme.mode === "dark" ? "dark" : "light";
     // Legacy `settings.json` may retain retired accent defaults (e.g. `#111111`); keep
@@ -209,7 +218,12 @@ export class ThemeService extends Service {
       settingsLoaded: settings !== null,
       settingsDisplayMode,
       requireCtrlEnter: settings?.requireCtrlEnter === true,
+      followUpBehavior: settings?.followUpBehavior === "followUp" ? "followUp" : "steer",
       shortcutToggleSidebar: settings?.shortcutToggleSidebar?.trim() || "Ctrl+B",
+      shortcutNewChat: settings?.shortcutNewChat?.trim() || "Ctrl+Shift+N",
+      shortcutSettings: settings?.shortcutSettings?.trim() || "Ctrl+,",
+      shortcutTerminal: settings?.shortcutTerminal?.trim() || "Ctrl+Shift+T",
+      shortcutChanges: settings?.shortcutChanges?.trim() || "Ctrl+Shift+G",
       showThinking: settings?.showThinking !== false,
     };
   }
@@ -288,6 +302,7 @@ export class ThemeService extends Service {
   async setSettingsDisplayMode(mode: "page" | "modal"): Promise<void> {
     const normalized: "page" | "modal" = mode === "modal" ? "modal" : "page";
     this.internal.localSettingsDisplayMode = normalized;
+    this.publish();
     await this.persistSettingsPatch({ settingsDisplayMode: normalized });
     this.publish();
   }
@@ -299,21 +314,53 @@ export class ThemeService extends Service {
     const palette = snap.activeTheme.palette;
     if (palette) {
       root.dataset.theme = snap.resolvedScheme;
-      const vars = buildThemeCssVariables(palette);
-      for (const [name, value] of Object.entries(vars)) {
-        root.style.setProperty(name, value);
-      }
+      const vars: Record<string, string> = {
+        ...buildThemeCssVariables(palette),
+        "--code-font": snap.codeFont,
+        "--dsh-content-font-size": `${snap.messageFontSize}px`,
+      };
       const explicitAccent = this.internal.explicitAccentColor.trim();
       if (explicitAccent !== "") {
-        root.style.setProperty("--qj-brand-primary", explicitAccent);
-        root.style.setProperty("--accent", explicitAccent);
-        root.style.setProperty("--accent-custom", explicitAccent);
+        vars["--qj-brand-primary"] = explicitAccent;
+        vars["--accent"] = explicitAccent;
+        vars["--accent-custom"] = explicitAccent;
       }
-      root.style.setProperty("--code-font", snap.codeFont);
-      root.style.setProperty("--dsh-content-font-size", `${snap.messageFontSize}px`);
-      root.style.fontFamily = snap.uiFont;
-      root.style.color = palette.text;
-      root.style.background = palette.sidebar;
+
+      if (
+        typeof document.head === "object" &&
+        document.head !== null &&
+        typeof document.createElement === "function"
+      ) {
+        // Inject active theme variables into `@layer components` (below `@layer plugin-skin`)
+        // so global skin plugins (`ctx.styles.injectGlobal` / `skin.global.css`) can override
+        // any token cleanly without `!important`.
+        const styleId = "qianji-active-theme-vars";
+        let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+        if (styleEl === null) {
+          styleEl = document.createElement("style");
+          styleEl.id = styleId;
+          document.head.appendChild(styleEl);
+        }
+        const decls = Object.entries(vars)
+          .map(([name, value]) => `  ${name}: ${value};`)
+          .join("\n");
+        styleEl.textContent = `@layer components {\n:root {\n${decls}\n  font-family: ${snap.uiFont};\n  color: ${palette.text};\n  background: ${palette.sidebar};\n}\n}`;
+        if (typeof root.style.removeProperty === "function") {
+          for (const name of Object.keys(vars)) {
+            root.style.removeProperty(name);
+          }
+          root.style.removeProperty("font-family");
+          root.style.removeProperty("color");
+          root.style.removeProperty("background");
+        }
+      } else {
+        for (const [name, value] of Object.entries(vars)) {
+          root.style.setProperty(name, value);
+        }
+        root.style.fontFamily = snap.uiFont;
+        root.style.color = palette.text;
+        root.style.background = palette.sidebar;
+      }
     }
     applyUiScale(root, document.getElementById("root"), snap.uiScale);
   }

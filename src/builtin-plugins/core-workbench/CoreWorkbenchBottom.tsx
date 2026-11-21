@@ -5,12 +5,13 @@
  * Owns child slot `workbench.bottom.tabs` (`keyed`) and supports both typed
  * slot tabs and legacy `contributions.bottomPanelTabs`.
  */
-import { useCallback, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import { Plus, Puzzle, TerminalSquare, X } from "lucide-react";
 import {
   useClientContributions,
   useFrontendService,
   useSessionState,
+  useThemeState,
   useWorkbenchState,
   useWorkspaceState,
 } from "@qianji/client";
@@ -24,12 +25,25 @@ import {
   useSlotRegistryVersion,
 } from "./tilingHelpers";
 
+const BOTTOM_PANEL_HEIGHT_KEY = "qianji:bottom-panel-height";
 const DEFAULT_BOTTOM_HEIGHT = 240;
 const MIN_BOTTOM_HEIGHT = 140;
 const MAX_BOTTOM_HEIGHT = 560;
 
 function clampHeight(height: number): number {
   return Math.min(MAX_BOTTOM_HEIGHT, Math.max(MIN_BOTTOM_HEIGHT, Math.round(height)));
+}
+
+function readPersistedBottomHeight(): number {
+  if (typeof window === "undefined") return DEFAULT_BOTTOM_HEIGHT;
+  try {
+    const raw = window.localStorage.getItem(BOTTOM_PANEL_HEIGHT_KEY);
+    if (raw === null) return DEFAULT_BOTTOM_HEIGHT;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? clampHeight(parsed) : DEFAULT_BOTTOM_HEIGHT;
+  } catch {
+    return DEFAULT_BOTTOM_HEIGHT;
+  }
 }
 
 export function CoreWorkbenchBottom({
@@ -43,6 +57,7 @@ export function CoreWorkbenchBottom({
   const workbench = useWorkbenchState(ctx);
   const workspace = useWorkspaceState(ctx);
   const session = useSessionState(ctx);
+  const theme = useThemeState(ctx);
   const workbenchService = useFrontendService("workbenchService", ctx);
   const contributions = useClientContributions();
   const registry = ctx?.get("slots")?.registry;
@@ -52,31 +67,65 @@ export function CoreWorkbenchBottom({
   const activeBottomTab = propActiveTab ?? workbench?.activeBottomTab ?? "terminal";
   const cwd = propCwd ?? workspace?.cwd ?? "";
   const sessionFile = propSessionFile !== undefined ? propSessionFile : (session?.sessionFile ?? null);
+  const layoutScale = theme?.resolvedScale ?? 1;
 
   const [everOpened, setEverOpened] = useState(bottomOpen);
   if (bottomOpen && !everOpened) {
     setEverOpened(true);
   }
-  const [height, setHeight] = useState(DEFAULT_BOTTOM_HEIGHT);
+  const [height, setHeight] = useState(readPersistedBottomHeight);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(BOTTOM_PANEL_HEIGHT_KEY, String(height));
+    } catch {
+      // Ignore storage write errors.
+    }
+  }, [height]);
+
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+    },
+    [],
+  );
 
   const beginResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    resizeCleanupRef.current?.();
+    const handleEl = event.currentTarget;
+    const pointerId = event.pointerId;
+    try {
+      handleEl.setPointerCapture?.(pointerId);
+    } catch {
+      // Synthetic pointer events may not support capture.
+    }
     const startY = event.clientY;
     const startHeight = height;
+    const scale = layoutScale > 0 ? layoutScale : 1;
     document.body.classList.add("bottom-panel-is-resizing");
     const onMove = (moveEvent: PointerEvent) => {
-      setHeight(clampHeight(startHeight + (startY - moveEvent.clientY)));
+      setHeight(clampHeight(startHeight + (startY - moveEvent.clientY) / scale));
     };
     const cleanup = () => {
       document.body.classList.remove("bottom-panel-is-resizing");
+      try {
+        handleEl.releasePointerCapture?.(pointerId);
+      } catch {
+        // Ignore release errors.
+      }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", cleanup);
       window.removeEventListener("pointercancel", cleanup);
+      resizeCleanupRef.current = null;
     };
+    resizeCleanupRef.current = cleanup;
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", cleanup);
     window.addEventListener("pointercancel", cleanup);
-  }, [height]);
+  }, [height, layoutScale]);
 
   if (!everOpened) return null;
 
@@ -178,6 +227,23 @@ export function CoreWorkbenchBottom({
         </div>
       </header>
       <div className="pid-bottom-body">
+        {slotTabSet.has("terminal") && (
+          <div
+            className="pid-bottom-terminal-pane"
+            hidden={activeLegacyTab !== undefined || resolvedTabKey !== "terminal"}
+          >
+            {renderSlot(
+              "workbench.bottom.tabs",
+              {
+                cwd,
+                sessionFile,
+                tabId: "terminal",
+                active: bottomOpen && activeLegacyTab === undefined && resolvedTabKey === "terminal",
+              },
+              { key: "terminal" },
+            )}
+          </div>
+        )}
         {activeLegacyTab !== undefined ? (
           <LegacyContributionHost
             pluginId={activeLegacyTab.pluginId ?? activeLegacyTab.id}
@@ -186,13 +252,13 @@ export function CoreWorkbenchBottom({
             renderFn={activeLegacyTab.render}
             context={{ cwd, sessionFile }}
           />
-        ) : (
+        ) : resolvedTabKey !== "terminal" ? (
           renderSlot(
             "workbench.bottom.tabs",
             { cwd, sessionFile, tabId: resolvedTabKey, active: bottomOpen },
             { key: resolvedTabKey },
           )
-        )}
+        ) : null}
       </div>
     </section>
   );

@@ -5336,15 +5336,15 @@ body,
   line-height: 1.5;
 }
 
-.codex-shot :not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *),
-.settings-center :not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *) { letter-spacing: 0; }
+.codex-shot :not([data-qj-plugin]:not([data-qj-plugin^="core-"], [data-qj-plugin="builtin"], [data-qj-plugin="side-chat"], [data-qj-plugin="code-review"], [data-qj-plugin="web-preview"], [data-qj-plugin="intelligent-ui"], [data-qj-plugin="diagram-viewer"]) *),
+.settings-center :not([data-qj-plugin]:not([data-qj-plugin^="core-"], [data-qj-plugin="builtin"], [data-qj-plugin="side-chat"], [data-qj-plugin="code-review"], [data-qj-plugin="web-preview"], [data-qj-plugin="intelligent-ui"], [data-qj-plugin="diagram-viewer"]) *) { letter-spacing: 0; }
 
-:is(.codex-shot, .settings-center) :is(button, input, textarea, select):not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *) {
+:is(.codex-shot, .settings-center) :is(button, input, textarea, select):not([data-qj-plugin]:not([data-qj-plugin^="core-"], [data-qj-plugin="builtin"], [data-qj-plugin="side-chat"], [data-qj-plugin="code-review"], [data-qj-plugin="web-preview"], [data-qj-plugin="intelligent-ui"], [data-qj-plugin="diagram-viewer"]) *) {
   font-family: inherit;
   font-weight: inherit;
 }
 
-:is(.codex-shot, .settings-center) :is(code, pre, kbd):not([data-qj-plugin]:not([data-qj-plugin^="core-"]) *) { font-family: var(--code-font); }
+:is(.codex-shot, .settings-center) :is(code, pre, kbd):not([data-qj-plugin]:not([data-qj-plugin^="core-"], [data-qj-plugin="builtin"], [data-qj-plugin="side-chat"], [data-qj-plugin="code-review"], [data-qj-plugin="web-preview"], [data-qj-plugin="intelligent-ui"], [data-qj-plugin="diagram-viewer"]) *) { font-family: var(--code-font); }
 
 /* Window chrome, navigation and thread list. */
 .codex-shot .app-menu-trigger,
