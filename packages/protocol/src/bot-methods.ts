@@ -119,9 +119,12 @@ export interface BotMediaItem {
 
 export interface BotInboxItem {
   id: string;
+  source?: "email" | "telegram" | "meeting";
   sender: string;
   subject: string;
   preview: string;
+  fullBody?: string;
+  replyTo?: string;
   timeLabel: string;
   unread: boolean;
   createdAt: number;
@@ -129,9 +132,13 @@ export interface BotInboxItem {
 
 export interface PendingBotApproval {
   id: string;
+  kind?: "shell" | "send-email" | "send-telegram" | "send-feishu";
   title: string;
   commandSignature: string;
   summary: string;
+  recipient?: string;
+  subject?: string;
+  draftBody?: string;
   sessionId?: string;
   createdAt: number;
   expiresAt: number;
@@ -204,6 +211,107 @@ export interface BotConnectorItem {
   enabled: boolean;
 }
 
+export interface BotModelRef {
+  provider: string;
+  model: string;
+}
+
+export interface BotModelConfig {
+  primary?: BotModelRef;
+  patrol?: BotModelRef;
+}
+
+export interface BotPacingConfig {
+  heartbeatEnabled: boolean;
+  heartbeatIntervalMinutes: number;
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
+}
+
+export type BotEmailPreset = "qq" | "163" | "gmail" | "outlook" | "custom";
+
+export interface BotEmailConnectorConfig {
+  enabled: boolean;
+  preset: BotEmailPreset;
+  emailAddress: string;
+  imapHost: string;
+  imapPort: number;
+  imapTls: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  smtpTls: boolean;
+  hasPassword?: boolean;
+  lastSyncAt?: number;
+  lastError?: string;
+}
+
+export interface BotCalendarConnectorConfig {
+  enabled: boolean;
+  icsUrl: string;
+  localIcsPath: string;
+  leadMinutes: number;
+  lastSyncAt?: number;
+  lastError?: string;
+}
+
+export interface BotProcessSensorConfig {
+  enabled: boolean;
+  watchedProcesses: string[];
+  lateNightCareEnabled: boolean;
+}
+
+export interface BotMeetingsImConfig {
+  meetingNotesEnabled: boolean;
+  meetingNotesDir: string;
+  telegramEnabled: boolean;
+  telegramChatId: string;
+  telegramApiBase?: string;
+  hasTelegramToken?: boolean;
+  feishuEnabled: boolean;
+  hasFeishuWebhook?: boolean;
+  lastSyncAt?: number;
+  lastError?: string;
+}
+
+export interface BotConnectorsConfig {
+  email: BotEmailConnectorConfig;
+  calendar: BotCalendarConnectorConfig;
+  processSensor: BotProcessSensorConfig;
+  meetingsIm: BotMeetingsImConfig;
+}
+
+export interface BotCalendarEventSummary {
+  id: string;
+  title: string;
+  startAt: number;
+  endAt: number;
+  timeRangeLabel: string;
+  location?: string;
+  conflictWith?: string;
+}
+
+export type BotBusyState = "normal" | "in-meeting" | "deep-focus" | "quiet-hours" | "late-night";
+
+export interface BotLiveAwarenessSummary {
+  busyState: BotBusyState;
+  activeWindowTitle?: string;
+  runningWatched: string[];
+  todayEvents: BotCalendarEventSummary[];
+  conflictCount: number;
+  nextMeetingLabel?: string;
+  lastPatrolAt?: number;
+  lastPatrolSummary?: string;
+}
+
+export interface BotDesktopNotificationPayload {
+  id: string;
+  title: string;
+  body: string;
+  urgency: "urgent" | "normal";
+  createdAt: number;
+}
+
 export interface BotSnapshotResult {
   mainSessionId: string;
   mainSessionFile: string;
@@ -227,6 +335,10 @@ export interface BotSnapshotResult {
   inboxAddress: string;
   inboxItems: BotInboxItem[];
   connectors: BotConnectorItem[];
+  modelConfig: BotModelConfig;
+  pacing: BotPacingConfig;
+  connectorConfigs: BotConnectorsConfig;
+  awareness: BotLiveAwarenessSummary;
   virtualServer: BotVirtualServerStatus;
   embeddedTasks: BotTaskHandoffPayload[];
 }

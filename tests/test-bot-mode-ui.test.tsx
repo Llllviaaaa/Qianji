@@ -128,7 +128,7 @@ describe("Bot Mode Frontend Microkernel & Silk Morphing Integration", () => {
     expect(harness.renderHtml()).toContain("SOUL");
 
     patchBotUi({ rightTab: "inbox" });
-    expect(harness.renderHtml()).toContain("创建邮箱");
+    expect(harness.renderHtml()).toContain("配置真实邮箱 / IM");
 
     // 9-tab Settings & Virtual Server Console (Local & Remote modes)
     openBotModal("settings", "server");

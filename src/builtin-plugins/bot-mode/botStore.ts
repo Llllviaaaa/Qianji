@@ -3,11 +3,10 @@
  */
 import { useCallback, useEffect } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import { createReactiveStore, useStoreValue } from "@qianji/client-store";
 import { useFrontendService } from "@qianji/client";
 import type {
   BotAvatarPresetId,
-  BotDocumentItem,
+  BotDesktopNotificationPayload,
   BotRemoteAuthMethod,
   BotServerActionKind,
   BotServerActionResult,
@@ -17,112 +16,40 @@ import type {
   BotTaskHandoffPayload,
 } from "@qianji/protocol";
 import { FALLBACK_BOT_SNAPSHOT } from "./botFallbackData";
+import {
+  botDataStore,
+  botUiStore,
+  INITIAL_BOT_UI_STATE,
+  openBotModal,
+  patchBotUi,
+  useBotSnapshot,
+  useBotUiState,
+  type BotCompanionTab,
+  type BotLibrarySection,
+  type BotModalKind,
+  type BotRailView,
+  type BotScheduledSummary,
+  type BotSettingsTab,
+  type BotUiState,
+} from "./botUiAtoms";
 
-export { FALLBACK_BOT_SNAPSHOT };
-
-export type BotRailView = "chat" | "feed" | "ideas" | "goals" | "library" | "spaces";
-export type BotCompanionTab = "activity" | "approvals" | "identity" | "inbox";
-export type BotLibrarySection = "spaces" | "docs" | "images" | "videos" | "podcasts" | "sysfiles";
-export type BotModalKind =
-  | "search"
-  | "soul"
-  | "memory"
-  | "shortcuts"
-  | "settings"
-  | "live-view"
-  | "doc-preview"
-  | "space-detail"
-  | "report-issue"
-  | null;
-export type BotSettingsTab =
-  | "general"
-  | "server"
-  | "browser"
-  | "connectors"
-  | "vault"
-  | "permissions"
-  | "channels"
-  | "data"
-  | "voice";
-
-export interface BotScheduledSummary {
-  readonly id: string;
-  readonly name: string;
-  readonly cronOrInterval: string;
-  readonly enabled: boolean;
-}
-
-export interface BotUiState {
-  readonly activeView: BotRailView;
-  readonly chatDrawerOpen: boolean;
-  readonly activeSessionId: string | null;
-  readonly rightPanelOpen: boolean;
-  readonly rightTab: BotCompanionTab;
-  readonly libSection: BotLibrarySection;
-  readonly modal: BotModalKind;
-  readonly settingsTab: BotSettingsTab;
-  readonly modalNonce: number;
-  readonly moreMenuOpen: boolean;
-  readonly composerDraft: string;
-  readonly quotedText: string | null;
-  readonly voiceCallActive: boolean;
-  readonly scheduledExpanded: boolean;
-  readonly scheduledTasks: readonly BotScheduledSummary[];
-  readonly memoryContent: string;
-  readonly serverFeedback: string | null;
-  readonly serverBusy: boolean;
-  readonly activeDoc: BotDocumentItem | null;
-  readonly activeSpace: BotSpaceSummary | null;
-}
-
-export const INITIAL_BOT_UI_STATE: BotUiState = {
-  activeView: "chat",
-  chatDrawerOpen: false,
-  activeSessionId: null,
-  rightPanelOpen: true,
-  rightTab: "activity",
-  libSection: "spaces",
-  modal: null,
-  settingsTab: "general",
-  modalNonce: 0,
-  moreMenuOpen: false,
-  composerDraft: "",
-  quotedText: null,
-  voiceCallActive: false,
-  scheduledExpanded: true,
-  scheduledTasks: [{ id: "heartbeat", name: "Heartbeat", cronOrInterval: "每30分钟", enabled: true }],
-  memoryContent: "",
-  serverFeedback: null,
-  serverBusy: false,
-  activeDoc: null,
-  activeSpace: null,
+export {
+  botDataStore,
+  botUiStore,
+  FALLBACK_BOT_SNAPSHOT,
+  INITIAL_BOT_UI_STATE,
+  openBotModal,
+  patchBotUi,
+  useBotSnapshot,
+  useBotUiState,
+  type BotCompanionTab,
+  type BotLibrarySection,
+  type BotModalKind,
+  type BotRailView,
+  type BotScheduledSummary,
+  type BotSettingsTab,
+  type BotUiState,
 };
-
-export const botUiStore = createReactiveStore<BotUiState>(INITIAL_BOT_UI_STATE);
-export const botDataStore = createReactiveStore<BotSnapshotResult>(FALLBACK_BOT_SNAPSHOT);
-
-export function useBotUiState(): BotUiState {
-  return useStoreValue(botUiStore);
-}
-
-export function useBotSnapshot(): BotSnapshotResult {
-  return useStoreValue(botDataStore);
-}
-
-export function patchBotUi(patch: Partial<BotUiState>): void {
-  botUiStore.set((prev) => ({ ...prev, ...patch }));
-}
-
-export function openBotModal(modal: Exclude<BotModalKind, null>, settingsTab?: BotSettingsTab): void {
-  botUiStore.set((prev) => ({
-    ...prev,
-    modal,
-    moreMenuOpen: false,
-    serverFeedback: null,
-    modalNonce: prev.modalNonce + 1,
-    ...(settingsTab !== undefined ? { settingsTab } : {}),
-  }));
-}
 
 export function useBotController(ctx?: Context) {
   const rpcService = useFrontendService("rpcService", ctx);
@@ -173,8 +100,21 @@ export function useBotController(ctx?: Context) {
     const offUpdated = rpcService.onNotification("bot/updated", () => {
       void refresh();
     });
-    return () => offUpdated();
-  }, [refresh, rpcService]);
+    const offNotif = rpcService.onNotification("bot/desktopNotification", (raw) => {
+      const payload = raw as BotDesktopNotificationPayload | undefined;
+      if (!payload?.title) return;
+      navigationService?.showToast(`${payload.title}：${payload.body}`, payload.urgency === "urgent" ? "warning" : "info");
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        const note = new Notification(payload.title, { body: payload.body });
+        note.onclick = () => window.focus?.();
+      }
+      void refresh();
+    });
+    return () => {
+      offUpdated();
+      offNotif();
+    };
+  }, [navigationService, refresh, rpcService]);
 
   const updateProfile = useCallback(
     async (input: { displayName?: string; avatarPreset?: BotAvatarPresetId; customAvatarDataUrl?: string }) => {
@@ -342,6 +282,64 @@ export function useBotController(ctx?: Context) {
     [refresh, rpcService],
   );
 
+  const configureBot = useCallback(
+    async (patch: Record<string, unknown>) => {
+      const res = await rpcService?.call<{ snapshot: BotSnapshotResult }>("bot.configure", patch).catch(() => null);
+      if (res?.snapshot) {
+        botDataStore.set(res.snapshot);
+      } else {
+        await refresh();
+      }
+    },
+    [refresh, rpcService],
+  );
+
+  const testConnector = useCallback(
+    async (kind: "email" | "calendar" | "processes" | "meetings_im") => {
+      patchBotUi({ serverBusy: true });
+      try {
+        const res = await rpcService?.call<{ ok: boolean; message: string; snapshot: BotSnapshotResult }>(
+          "bot.connector.test",
+          { kind },
+        );
+        if (res?.snapshot) botDataStore.set(res.snapshot);
+        if (res?.message) {
+          patchBotUi({ serverFeedback: res.message });
+          navigationService?.showToast(res.message, res.ok ? "info" : "warning");
+        }
+        return res ?? null;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "连接器检测失败";
+        patchBotUi({ serverFeedback: msg });
+        navigationService?.showToast(msg, "error");
+        return null;
+      } finally {
+        patchBotUi({ serverBusy: false });
+      }
+    },
+    [navigationService, rpcService],
+  );
+
+  const runPatrolNow = useCallback(async () => {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      void Notification.requestPermission().catch(() => undefined);
+    }
+    patchBotUi({ serverBusy: true });
+    try {
+      const res = await rpcService?.call<{ triggered: boolean; summary: string; snapshot: BotSnapshotResult }>(
+        "bot.patrol.runNow",
+        { force: true },
+      );
+      if (res?.snapshot) botDataStore.set(res.snapshot);
+      if (res?.summary) {
+        navigationService?.showToast("主动贴心巡检完成，已整理简报与建议", "info");
+      }
+      return res ?? null;
+    } finally {
+      patchBotUi({ serverBusy: false });
+    }
+  }, [navigationService, rpcService]);
+
   const configureServer = useCallback(
     async (patch: {
       mode?: BotServerMode;
@@ -434,6 +432,9 @@ export function useBotController(ctx?: Context) {
     createFeedItem,
     enableInbox,
     toggleConnector,
+    configureBot,
+    testConnector,
+    runPatrolNow,
     configureServer,
     runServerAction,
     resetAllData,

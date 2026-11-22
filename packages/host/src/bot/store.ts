@@ -2,7 +2,7 @@
  * Atomic `<dataDir>/bot/` state store, WSL2/SSH VM orchestration & session coordinator.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Credentials } from "@qianji/llm";
 import type {
@@ -21,14 +21,12 @@ import type {
 } from "@qianji/protocol";
 import type { Session, Sessions } from "@qianji/session";
 import type { ToolCall, ToolEnv, ToolOutput } from "@qianji/tools";
+import { ConnectorHub, type ConnectorDelta, type ConnectorSecrets } from "./connectors/connector-hub.ts";
 import {
-  buildDefaultBotState,
-  DEFAULT_SOUL_MARKDOWN,
+  buildDefaultAwareness,
+  buildDefaultConnectorsConfig,
   formatClock,
-  formatShortDate,
-  MAX_SOUL_BYTES,
   normalizeAvatarPreset,
-  STARTER_IDEA_SECTIONS,
   type PersistedBotState,
 } from "./defaults.ts";
 import { BOT_BROWSER_TOOLS, BotLiveViewController } from "./live-view.ts";
@@ -41,8 +39,18 @@ import {
   createSpaceRecord,
   deleteSpaceRecord,
   ensureBotFullAccessPermission,
+  ensureMainBotSession,
+  loadOrCreatePersistedBotState,
   resolveBotApprovalRecord,
 } from "./store-actions.ts";
+import {
+  applyBotProactivePatch,
+  BotSecretVault,
+  EMAIL_SECRET_ID,
+  FEISHU_SECRET_ID,
+  TELEGRAM_SECRET_ID,
+  type BotProactivePatch,
+} from "./store-proactive.ts";
 import {
   applyVirtualServerPatch,
   refreshLiveLocalMetrics,
@@ -53,6 +61,10 @@ import {
 import { executeBotToolInVm, VM_BRIDGED_TOOLS } from "./vm-tool-bridge.ts";
 import {
   applyBotConfigOverlay,
+  readBotMemoryFile,
+  readBotSoulFile,
+  readFileMtimeShortDate,
+  writeBotSoulFile,
   writeFileAtomic,
   type BotStoreConfig,
 } from "./workspace-scanner.ts";
@@ -74,18 +86,19 @@ export class BotStateStore {
   readonly wsl: WslContainerRuntime;
   readonly ssh: SshRemoteRuntime;
   readonly liveView: BotLiveViewController;
+  readonly connectorsHub: ConnectorHub;
+  readonly vault: BotSecretVault;
 
   private state: PersistedBotState | undefined;
   private readonly botSessionIds = new Set<string>();
   private readonly pendingCommands = new Map<string, string>();
-  private inMemoryRemotePassword: string | undefined;
   private lastVmActivityAt = Date.now();
   private activeVmExecCount = 0;
 
   constructor(
     private readonly sessions: Sessions,
     private config: BotStoreConfig,
-    private readonly credentials?: Credentials,
+    credentials?: Credentials,
   ) {
     this.botDir = join(config.dataDir, "bot");
     this.botWorkspaceDir = join(config.dataDir, "bot-workspace");
@@ -95,6 +108,8 @@ export class BotStateStore {
     mkdirSync(this.botDir, { recursive: true });
     mkdirSync(this.botWorkspaceDir, { recursive: true });
 
+    this.vault = new BotSecretVault(credentials);
+    this.connectorsHub = new ConnectorHub(config.processProbe);
     this.wsl = new WslContainerRuntime({
       dataDir: config.dataDir,
       botDir: this.botDir,
@@ -124,32 +139,29 @@ export class BotStateStore {
     };
   }
 
-  async setRemotePassword(password: string | undefined): Promise<void> {
-    if (password === undefined) return;
-    if (password === "") {
-      this.inMemoryRemotePassword = undefined;
-      if (this.credentials?.writable) {
-        await this.credentials.delete(REMOTE_SECRET_ID).catch(() => false);
-      }
-      return;
-    }
-    this.inMemoryRemotePassword = password;
-    if (this.credentials?.writable) {
-      await this.credentials.set(REMOTE_SECRET_ID, password).catch(() => undefined);
-    }
+  setRemotePassword(password: string | undefined): Promise<void> {
+    return this.vault.set(REMOTE_SECRET_ID, password);
   }
 
-  async getRemotePassword(): Promise<string | undefined> {
-    if (this.inMemoryRemotePassword !== undefined) return this.inMemoryRemotePassword;
-    if (this.credentials) {
-      const secret = await this.credentials.get(REMOTE_SECRET_ID).catch(() => undefined);
-      if (secret !== undefined && secret !== "") return secret;
-    }
-    return undefined;
+  getRemotePassword(): Promise<string | undefined> {
+    return this.vault.get(REMOTE_SECRET_ID);
   }
 
-  async hasRemotePassword(): Promise<boolean> {
-    return (await this.getRemotePassword()) !== undefined;
+  hasRemotePassword(): Promise<boolean> {
+    return this.vault.has(REMOTE_SECRET_ID);
+  }
+
+  async getConnectorSecrets(): Promise<ConnectorSecrets> {
+    const [emailPassword, telegramToken, feishuWebhook] = await Promise.all([
+      this.vault.get(EMAIL_SECRET_ID),
+      this.vault.get(TELEGRAM_SECRET_ID),
+      this.vault.get(FEISHU_SECRET_ID),
+    ]);
+    return { emailPassword, telegramToken, feishuWebhook };
+  }
+
+  persist(): void {
+    this.persistState();
   }
 
   updateConfig(next: Partial<BotStoreConfig>): void {
@@ -165,44 +177,24 @@ export class BotStateStore {
   }
 
   readSoul(): string {
-    if (!existsSync(this.soulFile)) {
-      writeFileAtomic(this.soulFile, DEFAULT_SOUL_MARKDOWN, 0o600);
-      return DEFAULT_SOUL_MARKDOWN;
-    }
-    try {
-      return readFileSync(this.soulFile, "utf8");
-    } catch {
-      return DEFAULT_SOUL_MARKDOWN;
-    }
+    return readBotSoulFile(this.soulFile);
   }
 
   readMemory(): string {
-    try {
-      return existsSync(this.memoryFile) ? readFileSync(this.memoryFile, "utf8") : "# MEMORY.md\n";
-    } catch {
-      return "# MEMORY.md\n";
-    }
+    return readBotMemoryFile(this.memoryFile);
   }
 
   saveSoul(content: string): { content: string; updatedAt: string } {
-    if (Buffer.byteLength(content, "utf8") > MAX_SOUL_BYTES) {
-      throw new Error("SOUL.md cannot exceed 128 KB");
-    }
-    writeFileAtomic(this.soulFile, content, 0o600);
-    const updatedAt = formatShortDate(Date.now());
+    const res = writeBotSoulFile(this.soulFile, content);
     if (this.state !== undefined) {
-      this.state.soulUpdatedAt = updatedAt;
+      this.state.soulUpdatedAt = res.updatedAt;
       this.persistState();
     }
-    return { content, updatedAt };
+    return res;
   }
 
   private memoryUpdatedAtLabel(): string {
-    try {
-      return formatShortDate(statSync(this.memoryFile).mtimeMs);
-    } catch {
-      return formatShortDate(Date.now());
-    }
+    return readFileMtimeShortDate(this.memoryFile);
   }
 
   private persistState(): void {
@@ -212,69 +204,41 @@ export class BotStateStore {
 
   async ensureLoaded(): Promise<PersistedBotState> {
     if (this.state !== undefined) {
-      let existingMain = await this.sessions.get(this.state.mainSessionId);
-      if (existingMain === undefined) {
-        existingMain = this.sessions.create({ cwd: this.botWorkspaceDir, side: true });
-        existingMain.append("label", { title: "主聊天" });
-        this.state.mainSessionId = existingMain.id;
-        this.botSessionIds.add(existingMain.id);
+      const mainSess = await ensureMainBotSession(
+        this.sessions,
+        this.botWorkspaceDir,
+        this.botSessionIds,
+        this.state.mainSessionId,
+      );
+      if (this.state.mainSessionId !== mainSess.id) {
+        this.state.mainSessionId = mainSess.id;
         this.persistState();
       }
-      ensureBotFullAccessPermission(existingMain);
       return this.state;
     }
 
     this.readSoul();
-    if (existsSync(this.stateFile)) {
-      try {
-        const parsed = JSON.parse(readFileSync(this.stateFile, "utf8")) as PersistedBotState;
-        if (parsed && parsed.version === 2 && typeof parsed.mainSessionId === "string") {
-          let mainSession = await this.sessions.get(parsed.mainSessionId);
-          if (mainSession === undefined) {
-            mainSession = this.sessions.create({ cwd: this.botWorkspaceDir, side: true });
-            mainSession.append("label", { title: "主聊天" });
-            parsed.mainSessionId = mainSession.id;
-          }
-          ensureBotFullAccessPermission(mainSession);
-          parsed.ideaSections = STARTER_IDEA_SECTIONS;
-          parsed.virtualServer.local.sharedFolders = (parsed.virtualServer.local.sharedFolders ?? []).filter(
-            (f) => f.path.toLowerCase() !== this.botWorkspaceDir.toLowerCase(),
-          );
-          this.botSessionIds.add(parsed.mainSessionId);
-          for (const side of parsed.sideThreads ?? []) {
-            this.botSessionIds.add(side.sessionId);
-            const s = await this.sessions.get(side.sessionId).catch(() => undefined);
-            if (s !== undefined) ensureBotFullAccessPermission(s);
-          }
-          applyBotConfigOverlay(parsed, this.config);
-          this.state = parsed;
-          this.persistState();
-          return parsed;
-        }
-      } catch {
-        // Fall through to clean initialization.
-      }
-    }
-
-    const mainSession = this.sessions.create({ cwd: this.botWorkspaceDir, side: true });
-    mainSession.append("label", { title: "主聊天" });
-    ensureBotFullAccessPermission(mainSession);
-    const fresh = buildDefaultBotState({
-      mainSessionId: mainSession.id,
-      defaultCwd: this.botWorkspaceDir,
-      displayName: this.config.displayName,
-      avatarPreset: this.config.avatarPreset,
+    const loaded = await loadOrCreatePersistedBotState({
+      stateFile: this.stateFile,
+      sessions: this.sessions,
+      botWorkspaceDir: this.botWorkspaceDir,
+      botSessionIds: this.botSessionIds,
+      config: this.config,
     });
-    applyBotConfigOverlay(fresh, this.config);
-    this.botSessionIds.add(mainSession.id);
-    this.state = fresh;
+    this.state = loaded;
     this.persistState();
-    return fresh;
+    return loaded;
   }
 
   async snapshot(): Promise<BotSnapshotResult> {
     const st = await this.ensureLoaded();
     await refreshLiveLocalMetrics(st, this.getServerDeps());
+    this.connectorsHub.ensureConfig(st);
+    const cfg = st.connectorConfigs ?? buildDefaultConnectorsConfig();
+    cfg.email.hasPassword = await this.vault.has(EMAIL_SECRET_ID);
+    cfg.meetingsIm.hasTelegramToken = await this.vault.has(TELEGRAM_SECRET_ID);
+    cfg.meetingsIm.hasFeishuWebhook = await this.vault.has(FEISHU_SECRET_ID);
+    if (!st.awareness) st.awareness = buildDefaultAwareness();
     return buildBotSnapshotResult({
       st,
       botWorkspaceDir: this.botWorkspaceDir,
@@ -282,6 +246,33 @@ export class BotStateStore {
       soulContent: this.readSoul(),
       memoryUpdatedAt: this.memoryUpdatedAtLabel(),
     });
+  }
+
+  async configureProactive(patch: BotProactivePatch): Promise<BotSnapshotResult> {
+    const st = await this.ensureLoaded();
+    if (typeof patch.email?.password === "string") await this.vault.set(EMAIL_SECRET_ID, patch.email.password);
+    if (typeof patch.meetingsIm?.telegramToken === "string") await this.vault.set(TELEGRAM_SECRET_ID, patch.meetingsIm.telegramToken);
+    if (typeof patch.meetingsIm?.feishuWebhook === "string") await this.vault.set(FEISHU_SECRET_ID, patch.meetingsIm.feishuWebhook);
+    applyBotProactivePatch(st, patch);
+    const primary = st.modelConfig?.primary;
+    if (primary?.provider && primary?.model) {
+      const mainSess = await this.sessions.get(st.mainSessionId).catch(() => undefined);
+      mainSess?.setModel({ provider: primary.provider, model: primary.model });
+    }
+    this.persistState();
+    return this.snapshot();
+  }
+
+  async testConnector(kind: "email" | "calendar" | "processes" | "meetings_im"): Promise<{ ok: boolean; message: string; snapshot: BotSnapshotResult }> {
+    const st = await this.ensureLoaded();
+    const res = await this.connectorsHub.testConnector(kind, st, await this.getConnectorSecrets());
+    this.persistState();
+    return { ...res, snapshot: await this.snapshot() };
+  }
+
+  async collectConnectorDelta(nowMs = Date.now()): Promise<ConnectorDelta> {
+    const st = await this.ensureLoaded();
+    return this.connectorsHub.collectDelta(st, await this.getConnectorSecrets(), nowMs);
   }
 
   async executeToolInVm(call: ToolCall, env: ToolEnv): Promise<ToolOutput | undefined> {
@@ -383,7 +374,7 @@ export class BotStateStore {
   async resolveApproval(id: string, decision: "approved" | "denied"): Promise<ResolvedBotApproval> {
     const st = await this.ensureLoaded();
     const rawCmd = this.pendingCommands.get(id);
-    this.pendingCommands.delete(id);
+    const secrets = await this.getConnectorSecrets();
     const resolved = await resolveBotApprovalRecord({
       st,
       id,
@@ -393,7 +384,9 @@ export class BotStateStore {
       wsl: this.wsl,
       ssh: this.ssh,
       getRemotePassword: () => this.getRemotePassword(),
+      executeOutbound: (approval) => this.connectorsHub.executeApprovedOutbound(approval, st, secrets),
     });
+    this.pendingCommands.delete(id);
     this.persistState();
     return resolved;
   }

@@ -1,0 +1,353 @@
+/**
+ * Integration tests for the independent `BotCompanionHarness`, 4 real connectors
+ * (TCP IMAP/SMTP, HTTP .ics Calendar, Process Sensor, Meeting Notes), post-turn
+ * reflection, tiered focus-aware delivery, and outbound approval execution.
+ */
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createNetServer, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { Service, type Context } from "@deepseek-ai/cordis";
+import { AgentLoop } from "@qianji/agent-loop";
+import { Credentials, LlmService, type LlmRequest, type StreamChunk } from "@qianji/llm";
+import * as promptContext from "@qianji/prompt-context";
+import type { RpcHandler, RpcService } from "@qianji/rpc";
+import { Sessions } from "@qianji/session";
+import { SystemPrompt } from "@qianji/system-prompt";
+import { textOutput, Tools } from "@qianji/tools";
+import { Ui } from "@qianji/ui";
+import * as botPlugin from "../packages/host/src/bot/index";
+import { createHost } from "../packages/host/src/host";
+import * as sessionsRpc from "../packages/host/src/sessions-rpc";
+import type { ProcessEntry } from "../packages/host/src/bot/connectors/process-sensor";
+
+class SpyRpc extends Service implements RpcService {
+  static provide = "rpc";
+  private readonly handlers = new Map<string, RpcHandler>();
+  readonly broadcasts: Array<{ method: string; params: unknown }> = [];
+
+  constructor(ctx: Context) {
+    super(ctx, "rpc");
+  }
+
+  method(name: string, handler: RpcHandler): () => void {
+    this.handlers.set(name, handler);
+    return () => {
+      if (this.handlers.get(name) === handler) this.handlers.delete(name);
+    };
+  }
+
+  methods(): string[] {
+    return ["initialize", ...this.handlers.keys()];
+  }
+
+  broadcast(method: string, params?: unknown): void {
+    this.broadcasts.push({ method, params });
+  }
+
+  async invoke<T>(name: string, params: unknown = {}): Promise<T> {
+    const fn = this.handlers.get(name);
+    if (!fn) throw new Error(`RPC method not registered: ${name}`);
+    return (await fn(params, {
+      signal: new AbortController().signal,
+      notify: () => undefined,
+    })) as T;
+  }
+}
+
+async function startMockImapServer(getEmails: () => Array<{ uid: string; from: string; subject: string; body: string }>) {
+  const srv = createNetServer((sock: Socket) => {
+    sock.on("error", () => undefined);
+    sock.write("* OK Mock IMAP ready\r\n");
+    let buf = "";
+    sock.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      while (buf.includes("\r\n")) {
+        const idx = buf.indexOf("\r\n");
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!line) continue;
+        const spaceIdx = line.indexOf(" ");
+        const tag = spaceIdx > 0 ? line.slice(0, spaceIdx) : "A0";
+        const rest = spaceIdx > 0 ? line.slice(spaceIdx + 1) : line;
+        const list = getEmails();
+        if (/^LOGIN\b/i.test(rest) || /^SELECT\b/i.test(rest)) {
+          sock.write(`${tag} OK done\r\n`);
+        } else if (/^UID SEARCH/i.test(rest)) {
+          sock.write(`* SEARCH ${list.map((e) => e.uid).join(" ")}\r\n${tag} OK SEARCH completed\r\n`);
+        } else if (/^UID FETCH\s+(\d+)/i.test(rest)) {
+          const uid = /^UID FETCH\s+(\d+)/i.exec(rest)?.[1];
+          const found = list.find((e) => e.uid === uid) ?? list[0];
+          if (!found) {
+            sock.write(`${tag} OK empty\r\n`);
+          } else {
+            const b64Subj = `=?UTF-8?B?${Buffer.from(found.subject, "utf8").toString("base64")}?=`;
+            const hdr = `From: ${found.from}\r\nReply-To: ${found.from}\r\nSubject: ${b64Subj}\r\nDate: ${new Date().toUTCString()}\r\n`;
+            sock.write(`* 1 FETCH (UID ${found.uid} BODY[HEADER.FIELDS (FROM REPLY-TO SUBJECT DATE)] {${Buffer.byteLength(hdr, "utf8")}}\r\n${hdr} BODY[TEXT]<0> {${Buffer.byteLength(found.body, "utf8")}}\r\n${found.body})\r\n${tag} OK FETCH completed\r\n`);
+          }
+        } else if (/^LOGOUT/i.test(rest)) {
+          sock.write(`* BYE\r\n${tag} OK LOGOUT\r\n`);
+          sock.end();
+        } else {
+          sock.write(`${tag} OK\r\n`);
+        }
+      }
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const addr = srv.address();
+  return { port: typeof addr === "object" && addr ? addr.port : 0, close: () => new Promise<void>((r) => srv.close(() => r())) };
+}
+
+async function startMockSmtpServer() {
+  const received: Array<{ from: string; to: string; data: string }> = [];
+  const srv = createNetServer((sock: Socket) => {
+    sock.on("error", () => undefined);
+    sock.write("220 mock-smtp ready\r\n");
+    let mode: "cmd" | "user" | "pass" | "data" = "cmd";
+    let from = "";
+    let to = "";
+    let dataBuf = "";
+    let raw = "";
+    sock.on("data", (chunk) => {
+      raw += chunk.toString("utf8");
+      while (raw.includes("\r\n")) {
+        const idx = raw.indexOf("\r\n");
+        const line = raw.slice(0, idx);
+        raw = raw.slice(idx + 2);
+        if (mode === "user") { mode = "pass"; sock.write("334 UGFzc3dvcmQ6\r\n"); continue; }
+        if (mode === "pass") { mode = "cmd"; sock.write("235 Authentication successful\r\n"); continue; }
+        if (mode === "data") {
+          if (line === ".") {
+            received.push({ from, to, data: dataBuf });
+            mode = "cmd";
+            dataBuf = "";
+            sock.write("250 OK queued\r\n");
+          } else {
+            dataBuf += `${line.replace(/^\.\./, ".")}\n`;
+          }
+          continue;
+        }
+        if (/^EHLO|^HELO/i.test(line)) sock.write("250 Hello\r\n");
+        else if (/^AUTH LOGIN/i.test(line)) { mode = "user"; sock.write("334 VXNlcm5hbWU6\r\n"); }
+        else if (/^MAIL FROM:/i.test(line)) { from = line.slice(10).trim(); sock.write("250 OK\r\n"); }
+        else if (/^RCPT TO:/i.test(line)) { to = line.slice(8).trim(); sock.write("250 OK\r\n"); }
+        else if (/^DATA/i.test(line)) { mode = "data"; dataBuf = ""; sock.write("354 End data with .\r\n"); }
+        else if (/^QUIT/i.test(line)) { sock.write("221 Bye\r\n"); sock.end(); }
+        else sock.write("250 OK\r\n");
+      }
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const addr = srv.address();
+  return { port: typeof addr === "object" && addr ? addr.port : 0, received, close: () => new Promise<void>((r) => srv.close(() => r())) };
+}
+
+function toIcsLocal(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T${p(d.getHours())}${p(d.getMinutes())}00`;
+}
+
+describe("Independent Proactive Bot Harness & 4 Real Connectors", () => {
+  const cleanups: Array<() => Promise<void> | void> = [];
+
+  afterEach(async () => {
+    while (cleanups.length > 0) {
+      const fn = cleanups.pop();
+      if (fn) await fn();
+    }
+  });
+
+  it("isolates BotCompanionHarness from AgentLoop, runs post-turn reflection, polls all 4 connectors, and sends SMTP after approval", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "qj-proactive-bot-"));
+    const notesDir = mkdtempSync(join(tmpdir(), "qj-bot-notes-"));
+    cleanups.push(() => {
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(notesDir, { recursive: true, force: true });
+    });
+
+    const mailList = [
+      { uid: "41", from: "alice@example.com", subject: "下周项目对齐方案确认", body: "请确认周五前能否发我初稿？" },
+    ];
+    const imap = await startMockImapServer(() => mailList);
+    const smtp = await startMockSmtpServer();
+
+    const now = Date.now();
+    const mStart = new Date(now + 10 * 60_000);
+    const mEnd = new Date(now + 70 * 60_000);
+    const cStart = new Date(now + 30 * 60_000);
+    const cEnd = new Date(now + 90 * 60_000);
+    const icsPayload = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "BEGIN:VEVENT",
+      "UID:ev-1",
+      "SUMMARY:项目周会",
+      `DTSTART:${toIcsLocal(mStart)}`,
+      `DTEND:${toIcsLocal(mEnd)}`,
+      "LOCATION:3F会议室",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:ev-2",
+      "SUMMARY:客户产品评审",
+      `DTSTART:${toIcsLocal(cStart)}`,
+      `DTEND:${toIcsLocal(cEnd)}`,
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    const icsServer = createHttpServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/calendar; charset=utf-8" });
+      res.end(icsPayload);
+    });
+    await new Promise<void>((r) => icsServer.listen(0, "127.0.0.1", r));
+    const icsPort = (icsServer.address() as { port: number }).port;
+
+    cleanups.push(() => Promise.all([imap.close(), smtp.close(), new Promise<void>((r) => icsServer.close(() => r()))]).then(() => undefined));
+
+    let currentProcesses: ProcessEntry[] = [{ pid: 101, name: "cargo.exe", title: "cargo build" }];
+    const capturedRequests: LlmRequest[] = [];
+
+    const host = createHost({
+      version: "0.3.0-test",
+      dataDir,
+      plugins: [
+        [Credentials],
+        [LlmService],
+        [Sessions],
+        [Ui],
+        [Tools],
+        [SystemPrompt],
+        [SpyRpc],
+        [promptContext, { dataDir }],
+        [AgentLoop],
+        [sessionsRpc],
+        [botPlugin, { dataDir, distroName: "qianji-bot-unit-noop", processProbe: async () => currentProcesses }],
+      ],
+    });
+    await host.start();
+    cleanups.push(() => host.stop());
+
+    host.ctx.llm.registerAdapter(
+      { id: "mock", name: "Mock", api: "mock", baseUrl: "http://mock" },
+      {
+        async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
+          capturedRequests.push(request);
+          if (request.sessionId?.endsWith(":reflect")) {
+            yield {
+              type: "text-delta",
+              index: 0,
+              text: '{"preferences":["周三下午保留整块深度工作时段"],"goals":[{"title":"周五前完成发布对齐初稿","category":"工程交付"}],"space":null}',
+            };
+          } else {
+            yield { type: "text-delta", index: 0, text: "我明白你的顾虑，已为你梳理好安排并开始在后台盯紧关键节点。" };
+          }
+          yield { type: "usage", usage: { inputTokens: 10, outputTokens: 12 } };
+          yield { type: "finish", reason: "stop" };
+        },
+      },
+    );
+
+    host.ctx.tools.register({
+      name: "bash",
+      description: "shell",
+      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+      execute: async () => textOutput("ok"),
+    });
+
+    const rpc = host.ctx.rpc as unknown as SpyRpc;
+    const snap0 = await rpc.invoke<{ mainSessionId: string }>("bot.getSnapshot", {});
+
+    // 1. Dual-Harness Separation + Post-Turn Reflection
+    const botSess = await host.ctx.sessions.get(snap0.mainSessionId);
+    botSess?.setModel({ provider: "mock", model: "companion-v1" });
+    await rpc.invoke("session.prompt", { sessionId: snap0.mainSessionId, content: "下周五前要把发布对齐初稿赶出来，周三下午别排会" });
+    await host.ctx.botHarness?.idle(snap0.mainSessionId);
+
+    const agentSess = host.ctx.sessions.create({ cwd: dataDir });
+    agentSess.setModel({ provider: "mock", model: "coder-v1" });
+    await rpc.invoke("session.prompt", { sessionId: agentSess.id, content: "Inspect README" });
+    await host.ctx.agents.idle(agentSess.id);
+
+    const botReq = capturedRequests.find((r) => r.sessionId === snap0.mainSessionId);
+    const agentReq = capturedRequests.find((r) => r.sessionId === agentSess.id);
+    expect(botReq?.system).toContain("<companion_identity>");
+    expect(botReq?.system).not.toContain("You are a coding agent");
+    expect(botReq?.tools?.some((t) => t.name === "bot_sense_apps")).toBe(true);
+    expect(botReq?.tools?.some((t) => t.name === "bot_stage_outbound_approval")).toBe(true);
+    expect(agentReq?.system).toContain("You are a coding agent");
+    expect(agentReq?.tools?.some((t) => t.name === "bot_sense_apps")).toBe(false);
+
+    // Wait briefly for async post-turn reflection to persist
+    await new Promise((r) => setTimeout(r, 150));
+    const snapAfterReflect = await rpc.invoke<{ learnedPreferences: string[]; goals: Array<{ title: string }> }>("bot.getSnapshot", {});
+    expect(snapAfterReflect.learnedPreferences.some((p) => p.includes("周三下午"))).toBe(true);
+    expect(snapAfterReflect.goals.some((g) => g.title.includes("发布对齐初稿"))).toBe(true);
+
+    // 2. Configure 4 Real Connectors & Run Patrol
+    writeFileSync(join(notesDir, "产品对齐会纪要.md"), "# 对齐纪要\n待办：周五前同步给运营团队最新时间表\n", "utf8");
+    await rpc.invoke("bot.configure", {
+      modelConfig: { primary: { provider: "mock", model: "companion-v1" }, patrol: { provider: "mock", model: "companion-v1" } },
+      pacing: { heartbeatEnabled: true, quietHoursEnabled: false },
+      email: {
+        enabled: true,
+        preset: "custom",
+        emailAddress: "me@example.com",
+        password: "app-password",
+        imapHost: "127.0.0.1",
+        imapPort: imap.port,
+        imapTls: false,
+        smtpHost: "127.0.0.1",
+        smtpPort: smtp.port,
+        smtpTls: false,
+      },
+      calendar: { enabled: true, icsUrl: `http://127.0.0.1:${icsPort}/cal.ics`, leadMinutes: 20 },
+      processSensor: { enabled: true, watchedProcesses: ["cargo.exe"], lateNightCareEnabled: false },
+      meetingsIm: { meetingNotesEnabled: true, meetingNotesDir: notesDir },
+    });
+
+    // Warm sample sees cargo.exe running; second poll drops cargo.exe to simulate finish
+    await rpc.invoke("bot.connector.test", { kind: "processes" });
+    currentProcesses = [];
+
+    const patrolRes = await rpc.invoke<{
+      triggered: boolean;
+      queuedApprovals: number;
+      snapshot: {
+        inboxItems: Array<{ subject: string; preview?: string; replyTo?: string }>;
+        pendingApprovals: Array<{ id: string; kind?: string; recipient?: string }>;
+        goals: Array<{ title: string }>;
+        awareness: { conflictCount: number; todayEvents: unknown[] };
+      };
+    }>("bot.patrol.runNow", { force: false });
+
+    expect(patrolRes.triggered).toBe(true);
+    const syncedMail = patrolRes.snapshot.inboxItems.find((m) => m.subject.includes("下周项目对齐方案确认"));
+    expect(syncedMail).toBeDefined();
+    expect(syncedMail?.preview).not.toContain("OK FETCH");
+    expect(patrolRes.snapshot.awareness.conflictCount).toBe(1);
+    expect(patrolRes.snapshot.awareness.todayEvents.length).toBe(2);
+    expect(patrolRes.snapshot.goals.some((g) => g.title.includes("周五前同步给运营团队"))).toBe(true);
+    const emailApr = patrolRes.snapshot.pendingApprovals.find((a) => a.kind === "send-email");
+    expect(emailApr?.recipient).toBe("alice@example.com");
+    expect(rpc.broadcasts.some((b) => b.method === "bot/desktopNotification")).toBe(true);
+
+    // 3. Approve Email Draft -> Verify Real SMTP Delivery!
+    if (emailApr) {
+      await rpc.invoke("bot.approvals.resolve", { id: emailApr.id, decision: "approved" });
+    }
+    expect(smtp.received.length).toBe(1);
+    expect(smtp.received[0]?.to).toContain("alice@example.com");
+
+    // 4. Focus/In-Meeting Pacing Suppression: routine email arrives while Zoom is running -> no desktop popup
+    rpc.broadcasts.length = 0;
+    currentProcesses = [{ pid: 202, name: "Zoom.exe", title: "Zoom Meeting" }];
+    mailList.push({ uid: "42", from: "news@example.com", subject: "每周行业资讯速览", body: "本周动态汇总..." });
+    const suppressedRes = await rpc.invoke<{ triggered: boolean; suppressedByFocus: boolean }>("bot.patrol.runNow", { force: false });
+    expect(suppressedRes.triggered).toBe(true);
+    expect(suppressedRes.suppressedByFocus).toBe(true);
+    expect(rpc.broadcasts.some((b) => b.method === "bot/desktopNotification")).toBe(false);
+  });
+});

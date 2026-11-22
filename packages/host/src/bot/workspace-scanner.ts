@@ -6,7 +6,14 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import type { BotDocumentItem, BotMediaItem, BotServerMode } from "@qianji/protocol";
-import { formatShortDate, normalizeAvatarPreset, type PersistedBotState } from "./defaults.ts";
+import type { ProcessProbeFn } from "./connectors/process-sensor.ts";
+import {
+  DEFAULT_SOUL_MARKDOWN,
+  formatShortDate,
+  MAX_SOUL_BYTES,
+  normalizeAvatarPreset,
+  type PersistedBotState,
+} from "./defaults.ts";
 
 export interface BotStoreConfig {
   dataDir: string;
@@ -22,6 +29,7 @@ export interface BotStoreConfig {
   remotePort?: number;
   remoteUser?: string;
   remoteWorkDir?: string;
+  processProbe?: ProcessProbeFn;
 }
 
 export function writeFileAtomic(file: string, content: string, mode?: number): void {
@@ -169,5 +177,41 @@ export function extractLearnedPreferencesFromMemory(memoryFile: string): string[
     return bullets;
   } catch {
     return [];
+  }
+}
+
+export function readBotSoulFile(soulFile: string): string {
+  if (!existsSync(soulFile)) {
+    writeFileAtomic(soulFile, DEFAULT_SOUL_MARKDOWN, 0o600);
+    return DEFAULT_SOUL_MARKDOWN;
+  }
+  try {
+    return readFileSync(soulFile, "utf8");
+  } catch {
+    return DEFAULT_SOUL_MARKDOWN;
+  }
+}
+
+export function readBotMemoryFile(memoryFile: string): string {
+  try {
+    return existsSync(memoryFile) ? readFileSync(memoryFile, "utf8") : "# MEMORY.md\n";
+  } catch {
+    return "# MEMORY.md\n";
+  }
+}
+
+export function writeBotSoulFile(soulFile: string, content: string): { content: string; updatedAt: string } {
+  if (Buffer.byteLength(content, "utf8") > MAX_SOUL_BYTES) {
+    throw new Error("SOUL.md cannot exceed 128 KB");
+  }
+  writeFileAtomic(soulFile, content, 0o600);
+  return { content, updatedAt: formatShortDate(Date.now()) };
+}
+
+export function readFileMtimeShortDate(file: string): string {
+  try {
+    return formatShortDate(statSync(file).mtimeMs);
+  } catch {
+    return formatShortDate(Date.now());
   }
 }

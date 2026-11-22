@@ -9,12 +9,16 @@ import type {
   BotActivityGroup,
   BotAvatarPresetId,
   BotConnectorItem,
+  BotConnectorsConfig,
   BotDocumentItem,
   BotFeedItem,
   BotGoalItem,
   BotIdeaSection,
   BotInboxItem,
+  BotLiveAwarenessSummary,
   BotMediaItem,
+  BotModelConfig,
+  BotPacingConfig,
   BotProfile,
   BotSideThreadInfo,
   BotSpaceSummary,
@@ -53,8 +57,68 @@ export interface PersistedBotState {
   inboxAddress: string;
   inboxItems: BotInboxItem[];
   connectors: BotConnectorItem[];
+  modelConfig?: BotModelConfig;
+  pacing?: BotPacingConfig;
+  connectorConfigs?: BotConnectorsConfig;
+  awareness?: BotLiveAwarenessSummary;
   virtualServer: BotVirtualServerStatus;
   embeddedTasks: BotTaskHandoffPayload[];
+}
+
+export function buildDefaultPacingConfig(): BotPacingConfig {
+  return {
+    heartbeatEnabled: true,
+    heartbeatIntervalMinutes: 30,
+    quietHoursEnabled: true,
+    quietHoursStart: "23:00",
+    quietHoursEnd: "08:00",
+  };
+}
+
+export function buildDefaultConnectorsConfig(): BotConnectorsConfig {
+  return {
+    email: {
+      enabled: false,
+      preset: "qq",
+      emailAddress: "",
+      imapHost: "imap.qq.com",
+      imapPort: 993,
+      imapTls: true,
+      smtpHost: "smtp.qq.com",
+      smtpPort: 465,
+      smtpTls: true,
+      hasPassword: false,
+    },
+    calendar: {
+      enabled: false,
+      icsUrl: "",
+      localIcsPath: "",
+      leadMinutes: 15,
+    },
+    processSensor: {
+      enabled: true,
+      watchedProcesses: [],
+      lateNightCareEnabled: true,
+    },
+    meetingsIm: {
+      meetingNotesEnabled: false,
+      meetingNotesDir: "",
+      telegramEnabled: false,
+      telegramChatId: "",
+      hasTelegramToken: false,
+      feishuEnabled: false,
+      hasFeishuWebhook: false,
+    },
+  };
+}
+
+export function buildDefaultAwareness(): BotLiveAwarenessSummary {
+  return {
+    busyState: "normal",
+    runningWatched: [],
+    todayEvents: [],
+    conflictCount: 0,
+  };
 }
 
 export function normalizeAvatarPreset(raw: string | undefined): BotAvatarPresetId {
@@ -175,8 +239,12 @@ export function buildDefaultBotState(options: {
       { id: "git-local", name: "本地 Git 工作区", description: "受控共享目录与独立隔离副本保护", enabled: true },
       { id: "github", name: "GitHub", description: "PR / Issues / Actions 状态只读监听", enabled: false },
       { id: "browser-vm", name: "CDP 隔离浏览器", description: "按会话隔离浏览器自动化与实时人工接管", enabled: true },
-      { id: "calendar", name: "日历与提醒", description: "本地定时任务与每日早报投递", enabled: true },
+      { id: "calendar", name: "日历与提醒", description: "ICS 日程同步与会前规划提醒", enabled: false },
     ],
+    modelConfig: {},
+    pacing: buildDefaultPacingConfig(),
+    connectorConfigs: buildDefaultConnectorsConfig(),
+    awareness: buildDefaultAwareness(),
     virtualServer: {
       mode: "local",
       lifecycle: process.platform === "win32" ? "offline" : "running",

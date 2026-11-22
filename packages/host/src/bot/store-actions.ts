@@ -2,7 +2,7 @@
  * State mutation & permission helpers for `BotStateStore` (`store-actions.ts`).
  */
 import { randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type {
   BotActivityEntry,
@@ -10,18 +10,86 @@ import type {
   BotGoalItem,
   BotSnapshotResult,
   BotSpaceSummary,
+  PendingBotApproval,
   ResolvedBotApproval,
 } from "@qianji/protocol";
-import type { Session } from "@qianji/session";
-import { formatClock, type PersistedBotState } from "./defaults.ts";
+import type { Session, Sessions } from "@qianji/session";
+import {
+  buildDefaultAwareness,
+  buildDefaultBotState,
+  buildDefaultConnectorsConfig,
+  buildDefaultPacingConfig,
+  formatClock,
+  STARTER_IDEA_SECTIONS,
+  type PersistedBotState,
+} from "./defaults.ts";
 import type { SshRemoteRuntime } from "./ssh-runtime.ts";
 import {
+  applyBotConfigOverlay,
   executeApprovedShellCommand,
   extractLearnedPreferencesFromMemory,
   scanBotWorkspaceArtifacts,
   writeFileAtomic,
+  type BotStoreConfig,
 } from "./workspace-scanner.ts";
 import type { WslContainerRuntime } from "./wsl-runtime.ts";
+
+export async function ensureMainBotSession(
+  sessions: Sessions,
+  botWorkspaceDir: string,
+  botSessionIds: Set<string>,
+  existingId?: string,
+): Promise<Session> {
+  let sess = existingId ? await sessions.get(existingId) : undefined;
+  if (sess === undefined) {
+    sess = sessions.create({ cwd: botWorkspaceDir, side: true });
+    sess.append("label", { title: "主聊天" });
+  }
+  botSessionIds.add(sess.id);
+  ensureBotFullAccessPermission(sess);
+  return sess;
+}
+
+export async function loadOrCreatePersistedBotState(params: {
+  stateFile: string;
+  sessions: Sessions;
+  botWorkspaceDir: string;
+  botSessionIds: Set<string>;
+  config: BotStoreConfig;
+}): Promise<PersistedBotState> {
+  const { stateFile, sessions, botWorkspaceDir, botSessionIds, config } = params;
+  if (existsSync(stateFile)) {
+    try {
+      const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as PersistedBotState;
+      if (parsed && parsed.version === 2 && typeof parsed.mainSessionId === "string") {
+        const mainSession = await ensureMainBotSession(sessions, botWorkspaceDir, botSessionIds, parsed.mainSessionId);
+        parsed.mainSessionId = mainSession.id;
+        parsed.ideaSections = STARTER_IDEA_SECTIONS;
+        parsed.virtualServer.local.sharedFolders = (parsed.virtualServer.local.sharedFolders ?? []).filter(
+          (f) => f.path.toLowerCase() !== botWorkspaceDir.toLowerCase(),
+        );
+        for (const side of parsed.sideThreads ?? []) {
+          botSessionIds.add(side.sessionId);
+          const s = await sessions.get(side.sessionId).catch(() => undefined);
+          if (s !== undefined) ensureBotFullAccessPermission(s);
+        }
+        applyBotConfigOverlay(parsed, config);
+        return parsed;
+      }
+    } catch {
+      // Fall through to clean initialization.
+    }
+  }
+  const mainSession = await ensureMainBotSession(sessions, botWorkspaceDir, botSessionIds);
+  const fresh = buildDefaultBotState({
+    mainSessionId: mainSession.id,
+    defaultCwd: botWorkspaceDir,
+    displayName: config.displayName,
+    avatarPreset: config.avatarPreset,
+  });
+  applyBotConfigOverlay(fresh, config);
+  return fresh;
+}
 
 export function ensureBotFullAccessPermission(session: Session): void {
   for (let i = session.events.length - 1; i >= 0; i -= 1) {
@@ -172,6 +240,10 @@ export function buildBotSnapshotResult(params: {
     inboxAddress: st.inboxAddress,
     inboxItems: st.inboxItems,
     connectors: st.connectors,
+    modelConfig: st.modelConfig ?? {},
+    pacing: st.pacing ?? buildDefaultPacingConfig(),
+    connectorConfigs: st.connectorConfigs ?? buildDefaultConnectorsConfig(),
+    awareness: st.awareness ?? buildDefaultAwareness(),
     virtualServer: st.virtualServer,
     embeddedTasks: st.embeddedTasks,
   };
@@ -186,12 +258,22 @@ export async function resolveBotApprovalRecord(params: {
   wsl: WslContainerRuntime;
   ssh: SshRemoteRuntime;
   getRemotePassword: () => Promise<string | undefined>;
+  executeOutbound?: (approval: PendingBotApproval) => Promise<string>;
 }): Promise<ResolvedBotApproval> {
-  const { st, id, decision, rawCmd, botWorkspaceDir, wsl, ssh, getRemotePassword } = params;
+  const { st, id, decision, rawCmd, botWorkspaceDir, wsl, ssh, getRemotePassword, executeOutbound } = params;
   const idx = st.pendingApprovals.findIndex((item) => item.id === id);
-  const found = idx >= 0 ? st.pendingApprovals.splice(idx, 1)[0] : undefined;
+  const found = idx >= 0 ? st.pendingApprovals[idx] : undefined;
   const title = found?.title ?? "外部操作请求";
   let summary = decision === "approved" ? "刚刚 · 用户手动批准执行" : "刚刚 · 用户手动拒绝";
+  if (
+    decision === "approved" &&
+    found &&
+    executeOutbound &&
+    (found.kind === "send-email" || found.kind === "send-telegram" || found.kind === "send-feishu")
+  ) {
+    summary = await executeOutbound(found);
+  }
+  if (idx >= 0) st.pendingApprovals.splice(idx, 1);
   if (decision === "approved" && rawCmd) {
     if (st.virtualServer.mode === "remote") {
       const res = await ssh.exec(st.virtualServer.remote, rawCmd, { password: await getRemotePassword() });

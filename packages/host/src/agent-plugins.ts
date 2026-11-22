@@ -260,7 +260,8 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
       hasHost: true,
       hasClient: true,
       plugin: botPlugin,
-      inject: ["sessions", "systemPrompt", "tools"],
+      inject: ["sessions", "tools"],
+      provides: ["botHarness"],
       config: {
         dataDir,
         ...(config.bot.displayName === undefined ? {} : { displayName: config.bot.displayName }),
@@ -545,9 +546,7 @@ export function builtinPluginDefinitions(
     },
     ...builtinFeatureDefinitions(dataDir, config, {
       ...options,
-      ...(options.pluginManager === undefined && gateway?.manager !== undefined
-        ? { pluginManager: gateway.manager }
-        : {}),
+      ...(options.pluginManager === undefined && gateway?.manager !== undefined ? { pluginManager: gateway.manager } : {}),
       autoRegisterBuiltinProtocols: false,
     }),
     ...gatewayRpcDefinitions(dataDir, gateway, options),

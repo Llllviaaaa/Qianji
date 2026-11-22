@@ -11,6 +11,7 @@ import {
   BotIcon,
   type BotIconName,
 } from "./BotAvatarArt";
+import { BotCompanionApprovalsTab } from "./BotCompanionApprovalsTab";
 import { BotCompanionIdentityTab, BotCompanionInboxTab } from "./BotCompanionIdentityAndInbox";
 import {
   openBotModal,
@@ -197,73 +198,77 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
               </button>
 
               {ui.scheduledExpanded && (
-                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-                  {ui.scheduledTasks.map((task, idx) => (
-                    <button
-                      key={task.id}
-                      type="button"
-                      onClick={() => {
-                        const next = ui.scheduledTasks.map((it, i) =>
-                          i === idx ? { ...it, enabled: !it.enabled } : it,
-                        );
-                        patchBotUi({ scheduledTasks: next });
-                        navigationService?.showToast(
-                          `${task.name} ${!task.enabled ? "已启用" : "已暂停"}`,
-                          "info",
-                        );
-                      }}
-                      style={{
-                        width: "100%",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 12,
-                        padding: 6,
-                        border: 0,
-                        borderRadius: 14,
-                        background: "transparent",
-                        color: "var(--qj-text-primary)",
-                        textAlign: "left",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: 40,
-                          height: 40,
-                          borderRadius: "9999px",
-                          background: "var(--muse-soft-fill)",
-                          color: "var(--qj-status-danger)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          flexShrink: 0,
-                        }}
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
-                          <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
-                        </svg>
-                      </div>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 14, fontWeight: 500 }}>{task.name}</div>
-                        <div style={{ fontSize: 12.5, color: "var(--qj-text-secondary)" }}>
-                          {task.cronOrInterval}
-                          {task.enabled ? "" : " · 已暂停"}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
                   <button
                     type="button"
-                    className="qj-soft-btn"
-                    style={{ marginTop: 4, width: "100%", height: 36, fontSize: 13, fontWeight: 500, background: "transparent" }}
                     onClick={() => {
-                      navigationService?.setShellMode("agent");
-                      navigationService?.navigate({ kind: "hub", view: "scheduled" });
+                      const nextEnabled = !snapshot.pacing.heartbeatEnabled;
+                      void ctrl.configureBot({ pacing: { heartbeatEnabled: nextEnabled } });
+                      navigationService?.showToast(`Heartbeat 主动巡检${nextEnabled ? "已启用" : "已暂停"}`, "info");
+                    }}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: 6,
+                      border: 0,
+                      borderRadius: 14,
+                      background: "transparent",
+                      color: "var(--qj-text-primary)",
+                      textAlign: "left",
+                      cursor: "pointer",
                     }}
                   >
-                    查看所有预定任务
+                    <div
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "9999px",
+                        background: "var(--muse-soft-fill)",
+                        color: "var(--qj-status-danger)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+                        <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                      </svg>
+                    </div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 500 }}>Heartbeat 贴心巡检</div>
+                      <div style={{ fontSize: 12.5, color: "var(--qj-text-secondary)" }}>
+                        每{snapshot.pacing.heartbeatIntervalMinutes}分钟
+                        {snapshot.pacing.heartbeatEnabled ? "" : " · 已暂停"}
+                        {snapshot.awareness.nextMeetingLabel ? ` · ${snapshot.awareness.nextMeetingLabel}` : ""}
+                      </div>
+                    </div>
                   </button>
+
+                  <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
+                    <button
+                      type="button"
+                      className="qj-soft-btn"
+                      disabled={ui.serverBusy}
+                      style={{ flex: 1, height: 34, fontSize: 12.5, fontWeight: 500 }}
+                      onClick={() => void ctrl.runPatrolNow()}
+                    >
+                      立即巡检
+                    </button>
+                    <button
+                      type="button"
+                      className="qj-soft-btn"
+                      style={{ flex: 1, height: 34, fontSize: 12.5, fontWeight: 500, background: "transparent" }}
+                      onClick={() => {
+                        navigationService?.setShellMode("agent");
+                        navigationService?.navigate({ kind: "hub", view: "scheduled" });
+                      }}
+                    >
+                      全部预定任务
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -317,71 +322,7 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
           </div>
         )}
 
-        {ui.rightTab === "approvals" && (
-          <div className="qj-animate-page-in" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 15, fontWeight: 600 }}>审核</span>
-              <span style={{ fontSize: 12, color: "var(--qj-text-secondary)" }}>
-                {snapshot.pendingApprovals.length > 0 ? `${snapshot.pendingApprovals.length} 项待确认` : "全部已处理"}
-              </span>
-            </div>
-
-            {snapshot.pendingApprovals.length === 0 ? (
-              <div style={{ padding: "40px 12px", textAlign: "center" }}>
-                <div style={{ fontSize: 15, fontWeight: 500 }}>审核</div>
-                <div style={{ fontSize: 13, color: "var(--qj-text-secondary)", marginTop: 4 }}>暂无待批准记录</div>
-              </div>
-            ) : (
-              snapshot.pendingApprovals.map((apr) => (
-                <div key={apr.id} style={{ padding: 16, borderRadius: 20, background: "var(--muse-soft-fill)", display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: "9999px", background: "var(--qj-bg-surface)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <BotIcon name="tabShield" />
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{apr.title}</div>
-                      <div style={{ fontSize: 12, color: "var(--qj-text-secondary)" }}>{apr.commandSignature}</div>
-                    </div>
-                  </div>
-                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--qj-text-secondary)" }}>{apr.summary}</p>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      className="qj-primary-pill-btn"
-                      style={{ flex: 1, height: 36, fontSize: 13, fontWeight: 500 }}
-                      onClick={() => void ctrl.resolveApproval(apr.id, "approved")}
-                    >
-                      批准
-                    </button>
-                    <button
-                      type="button"
-                      className="qj-soft-btn"
-                      style={{ flex: 1, height: 36, fontSize: 13, fontWeight: 500, background: "var(--qj-bg-surface)" }}
-                      onClick={() => void ctrl.resolveApproval(apr.id, "denied")}
-                    >
-                      拒绝
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-
-            {snapshot.recentApprovals.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 500, color: "var(--qj-text-muted)" }}>最近审核记录</div>
-                {snapshot.recentApprovals.map((rec) => (
-                  <div key={rec.id} style={{ padding: 12, borderRadius: 16, background: "var(--muse-soft-fill)", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 500 }}>{rec.title}</div>
-                      <div style={{ color: "var(--qj-text-secondary)" }}>{rec.summary}</div>
-                    </div>
-                    <span style={{ color: "var(--qj-text-secondary)" }}>{rec.timeLabel}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        {ui.rightTab === "approvals" && <BotCompanionApprovalsTab ctx={ctx} />}
 
         {ui.rightTab === "identity" && <BotCompanionIdentityTab ctx={ctx} />}
         {ui.rightTab === "inbox" && <BotCompanionInboxTab ctx={ctx} />}
