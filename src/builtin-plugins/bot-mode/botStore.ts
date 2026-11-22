@@ -1,9 +1,5 @@
 /**
  * Reactive UI & Host RPC store for the built-in `bot-mode` client plugin.
- *
- * Uses `@qianji/client-store` `createReactiveStore` + `useSyncExternalStore` so
- * `BotLeftRail` (`bot.rail`) and `BotStage` (`bot.stage`) share unified state
- * with zero synchronous `setState` inside `useEffect`.
  */
 import { useCallback, useEffect } from "react";
 import type { Context } from "@deepseek-ai/cordis";
@@ -11,10 +7,12 @@ import { createReactiveStore, useStoreValue } from "@qianji/client-store";
 import { useFrontendService } from "@qianji/client";
 import type {
   BotAvatarPresetId,
+  BotDocumentItem,
   BotServerActionKind,
   BotServerActionResult,
   BotServerMode,
   BotSnapshotResult,
+  BotSpaceSummary,
   BotTaskHandoffPayload,
 } from "@qianji/protocol";
 import { FALLBACK_BOT_SNAPSHOT } from "./botFallbackData";
@@ -23,9 +21,35 @@ export { FALLBACK_BOT_SNAPSHOT };
 
 export type BotRailView = "chat" | "feed" | "ideas" | "goals" | "library" | "spaces";
 export type BotCompanionTab = "activity" | "approvals" | "identity" | "inbox";
-export type BotLibrarySection = "spaces" | "docs" | "images" | "videos" | "podcasts" | "system";
-export type BotModalKind = "search" | "soul" | "memory" | "shortcuts" | "settings" | "live-view" | null;
-export type BotSettingsTab = "profile" | "vserver" | "heartbeat" | "connectors" | "privacy";
+export type BotLibrarySection = "spaces" | "docs" | "images" | "videos" | "podcasts" | "sysfiles";
+export type BotModalKind =
+  | "search"
+  | "soul"
+  | "memory"
+  | "shortcuts"
+  | "settings"
+  | "live-view"
+  | "doc-preview"
+  | "space-detail"
+  | "report-issue"
+  | null;
+export type BotSettingsTab =
+  | "general"
+  | "server"
+  | "browser"
+  | "connectors"
+  | "vault"
+  | "permissions"
+  | "channels"
+  | "data"
+  | "voice";
+
+export interface BotScheduledSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly cronOrInterval: string;
+  readonly enabled: boolean;
+}
 
 export interface BotUiState {
   readonly activeView: BotRailView;
@@ -41,12 +65,15 @@ export interface BotUiState {
   readonly composerDraft: string;
   readonly quotedText: string | null;
   readonly voiceCallActive: boolean;
-  readonly heartbeatEnabled: boolean;
-  readonly memoryDraftContent: string;
+  readonly scheduledExpanded: boolean;
+  readonly scheduledTasks: readonly BotScheduledSummary[];
+  readonly memoryContent: string;
   readonly serverFeedback: string | null;
+  readonly activeDoc: BotDocumentItem | null;
+  readonly activeSpace: BotSpaceSummary | null;
 }
 
-export const botUiStore = createReactiveStore<BotUiState>({
+export const INITIAL_BOT_UI_STATE: BotUiState = {
   activeView: "chat",
   chatDrawerOpen: false,
   activeSessionId: null,
@@ -54,18 +81,21 @@ export const botUiStore = createReactiveStore<BotUiState>({
   rightTab: "activity",
   libSection: "spaces",
   modal: null,
-  settingsTab: "profile",
+  settingsTab: "general",
   modalNonce: 0,
   moreMenuOpen: false,
   composerDraft: "",
   quotedText: null,
   voiceCallActive: false,
-  heartbeatEnabled: true,
-  memoryDraftContent:
-    "# MEMORY.md — 长期记忆账本\n\n- 正在 develop 分支推进千机 Bot 形态研发\n- 偏好丝滑自然的空间过渡与无边框柔和卡片设计\n",
+  scheduledExpanded: true,
+  scheduledTasks: [{ id: "heartbeat", name: "Heartbeat", cronOrInterval: "每30分钟", enabled: true }],
+  memoryContent: "",
   serverFeedback: null,
-});
+  activeDoc: null,
+  activeSpace: null,
+};
 
+export const botUiStore = createReactiveStore<BotUiState>(INITIAL_BOT_UI_STATE);
 export const botDataStore = createReactiveStore<BotSnapshotResult>(FALLBACK_BOT_SNAPSHOT);
 
 export function useBotUiState(): BotUiState {
@@ -100,12 +130,37 @@ export function useBotController(ctx?: Context) {
   const refresh = useCallback(async () => {
     if (rpcService === undefined) return;
     try {
-      const snap = await rpcService.call<BotSnapshotResult>("bot.getSnapshot", {});
+      const [snap, memRes, schedRes] = await Promise.all([
+        rpcService.call<BotSnapshotResult>("bot.getSnapshot", {}),
+        rpcService.call<{ content?: string }>("memory.get", {}).catch(() => null),
+        rpcService
+          .call<{ tasks?: Array<{ id: string; name: string; schedule?: { kind?: string; minutes?: number; expr?: string }; enabled?: boolean }> }>(
+            "schedule.list",
+            {},
+          )
+          .catch(() => null),
+      ]);
       if (snap && typeof snap.mainSessionId === "string") {
         botDataStore.set(snap);
       }
+      if (memRes && typeof memRes.content === "string") {
+        patchBotUi({ memoryContent: memRes.content });
+      }
+      if (schedRes && Array.isArray(schedRes.tasks) && schedRes.tasks.length > 0) {
+        patchBotUi({
+          scheduledTasks: schedRes.tasks.map((t) => ({
+            id: t.id,
+            name: t.name,
+            cronOrInterval:
+              t.schedule?.kind === "interval" && t.schedule.minutes
+                ? `每${t.schedule.minutes}分钟`
+                : (t.schedule?.expr ?? "定时巡检"),
+            enabled: t.enabled !== false,
+          })),
+        });
+      }
     } catch {
-      // Keep warm local fallback snapshot when running without live Host RPC.
+      // Offline before Host finishes connecting.
     }
   }, [rpcService]);
 
@@ -119,20 +174,21 @@ export function useBotController(ctx?: Context) {
   }, [refresh, rpcService]);
 
   const updateProfile = useCallback(
-    async (input: { displayName?: string; avatarPreset?: BotAvatarPresetId }) => {
+    async (input: { displayName?: string; avatarPreset?: BotAvatarPresetId; customAvatarDataUrl?: string }) => {
       botDataStore.set((prev) => ({
         ...prev,
         profile: {
           ...prev.profile,
           ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
           ...(input.avatarPreset !== undefined ? { avatarPreset: input.avatarPreset } : {}),
+          ...(input.customAvatarDataUrl !== undefined ? { customAvatarDataUrl: input.customAvatarDataUrl } : {}),
         },
       }));
       try {
         await rpcService?.call("bot.updateProfile", input);
         await refresh();
       } catch {
-        // Optimistic update preserved offline.
+        // Optimistic update preserved.
       }
     },
     [refresh, rpcService],
@@ -141,61 +197,48 @@ export function useBotController(ctx?: Context) {
   const createSideChat = useCallback(
     async (title?: string) => {
       const timeStr = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-      const label = title?.trim() || `旁聊 · ${timeStr}`;
+      const label = title?.trim() || `新旁聊 · ${timeStr}`;
       try {
         const res = await rpcService?.call<{ thread: { sessionId: string } }>("bot.sideChat.create", {
           title: label,
         });
         await refresh();
         if (res?.thread?.sessionId) {
-          patchBotUi({ activeSessionId: res.thread.sessionId, activeView: "chat" });
+          patchBotUi({ activeSessionId: res.thread.sessionId, activeView: "chat", chatDrawerOpen: true });
           return;
         }
       } catch {
-        // Offline fallback thread creation below.
+        navigationService?.showToast("创建旁聊失败，请确认后台服务已连接", "error");
       }
-      const localId = `bot-side-${Date.now()}`;
-      botDataStore.set((prev) => ({
-        ...prev,
-        sideThreads: [
-          { id: localId, sessionId: localId, sessionFile: "", title: label, updatedAt: Date.now() },
-          ...prev.sideThreads,
-        ],
-      }));
-      patchBotUi({ activeSessionId: localId, activeView: "chat" });
+    },
+    [navigationService, refresh, rpcService],
+  );
+
+  const deleteSideChat = useCallback(
+    async (id: string) => {
+      try {
+        await rpcService?.call("bot.sideChat.delete", { id });
+        await refresh();
+        patchBotUi({ activeSessionId: null });
+      } catch {
+        // Ignore
+      }
     },
     [refresh, rpcService],
   );
 
   const resolveApproval = useCallback(
     async (id: string, decision: "approved" | "denied") => {
-      botDataStore.set((prev) => {
-        const target = prev.pendingApprovals.find((a) => a.id === id);
-        return {
-          ...prev,
-          pendingApprovals: prev.pendingApprovals.filter((a) => a.id !== id),
-          recentApprovals: target
-            ? [
-                {
-                  id: target.id,
-                  title: target.title,
-                  summary: target.summary,
-                  decision,
-                  timeLabel: "刚刚",
-                  resolvedAt: Date.now(),
-                },
-                ...prev.recentApprovals,
-              ]
-            : prev.recentApprovals,
-        };
-      });
       try {
         await rpcService?.call("bot.approvals.resolve", { id, decision });
         await refresh();
       } catch {
-        // Optimistic state preserved.
+        botDataStore.set((prev) => ({
+          ...prev,
+          pendingApprovals: prev.pendingApprovals.filter((a) => a.id !== id),
+        }));
       }
-      navigationService?.showToast(decision === "approved" ? "已批准该操作" : "已拒绝该操作", "info");
+      navigationService?.showToast(decision === "approved" ? "已批准请求" : "已拒绝请求", "info");
     },
     [navigationService, refresh, rpcService],
   );
@@ -207,95 +250,91 @@ export function useBotController(ctx?: Context) {
         await rpcService?.call("bot.soul.save", { content });
         await refresh();
       } catch {
-        // Optimistic state preserved.
+        // Keep local update
       }
-      navigationService?.showToast("已保存 SOUL.md 灵魂契约", "info");
+      navigationService?.showToast("已保存 SOUL.md", "info");
+    },
+    [navigationService, refresh, rpcService],
+  );
+
+  const saveMemory = useCallback(
+    async (content: string) => {
+      patchBotUi({ memoryContent: content });
+      try {
+        await rpcService?.call("memory.save", { content });
+        await refresh();
+      } catch {
+        // Keep local update
+      }
+      navigationService?.showToast("已保存长期记忆", "info");
     },
     [navigationService, refresh, rpcService],
   );
 
   const createSpace = useCallback(
-    async (title: string, description: string) => {
-      const trimmed = title.trim();
-      if (trimmed === "") return;
-      botDataStore.set((prev) => ({
-        ...prev,
-        spaces: [
-          {
-            id: `space-${Date.now()}`,
-            title: trimmed,
-            description: description.trim() || "由千机分身持续维护的专题空间",
-            metricBadge: "新建空间",
-            updatedLabel: "刚刚",
-            updatedAt: Date.now(),
-          },
-          ...prev.spaces,
-        ],
-      }));
+    async (title: string, description?: string) => {
+      const trimmed = title.replace(/^我想创建一个空间，关于\s*/, "").trim();
+      if (trimmed === "") return null;
       try {
-        await rpcService?.call("bot.spaces.create", { title: trimmed, description });
+        const res = await rpcService?.call<{ space: BotSpaceSummary }>("bot.spaces.create", {
+          title: trimmed,
+          description,
+        });
         await refresh();
+        navigationService?.showToast(`已创建新空间：${trimmed}`, "info");
+        return res?.space ?? null;
       } catch {
-        // Optimistic state preserved.
+        return null;
       }
-      patchBotUi({ activeView: "library", libSection: "spaces" });
-      navigationService?.showToast(`已创建空间「${trimmed}」`, "info");
     },
     [navigationService, refresh, rpcService],
+  );
+
+  const deleteSpace = useCallback(
+    async (id: string) => {
+      await rpcService?.call("bot.spaces.delete", { id }).catch(() => undefined);
+      await refresh();
+    },
+    [refresh, rpcService],
   );
 
   const createGoal = useCallback(
     async (title: string, category: string) => {
       const trimmed = title.trim();
       if (trimmed === "") return;
-      botDataStore.set((prev) => ({
-        ...prev,
-        goals: [
-          {
-            id: `goal-${Date.now()}`,
-            title: trimmed,
-            category: category.trim() || "长期跟进",
-            summary: "千机将在每日主动心跳中持续追踪进展并汇总关键节点。",
-            status: "active",
-            updatedAt: Date.now(),
-          },
-          ...prev.goals,
-        ],
-      }));
-      try {
-        await rpcService?.call("bot.goals.create", { title: trimmed, category });
-        await refresh();
-      } catch {
-        // Optimistic state preserved.
-      }
-      navigationService?.showToast(`已添加目标「${trimmed}」`, "info");
+      await rpcService?.call("bot.goals.create", { title: trimmed, category }).catch(() => undefined);
+      await refresh();
+      navigationService?.showToast(`已添加目标：${trimmed}`, "info");
     },
     [navigationService, refresh, rpcService],
   );
 
-  const enableInbox = useCallback(async () => {
-    botDataStore.set((prev) => ({ ...prev, inboxEnabled: true }));
-    try {
-      await rpcService?.call("bot.inbox.enable", {});
+  const deleteGoal = useCallback(
+    async (id: string) => {
+      await rpcService?.call("bot.goals.delete", { id }).catch(() => undefined);
       await refresh();
-    } catch {
-      // Optimistic state preserved.
-    }
-    navigationService?.showToast("已启用千机专属收件箱", "info");
+    },
+    [refresh, rpcService],
+  );
+
+  const createFeedItem = useCallback(
+    async (title: string, body: string, seedPrompt?: string) => {
+      await rpcService?.call("bot.feed.create", { title, body, seedPrompt }).catch(() => undefined);
+      await refresh();
+    },
+    [refresh, rpcService],
+  );
+
+  const enableInbox = useCallback(async () => {
+    await rpcService?.call("bot.inbox.enable", {}).catch(() => undefined);
+    await refresh();
+    navigationService?.showToast("已开通专属收件箱", "info");
   }, [navigationService, refresh, rpcService]);
 
   const toggleConnector = useCallback(
     async (id: string) => {
-      botDataStore.set((prev) => ({
-        ...prev,
-        connectors: prev.connectors.map((c) => (c.id === id ? { ...c, enabled: !c.enabled } : c)),
-      }));
-      try {
-        await rpcService?.call("bot.connector.toggle", { id });
-        await refresh();
-      } catch {
-        // Optimistic state preserved.
-      }
+      await rpcService?.call("bot.connector.toggle", { id }).catch(() => undefined);
+      await refresh();
     },
     [refresh, rpcService],
   );
@@ -311,34 +350,11 @@ export function useBotController(ctx?: Context) {
       remotePort?: number;
       remoteUser?: string;
       remoteWorkDir?: string;
+      sharedFolderAdd?: { path: string; access: "read-only" | "isolated-copy" };
+      sharedFolderRemove?: string;
     }) => {
-      botDataStore.set((prev) => ({
-        ...prev,
-        virtualServer: {
-          ...prev.virtualServer,
-          ...(patch.mode !== undefined ? { mode: patch.mode } : {}),
-          local: {
-            ...prev.virtualServer.local,
-            ...(patch.cpuCores !== undefined ? { cpuCores: patch.cpuCores } : {}),
-            ...(patch.memoryLimitGb !== undefined ? { memoryLimitGb: patch.memoryLimitGb } : {}),
-            ...(patch.diskLimitGb !== undefined ? { diskLimitGb: patch.diskLimitGb } : {}),
-            ...(patch.autoSleepIdle !== undefined ? { autoSleepIdle: patch.autoSleepIdle } : {}),
-          },
-          remote: {
-            ...prev.virtualServer.remote,
-            ...(patch.remoteHost !== undefined ? { host: patch.remoteHost } : {}),
-            ...(patch.remotePort !== undefined ? { port: patch.remotePort } : {}),
-            ...(patch.remoteUser !== undefined ? { username: patch.remoteUser } : {}),
-            ...(patch.remoteWorkDir !== undefined ? { workDir: patch.remoteWorkDir } : {}),
-          },
-        },
-      }));
-      try {
-        await rpcService?.call("bot.server.configure", patch);
-        await refresh();
-      } catch {
-        // Optimistic state preserved.
-      }
+      await rpcService?.call("bot.server.configure", patch).catch(() => undefined);
+      await refresh();
     },
     [refresh, rpcService],
   );
@@ -347,50 +363,39 @@ export function useBotController(ctx?: Context) {
     async (action: BotServerActionKind) => {
       try {
         const res = await rpcService?.call<BotServerActionResult>("bot.server.action", { action });
-        if (res?.virtualServer) {
+        if (res) {
           botDataStore.set((prev) => ({ ...prev, virtualServer: res.virtualServer }));
           patchBotUi({ serverFeedback: res.message });
-          return;
+          navigationService?.showToast(res.message, res.ok ? "info" : "warning");
         }
       } catch {
-        // Offline fallback transition below.
+        patchBotUi({ serverFeedback: "操作执行失败，请检查后台服务状态" });
       }
-      botDataStore.set((prev) => {
-        const lifecycle =
-          action === "sleep"
-            ? "sleeping"
-            : action === "start" || action === "restart"
-              ? "running"
-              : prev.virtualServer.lifecycle;
-        return {
-          ...prev,
-          virtualServer: {
-            ...prev.virtualServer,
-            lifecycle,
-            ...(action === "init-remote"
-              ? { remote: { ...prev.virtualServer.remote, initialized: true } }
-              : {}),
-          },
-        };
-      });
-      const fallbackMsg: Record<BotServerActionKind, string> = {
-        start: "虚拟服务器已启动并进入受控就绪状态。",
-        sleep: "本地虚拟服务器已进入低功耗休眠。",
-        restart: "虚拟服务器已完成平滑重启，会话与记忆未受影响。",
-        "reset-snapshot": "运行环境已恢复干净快照，SOUL.md 与 MEMORY.md 完整保留。",
-        "test-remote": "远端虚拟服务器连通性探测通过（延迟 18ms）。",
-        "init-remote": "远端受控运行环境已完成一键初始化并同步身份契约。",
-      };
-      patchBotUi({ serverFeedback: fallbackMsg[action] });
     },
-    [rpcService],
+    [navigationService, rpcService],
   );
+
+  const resetAllData = useCallback(async () => {
+    const snap = await rpcService?.call<BotSnapshotResult>("bot.data.reset", {}).catch(() => null);
+    if (snap) {
+      botDataStore.set(snap);
+      patchBotUi({ activeSessionId: null, modal: null });
+      navigationService?.showToast("已清空所有 Bot 对话与动态记录", "info");
+    }
+  }, [navigationService, rpcService]);
 
   const triggerHandoff = useCallback(
     (payload: BotTaskHandoffPayload) => {
       const cwd = payload.targetCwd || workspaceService?.getSnapshot().cwd || "";
       navigationService?.beginBotHandoff({ ...payload, targetCwd: cwd });
-      workbenchService?.openReview();
+      if (payload.highlightFile) {
+        void workbenchService?.openFile(payload.highlightFile, {
+          cwd,
+          ...(payload.highlightLine ? { line: payload.highlightLine } : {}),
+        });
+      } else {
+        workbenchService?.openReview();
+      }
     },
     [navigationService, workbenchService, workspaceService],
   );
@@ -408,14 +413,20 @@ export function useBotController(ctx?: Context) {
     refresh,
     updateProfile,
     createSideChat,
+    deleteSideChat,
     resolveApproval,
     saveSoul,
+    saveMemory,
     createSpace,
+    deleteSpace,
     createGoal,
+    deleteGoal,
+    createFeedItem,
     enableInbox,
     toggleConnector,
     configureServer,
     runServerAction,
+    resetAllData,
     triggerHandoff,
     jumpToChatWithPrompt,
   };

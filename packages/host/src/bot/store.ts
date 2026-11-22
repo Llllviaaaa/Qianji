@@ -2,63 +2,28 @@
  * Atomic `<dataDir>/bot/` state store & session coordinator (`@qianji/host` Bot service).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import {
-  BOT_TASK_CARD_NAMESPACE,
-  type BotActivityEntry,
-  type BotGoalItem,
-  type BotHandoffCompleteParams,
-  type BotProfile,
-  type BotServerActionKind,
-  type BotServerActionResult,
-  type BotServerMode,
-  type BotSideThreadInfo,
-  type BotSnapshotResult,
-  type BotSpaceSummary,
-  type PendingBotApproval,
-  type ResolvedBotApproval,
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
+import type {
+  BotActivityEntry, BotFeedItem, BotGoalItem, BotHandoffCompleteParams,
+  BotProfile, BotServerActionKind, BotServerActionResult, BotSideThreadInfo,
+  BotSnapshotResult, BotSpaceSummary, PendingBotApproval, ResolvedBotApproval,
 } from "@qianji/protocol";
 import type { Session, Sessions } from "@qianji/session";
 import {
-  buildDefaultBotState,
-  DEFAULT_SOUL_MARKDOWN,
-  formatClock,
-  formatShortDate,
-  MAX_SOUL_BYTES,
-  normalizeAvatarPreset,
-  type PersistedBotState,
+  buildDefaultBotState, DEFAULT_SOUL_MARKDOWN, formatClock, formatShortDate,
+  MAX_SOUL_BYTES, normalizeAvatarPreset, STARTER_IDEA_SECTIONS, type PersistedBotState,
 } from "./defaults.ts";
+import { applyVirtualServerPatch, refreshLiveLocalMetrics, runVirtualServerAction, type VirtualServerPatch } from "./virtual-server.ts";
 import {
-  applyVirtualServerPatch,
-  runVirtualServerAction,
-  type VirtualServerPatch,
-} from "./virtual-server.ts";
+  applyBotConfigOverlay, executeApprovedShellCommand, extractLearnedPreferencesFromMemory,
+  scanBotWorkspaceArtifacts, writeFileAtomic, type BotStoreConfig,
+} from "./workspace-scanner.ts";
 
-export interface BotStoreConfig {
-  dataDir: string;
-  displayName?: string;
-  avatarPreset?: string;
-  serverMode?: BotServerMode;
-  localCpuCores?: number;
-  localMemoryGb?: number;
-  localDiskGb?: number;
-  autoSleepIdle?: boolean;
-  remoteHost?: string;
-  remotePort?: number;
-  remoteUser?: string;
-  remoteWorkDir?: string;
-}
+export type { BotStoreConfig };
 
 const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 const SYNTHETIC_BOT_MODEL = { provider: "qianji", model: "bot-companion" };
-
-function writeFileAtomic(file: string, content: string, mode?: number): void {
-  mkdirSync(dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(temp, content, mode === undefined ? "utf8" : { encoding: "utf8", mode });
-  renameSync(temp, file);
-}
 
 function appendBotAssistantText(session: Session, text: string): void {
   session.append("assistant", {
@@ -67,28 +32,6 @@ function appendBotAssistantText(session: Session, text: string): void {
     usage: ZERO_USAGE,
     stop: "stop",
   });
-}
-
-function seedInitialMainConversation(session: Session, state: PersistedBotState): void {
-  session.append("label", { title: "千机 · 主聊天" });
-  appendBotAssistantText(
-    session,
-    "今早 08:30 已完成关注工作区与通知巡检：主分支核心门禁测试全部通过，多模型前缀缓存命中率稳定在 74.2%。\n\n同时检测到新增开发分支未出现未提交冲突。有需要盯办的事项随时告诉我。",
-  );
-  session.append("user", {
-    content: [{ type: "text", text: "帮我盯着点 PR #142，挂了提醒我，先别改本地主分支" }],
-  });
-  appendBotAssistantText(session, "已安排，每 30 分钟在虚拟服务器内自动巡检 PR #142 构建状态，发现异常第一时间在独立副本备好草案提醒你。");
-  if (state.embeddedTasks[0] !== undefined) {
-    session.append("custom", {
-      ns: BOT_TASK_CARD_NAMESPACE,
-      data: state.embeddedTasks[0],
-    });
-  }
-  appendBotAssistantText(
-    session,
-    "刚刚检测到 PR #142 有一项并发队列回归异常：我已按你的习惯在独立安全副本拟好修复方案，主工作区保持干净；需要外发 PR 诊断评论也可在右侧「批准」栏一键放行。",
-  );
 }
 
 export class BotStateStore {
@@ -100,6 +43,7 @@ export class BotStateStore {
 
   private state: PersistedBotState | undefined;
   private readonly botSessionIds = new Set<string>();
+  private readonly pendingCommands = new Map<string, string>();
 
   constructor(
     private readonly sessions: Sessions,
@@ -161,39 +105,7 @@ export class BotStateStore {
   }
 
   private applyConfigOverlay(target: PersistedBotState): void {
-    if (this.config.displayName && this.config.displayName.trim() !== "") {
-      target.profile.displayName = this.config.displayName.trim();
-    }
-    if (this.config.avatarPreset) {
-      target.profile.avatarPreset = normalizeAvatarPreset(this.config.avatarPreset);
-    }
-    if (this.config.serverMode === "local" || this.config.serverMode === "remote") {
-      target.virtualServer.mode = this.config.serverMode;
-    }
-    if (typeof this.config.localCpuCores === "number") {
-      target.virtualServer.local.cpuCores = this.config.localCpuCores;
-    }
-    if (typeof this.config.localMemoryGb === "number") {
-      target.virtualServer.local.memoryLimitGb = this.config.localMemoryGb;
-    }
-    if (typeof this.config.localDiskGb === "number") {
-      target.virtualServer.local.diskLimitGb = this.config.localDiskGb;
-    }
-    if (typeof this.config.autoSleepIdle === "boolean") {
-      target.virtualServer.local.autoSleepIdle = this.config.autoSleepIdle;
-    }
-    if (typeof this.config.remoteHost === "string" && this.config.remoteHost !== "") {
-      target.virtualServer.remote.host = this.config.remoteHost;
-    }
-    if (typeof this.config.remotePort === "number") {
-      target.virtualServer.remote.port = this.config.remotePort;
-    }
-    if (typeof this.config.remoteUser === "string" && this.config.remoteUser !== "") {
-      target.virtualServer.remote.username = this.config.remoteUser;
-    }
-    if (typeof this.config.remoteWorkDir === "string" && this.config.remoteWorkDir !== "") {
-      target.virtualServer.remote.workDir = this.config.remoteWorkDir;
-    }
+    applyBotConfigOverlay(target, this.config);
   }
 
   private persistState(): void {
@@ -206,9 +118,9 @@ export class BotStateStore {
       const existingMain = await this.sessions.get(this.state.mainSessionId);
       if (existingMain === undefined) {
         const recreated = this.sessions.create({ cwd: this.botWorkspaceDir, side: true });
+        recreated.append("label", { title: "主聊天" });
         this.state.mainSessionId = recreated.id;
         this.botSessionIds.add(recreated.id);
-        seedInitialMainConversation(recreated, this.state);
         this.persistState();
       }
       return this.state;
@@ -218,13 +130,14 @@ export class BotStateStore {
     if (existsSync(this.stateFile)) {
       try {
         const parsed = JSON.parse(readFileSync(this.stateFile, "utf8")) as PersistedBotState;
-        if (parsed && typeof parsed.mainSessionId === "string") {
+        if (parsed && parsed.version === 2 && typeof parsed.mainSessionId === "string") {
           let mainSession = await this.sessions.get(parsed.mainSessionId);
           if (mainSession === undefined) {
             mainSession = this.sessions.create({ cwd: this.botWorkspaceDir, side: true });
+            mainSession.append("label", { title: "主聊天" });
             parsed.mainSessionId = mainSession.id;
-            seedInitialMainConversation(mainSession, parsed);
           }
+          parsed.ideaSections = STARTER_IDEA_SECTIONS;
           this.botSessionIds.add(parsed.mainSessionId);
           for (const side of parsed.sideThreads ?? []) {
             this.botSessionIds.add(side.sessionId);
@@ -235,11 +148,12 @@ export class BotStateStore {
           return parsed;
         }
       } catch {
-        // Fall through to clean re-seed on corrupted JSON.
+        // Fall through to clean initialization.
       }
     }
 
     const mainSession = this.sessions.create({ cwd: this.botWorkspaceDir, side: true });
+    mainSession.append("label", { title: "主聊天" });
     const fresh = buildDefaultBotState({
       mainSessionId: mainSession.id,
       defaultCwd: this.botWorkspaceDir,
@@ -247,7 +161,6 @@ export class BotStateStore {
       avatarPreset: this.config.avatarPreset,
     });
     this.applyConfigOverlay(fresh);
-    seedInitialMainConversation(mainSession, fresh);
     this.botSessionIds.add(mainSession.id);
     this.state = fresh;
     this.persistState();
@@ -256,6 +169,9 @@ export class BotStateStore {
 
   async snapshot(): Promise<BotSnapshotResult> {
     const st = await this.ensureLoaded();
+    refreshLiveLocalMetrics(st, this.botDir, this.botWorkspaceDir);
+    const scanned = scanBotWorkspaceArtifacts(this.botWorkspaceDir);
+    const memPrefs = extractLearnedPreferencesFromMemory(this.memoryFile);
     return {
       mainSessionId: st.mainSessionId,
       mainSessionFile: `harness:${st.mainSessionId}`,
@@ -265,7 +181,7 @@ export class BotStateStore {
       soulContent: this.readSoul(),
       soulUpdatedAt: st.soulUpdatedAt,
       memoryUpdatedAt: this.memoryUpdatedAtLabel(),
-      learnedPreferences: st.learnedPreferences,
+      learnedPreferences: memPrefs.length > 0 ? memPrefs : st.learnedPreferences,
       activityGroups: st.activityGroups,
       pendingApprovals: st.pendingApprovals,
       recentApprovals: st.recentApprovals,
@@ -273,8 +189,8 @@ export class BotStateStore {
       ideaSections: st.ideaSections,
       goals: st.goals,
       spaces: st.spaces,
-      documents: st.documents,
-      media: st.media,
+      documents: scanned.documents,
+      media: scanned.media,
       inboxEnabled: st.inboxEnabled,
       inboxAddress: st.inboxAddress,
       inboxItems: st.inboxItems,
@@ -282,6 +198,20 @@ export class BotStateStore {
       virtualServer: st.virtualServer,
       embeddedTasks: st.embeddedTasks,
     };
+  }
+
+  async recordSettledTurn(session: Session): Promise<void> {
+    const st = await this.ensureLoaded();
+    const isMain = session.id === st.mainSessionId;
+    const side = st.sideThreads.find((t) => t.sessionId === session.id);
+    if (side !== undefined) {
+      side.updatedAt = Date.now();
+    }
+    this.recordActivity({
+      title: isMain ? "完成主聊天回复与处理" : `完成旁聊回复：${side?.title ?? "旁聊"}`,
+      description: isMain ? "Updated main companion conversation" : "Updated isolated side conversation",
+    });
+    this.persistState();
   }
 
   async updateProfile(patch: Partial<BotProfile>): Promise<BotProfile> {
@@ -305,7 +235,6 @@ export class BotStateStore {
     this.botSessionIds.add(session.id);
     const resolvedTitle = title?.trim() || `新旁聊 · ${formatClock()}`;
     session.append("label", { title: resolvedTitle });
-    appendBotAssistantText(session, "已开启独立旁聊。这里适合探讨临时问题或分支小实验，不会混入你的主聊天时间线。");
     const info: BotSideThreadInfo = {
       id: `side-${randomUUID().slice(0, 8)}`,
       sessionId: session.id,
@@ -329,7 +258,10 @@ export class BotStateStore {
     this.persistState();
   }
 
-  async enqueueApproval(entry: Omit<PendingBotApproval, "id" | "createdAt" | "expiresAt">): Promise<PendingBotApproval> {
+  async enqueueApproval(
+    entry: Omit<PendingBotApproval, "id" | "createdAt" | "expiresAt">,
+    rawCommand?: string,
+  ): Promise<PendingBotApproval> {
     const st = await this.ensureLoaded();
     const now = Date.now();
     const created: PendingBotApproval = {
@@ -338,6 +270,9 @@ export class BotStateStore {
       expiresAt: now + 86_400_000 * 3,
       ...entry,
     };
+    if (rawCommand) {
+      this.pendingCommands.set(created.id, rawCommand);
+    }
     st.pendingApprovals.unshift(created);
     this.persistState();
     return created;
@@ -347,11 +282,20 @@ export class BotStateStore {
     const st = await this.ensureLoaded();
     const idx = st.pendingApprovals.findIndex((item) => item.id === id);
     const found = idx >= 0 ? st.pendingApprovals.splice(idx, 1)[0] : undefined;
+    const rawCmd = this.pendingCommands.get(id);
+    this.pendingCommands.delete(id);
     const title = found?.title ?? "外部操作请求";
+
+    let summary = decision === "approved" ? "刚刚 · 用户手动批准执行" : "刚刚 · 用户手动拒绝";
+    if (decision === "approved" && rawCmd) {
+      const execRes = await executeApprovedShellCommand(rawCmd, this.botWorkspaceDir);
+      summary = execRes.code === 0 ? "刚刚 · 已批准并在受控环境执行完成" : "刚刚 · 已批准执行";
+    }
+
     const resolved: ResolvedBotApproval = {
       id,
       title,
-      summary: decision === "approved" ? "刚刚 · 用户手动批准执行" : "刚刚 · 用户手动拒绝",
+      summary,
       decision,
       timeLabel: decision === "approved" ? "已批准" : "已拒绝",
       resolvedAt: Date.now(),
@@ -360,7 +304,7 @@ export class BotStateStore {
     st.recentApprovals = st.recentApprovals.slice(0, 50);
     this.recordActivity({
       title: decision === "approved" ? `已批准：${title}` : `已拒绝：${title}`,
-      description: decision === "approved" ? "Approved external action from Bot Approvals panel" : "Denied external action request",
+      description: summary,
     });
     this.persistState();
     return resolved;
@@ -385,44 +329,101 @@ export class BotStateStore {
       this.state.activityGroups.unshift(todayGroup);
     }
     todayGroup.items.unshift(entry);
+    todayGroup.items = todayGroup.items.slice(0, 40);
     return entry;
   }
 
   async createSpace(title: string, description?: string): Promise<BotSpaceSummary> {
     const st = await this.ensureLoaded();
-    const cleanTitle = title.replace(/^我想创建一个空间，关于\s*/, "").trim() || "新建自定义追踪空间";
+    const cleanTitle = title.replace(/^我想创建一个空间，关于\s*/, "").trim() || "新建自定义空间";
+    const id = `space-${randomUUID().slice(0, 8)}`;
+    const desc = description?.trim() || "由千机在专属虚拟服务器内持续维护的常驻追踪空间";
     const created: BotSpaceSummary = {
-      id: `space-${randomUUID().slice(0, 8)}`,
+      id,
       title: cleanTitle,
-      description: description?.trim() || "由千机在专属虚拟服务器内持续刷新的常驻空间看板",
-      metricBadge: "实时刷新中",
+      description: desc,
+      metricBadge: "实时同步",
       updatedLabel: "刚刚",
       updatedAt: Date.now(),
+      handoff: {
+        id: `handoff-${id}`,
+        title: cleanTitle,
+        kindLabel: "常驻空间",
+        summary: desc,
+        targetCwd: this.botWorkspaceDir,
+      },
     };
+    const spaceFile = join(this.botWorkspaceDir, "spaces", `${id}.md`);
+    writeFileAtomic(spaceFile, `# ${cleanTitle}\n\n${desc}\n`);
     st.spaces.unshift(created);
-    this.recordActivity({ title: `创建常驻空间：${cleanTitle}`, description: "Created persistent tracking space" });
+    this.recordActivity({ title: `创建常驻空间：${cleanTitle}`, description: desc });
     this.persistState();
     return created;
   }
 
+  async deleteSpace(id: string): Promise<void> {
+    const st = await this.ensureLoaded();
+    st.spaces = st.spaces.filter((s) => s.id !== id);
+    try {
+      rmSync(join(this.botWorkspaceDir, "spaces", `${id}.md`), { force: true });
+    } catch {
+      // Ignore missing space markdown file.
+    }
+    this.persistState();
+  }
+
   async createGoal(title: string, category: string): Promise<BotGoalItem> {
     const st = await this.ensureLoaded();
+    const cleanTitle = title.trim();
+    const id = `goal-${randomUUID().slice(0, 8)}`;
     const created: BotGoalItem = {
-      id: `goal-${randomUUID().slice(0, 8)}`,
-      title: title.trim(),
+      id,
+      title: cleanTitle,
       category: category.trim() || "通用",
-      summary: "已在虚拟服务器内建立周期跟进计划，有关键进展会主动汇报。",
+      summary: "正在后台持续追踪，有重要进展会主动汇报。",
       status: "active",
       updatedAt: Date.now(),
+      handoff: {
+        id: `handoff-${id}`,
+        title: cleanTitle,
+        kindLabel: category.trim() || "长期目标",
+        summary: `围绕目标「${cleanTitle}」在 Agent 工作台执行深度分析或文件编排`,
+        targetCwd: this.botWorkspaceDir,
+      },
     };
     st.goals.unshift(created);
+    this.recordActivity({ title: `设定长期目标：${cleanTitle}`, description: created.category });
     this.persistState();
     return created;
+  }
+
+  async deleteGoal(id: string): Promise<void> {
+    const st = await this.ensureLoaded();
+    st.goals = st.goals.filter((g) => g.id !== id);
+    this.persistState();
+  }
+
+  async createFeedItem(title: string, body: string, seedPrompt?: string): Promise<BotFeedItem> {
+    const st = await this.ensureLoaded();
+    const item: BotFeedItem = {
+      id: `feed-${randomUUID().slice(0, 8)}`,
+      title: title.trim(),
+      timeLabel: "刚刚",
+      body: body.trim(),
+      actionLabel: "讨论",
+      seedPrompt: seedPrompt?.trim() || `我们来深入聊聊：${title.trim()}`,
+      createdAt: Date.now(),
+    };
+    st.feed.unshift(item);
+    st.feed = st.feed.slice(0, 30);
+    this.persistState();
+    return item;
   }
 
   async enableInbox(): Promise<{ inboxEnabled: boolean; inboxAddress: string }> {
     const st = await this.ensureLoaded();
     st.inboxEnabled = true;
+    this.recordActivity({ title: "启用专属收件箱", description: st.inboxAddress });
     this.persistState();
     return { inboxEnabled: true, inboxAddress: st.inboxAddress };
   }
@@ -445,9 +446,25 @@ export class BotStateStore {
 
   async performServerAction(action: BotServerActionKind): Promise<BotServerActionResult> {
     const st = await this.ensureLoaded();
-    const res = runVirtualServerAction(st, action, (act) => this.recordActivity(act));
+    const res = await runVirtualServerAction(st, action, this.botWorkspaceDir, (act) => this.recordActivity(act));
     this.persistState();
     return res;
+  }
+
+  async resetAllBotData(): Promise<BotSnapshotResult> {
+    const prev = await this.ensureLoaded();
+    await this.sessions.delete(prev.mainSessionId).catch(() => false);
+    for (const side of prev.sideThreads) {
+      await this.sessions.delete(side.sessionId).catch(() => false);
+    }
+    this.botSessionIds.clear();
+    this.state = undefined;
+    try {
+      rmSync(this.stateFile, { force: true });
+    } catch {
+      // Ignore
+    }
+    return this.snapshot();
   }
 
   async completeHandoff(params: BotHandoffCompleteParams): Promise<BotActivityEntry> {

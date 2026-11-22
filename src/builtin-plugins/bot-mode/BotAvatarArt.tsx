@@ -1,101 +1,274 @@
 /**
- * Self-contained 3D felt companion artwork & brand orb for Qianji Bot Mode.
- * Harmonized with neutral alabaster / warm stone / obsidian dark palettes.
+ * High-fidelity 3D tactile felt companion avatars (`素白毛毡` / `暖米毛毡` / `绒耳伙伴`),
+ * Qianji gradient brand mark, and precision stroke icon set from the approved v7 prototype.
  */
 import type { ReactElement } from "react";
 import type { BotAvatarPresetId } from "@qianji/protocol";
+import { FELT_AVATAR_URIS, QIANJI_BRAND_FAVICON_URI } from "./botAvatarAssets";
 
-export function BotBrandOrbIcon({ size = 22 }: { readonly size?: number }): ReactElement {
+export { FELT_AVATAR_URIS, QIANJI_BRAND_FAVICON_URI };
+
+export const AVATAR_PRESET_LABELS: Readonly<Record<Exclude<BotAvatarPresetId, "custom">, string>> = {
+  "alabaster-felt": "素白毛毡",
+  "warm-felt": "暖米毛毡",
+  "plush-ears": "绒耳伙伴",
+};
+
+export function resolveAvatarUri(preset: BotAvatarPresetId, customDataUrl?: string): string {
+  if (preset === "custom" && customDataUrl) return customDataUrl;
+  if (preset === "warm-felt" || preset === "plush-ears") return FELT_AVATAR_URIS[preset];
+  return FELT_AVATAR_URIS["alabaster-felt"];
+}
+
+export function BotBrandOrbIcon({ size = 20 }: { readonly size?: number }): ReactElement {
   return (
-    <svg width={size} height={size} viewBox="0 0 28 28" fill="none" aria-hidden="true">
-      <defs>
-        <radialGradient id="qjBotOrbGrad" cx="35%" cy="28%" r="70%">
-          <stop offset="0%" stopColor="currentColor" stopOpacity="0.95" />
-          <stop offset="65%" stopColor="currentColor" stopOpacity="0.55" />
-          <stop offset="100%" stopColor="currentColor" stopOpacity="0.18" />
-        </radialGradient>
-      </defs>
-      <circle cx="14" cy="14" r="10.5" stroke="url(#qjBotOrbGrad)" strokeWidth="2.4" />
-      <circle cx="14" cy="14" r="4.2" fill="currentColor" fillOpacity="0.82" />
-    </svg>
+    <img
+      src={QIANJI_BRAND_FAVICON_URI}
+      alt="千机"
+      width={size}
+      height={size}
+      style={{ width: size, height: size, flexShrink: 0 }}
+    />
   );
 }
 
 export function BotCompanionAvatar({
   preset,
   customDataUrl,
-  size = 86,
+  size = 124,
 }: {
   readonly preset: BotAvatarPresetId;
   readonly customDataUrl?: string;
   readonly size?: number;
 }): ReactElement {
-  if (preset === "custom" && customDataUrl) {
-    return (
+  const src = resolveAvatarUri(preset, customDataUrl);
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "9999px",
+        overflow: "hidden",
+        background: "#f0efed",
+      }}
+    >
       <img
-        src={customDataUrl}
-        alt="Bot 形象"
+        src={src}
+        alt="千机"
         width={size}
         height={size}
-        style={{ width: size, height: size, borderRadius: "26px", objectFit: "cover" }}
+        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
       />
-    );
+    </div>
+  );
+}
+
+export type BotIconName =
+  | "chat"
+  | "search"
+  | "feed"
+  | "ideas"
+  | "goals"
+  | "library"
+  | "spaces"
+  | "more"
+  | "menu"
+  | "panelRight"
+  | "phone"
+  | "smile"
+  | "reply"
+  | "dots"
+  | "closeX"
+  | "pencil"
+  | "tabActivity"
+  | "tabShield"
+  | "tabIdentity"
+  | "tabMail"
+  | "checkCircle"
+  | "chevronDown";
+
+export function BotIcon({ name }: { readonly name: BotIconName }): ReactElement {
+  switch (name) {
+    case "chat":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
+        </svg>
+      );
+    case "search":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+          <circle cx="11" cy="11" r="7.5" />
+          <path d="m20 20-3.8-3.8" />
+        </svg>
+      );
+    case "feed":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="3" width="16" height="18" rx="3" />
+          <path d="M8 8h8M8 12h8M8 16h5" />
+        </svg>
+      );
+    case "ideas":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+          <path d="M9 18h6M10 22h4" />
+        </svg>
+      );
+    case "goals":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
+          <path d="m8.5 12.2 2.4 2.4 4.8-5" />
+        </svg>
+      );
+    case "library":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="7.5" height="7.5" rx="2" />
+          <rect x="13.5" y="3" width="7.5" height="7.5" rx="2" />
+          <rect x="3" y="13.5" width="7.5" height="7.5" rx="2" />
+          <circle cx="17.25" cy="17.25" r="3.75" />
+        </svg>
+      );
+    case "spaces":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
+          <path d="M12 8v8M8 12h8" />
+        </svg>
+      );
+    case "more":
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M4 9h16M4 15h16" />
+        </svg>
+      );
+    case "menu":
+      return (
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.85" strokeLinecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      );
+    case "panelRight":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4" width="18" height="16" rx="2.5" />
+          <path d="M15 4v16" />
+        </svg>
+      );
+    case "phone":
+      return (
+        <svg width="14.5" height="14.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.58 2.81.7A2 2 0 0 1 22 16.92z" />
+        </svg>
+      );
+    case "smile":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9.5" />
+          <path d="M8.5 14.5s1.3 1.8 3.5 1.8 3.5-1.8 3.5-1.8" />
+          <circle cx="9" cy="9.8" r="1" fill="currentColor" />
+          <circle cx="15" cy="9.8" r="1" fill="currentColor" />
+        </svg>
+      );
+    case "reply":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="9 14 4 9 9 4" />
+          <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+        </svg>
+      );
+    case "dots":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="5" cy="12" r="1.7" />
+          <circle cx="12" cy="12" r="1.7" />
+          <circle cx="19" cy="12" r="1.7" />
+        </svg>
+      );
+    case "closeX":
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      );
+    case "pencil":
+      return (
+        <svg width="13.5" height="13.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.85" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+        </svg>
+      );
+    case "tabActivity":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.85" strokeLinecap="round">
+          <path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" />
+        </svg>
+      );
+    case "tabShield":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+          <path d="m9 12 2 2 4-4" />
+        </svg>
+      );
+    case "tabIdentity":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4" />
+          <path d="M14 13.12c0 2.38 0 6.38-1 8.88" />
+          <path d="M17.29 21.02c.12-.6.43-2.3.5-3.02" />
+          <path d="M2 12a10 10 0 0 1 18-6" />
+          <path d="M2 16h.01" />
+          <path d="M21.8 16c.2-2 .131-5.354 0-6" />
+          <path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2" />
+          <path d="M8.65 22c.21-.66.45-1.32.57-2" />
+          <path d="M9 6.8a6 6 0 0 1 9 5.2v2" />
+        </svg>
+      );
+    case "tabMail":
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect width="20" height="16" x="2" y="4" rx="2.5" />
+          <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+        </svg>
+      );
+    case "checkCircle":
+      return (
+        <svg width="16.5" height="16.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="m8.8 12.2 2.2 2.2 4.4-4.6" />
+        </svg>
+      );
+    case "chevronDown":
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.85" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      );
   }
+}
 
-  const palette =
-    preset === "warm-felt"
-      ? { bodyTop: "#F5ECE2", bodyBottom: "#DECBB8", cheek: "#E5A898", accent: "#8C6F5A", eye: "#2B2420" }
-      : preset === "plush-ears"
-        ? { bodyTop: "#ECEEF5", bodyBottom: "#CBD1E2", cheek: "#D9A7B8", accent: "#6F7896", eye: "#232633" }
-        : { bodyTop: "#F6F6F4", bodyBottom: "#DCDCD7", cheek: "#E2B2A6", accent: "#8E8E88", eye: "#242423" };
-
+export function CalendarTaskTileIcon(): ReactElement {
   return (
-    <svg width={size} height={size} viewBox="0 0 112 112" fill="none" aria-hidden="true">
-      <defs>
-        <radialGradient id={`qjFeltBody-${preset}`} cx="36%" cy="28%" r="72%">
-          <stop offset="0%" stopColor="#FFFFFF" />
-          <stop offset="48%" stopColor={palette.bodyTop} />
-          <stop offset="100%" stopColor={palette.bodyBottom} />
-        </radialGradient>
-        <filter id={`qjFeltShadow-${preset}`} x="-12%" y="-10%" width="124%" height="128%">
-          <feDropShadow dx="0" dy="6" stdDeviation="6" floodColor="#000000" floodOpacity="0.12" />
-        </filter>
-      </defs>
-
-      <g filter={`url(#qjFeltShadow-${preset})`}>
-        {preset === "plush-ears" ? (
-          <>
-            <ellipse cx="36" cy="27" rx="10" ry="18" transform="rotate(-14 36 27)" fill={`url(#qjFeltBody-${preset})`} />
-            <ellipse cx="76" cy="27" rx="10" ry="18" transform="rotate(14 76 27)" fill={`url(#qjFeltBody-${preset})`} />
-          </>
-        ) : (
-          <>
-            <circle cx="33" cy="34" r="11" fill={`url(#qjFeltBody-${preset})`} />
-            <circle cx="79" cy="34" r="11" fill={`url(#qjFeltBody-${preset})`} />
-          </>
-        )}
-
-        <rect x="22" y="28" width="68" height="62" rx="31" fill={`url(#qjFeltBody-${preset})`} />
-
-        {/* Soft felt highlight */}
-        <ellipse cx="46" cy="40" rx="18" ry="8" fill="#FFFFFF" fillOpacity="0.55" />
-
-        {/* Calm expressive eyes */}
-        <rect x="41" y="53" width="6.5" height="9.5" rx="3.25" fill={palette.eye} />
-        <rect x="64.5" y="53" width="6.5" height="9.5" rx="3.25" fill={palette.eye} />
-        <circle cx="43" cy="55.5" r="1.4" fill="#FFFFFF" />
-        <circle cx="66.5" cy="55.5" r="1.4" fill="#FFFFFF" />
-
-        {/* Subtle warm blush & gentle smile */}
-        <ellipse cx="35.5" cy="64.5" rx="5.2" ry="3.1" fill={palette.cheek} fillOpacity="0.55" />
-        <ellipse cx="76.5" cy="64.5" rx="5.2" ry="3.1" fill={palette.cheek} fillOpacity="0.55" />
-        <path
-          d="M51.5 65.5C53.2 67.6 58.8 67.6 60.5 65.5"
-          stroke={palette.accent}
-          strokeWidth="2.1"
-          strokeLinecap="round"
-        />
+    <svg width="40" height="40" viewBox="0 0 40 40" style={{ flexShrink: 0, borderRadius: 11 }}>
+      <rect width="40" height="40" rx="11" fill="rgba(255,255,255,0.78)" />
+      <g fill="#9ca3af">
+        <circle cx="12" cy="12.5" r="1.4" />
+        <circle cx="17" cy="12.5" r="1.4" />
+        <circle cx="22" cy="12.5" r="1.4" />
+        <circle cx="27" cy="12.5" r="1.4" />
+        <circle cx="12" cy="18" r="1.4" />
+        <circle cx="17" cy="18" r="1.4" />
+        <circle cx="22" cy="18" r="1.4" />
+        <circle cx="27" cy="18" r="1.4" />
+        <circle cx="12" cy="23.5" r="1.4" />
+        <circle cx="17" cy="23.5" r="1.4" />
+        <circle cx="22" cy="23.5" r="1.4" />
       </g>
+      <circle cx="28" cy="27.5" r="6" fill="#006ee4" />
+      <path d="M28 24.6v3.1l1.9 1.2" fill="none" stroke="#ffffff" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

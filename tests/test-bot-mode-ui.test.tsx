@@ -1,8 +1,8 @@
 /**
  * Frontend microkernel integration tests for Qianji Bot Mode (`bot-mode` + `core-shell`):
  * 1. Dual-mounted `Agent ⇄ Bot` shell attributes, `#mode-pill` capsule, `bot.rail` & `bot.stage` factories.
- * 2. All Bot views (`chat`, `feed`, `ideas`, `goals`, `library`, `spaces`) + Companion tabs (`activity`, `approvals`, `identity`, `inbox`).
- * 3. Virtual Server console (`本地虚拟服务器` & `远端虚拟服务器`) and `SOUL.md` / `MEMORY.md` modal editors.
+ * 2. Clean zero-demo-data initial state across all Bot views & Companion tabs.
+ * 3. 9-tab Bot Settings (`760px × 520px`), Local & Remote Virtual Server console, and `SOUL.md` / `MEMORY.md` editors.
  * 4. Bidirectional `Bot ⇄ Agent` task handoff (`#handoff-ribbon` + `bot-handoff-return` chip).
  * 5. Disabling `bot-mode` cleanly removes Bot factories and hides `#mode-pill`.
  */
@@ -16,6 +16,7 @@ import {
   botDataStore,
   botUiStore,
   FALLBACK_BOT_SNAPSHOT,
+  INITIAL_BOT_UI_STATE,
   openBotModal,
   patchBotUi,
 } from "../src/builtin-plugins/bot-mode/botStore";
@@ -58,24 +59,7 @@ describe("Bot Mode Frontend Microkernel & Silk Morphing Integration", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
-    botUiStore.set({
-      activeView: "chat",
-      chatDrawerOpen: false,
-      activeSessionId: null,
-      rightPanelOpen: true,
-      rightTab: "activity",
-      libSection: "spaces",
-      modal: null,
-      settingsTab: "profile",
-      modalNonce: 0,
-      moreMenuOpen: false,
-      composerDraft: "",
-      quotedText: null,
-      voiceCallActive: false,
-      heartbeatEnabled: true,
-      memoryDraftContent: "# MEMORY.md\n",
-      serverFeedback: null,
-    });
+    botUiStore.set(INITIAL_BOT_UI_STATE);
     botDataStore.set(FALLBACK_BOT_SNAPSHOT);
     while (cleanups.length > 0) {
       const fn = cleanups.pop();
@@ -83,7 +67,7 @@ describe("Bot Mode Frontend Microkernel & Silk Morphing Integration", () => {
     }
   });
 
-  it("mounts Agent mode by default with #mode-pill and dual-mounted Bot rail/stage, then morphs to Bot mode", async () => {
+  it("mounts Agent mode by default with #mode-pill and clean zero-fake-data Bot stage, then morphs to Bot mode", async () => {
     const harness = await createBotShellHarness();
     cleanups.push(harness.dispose);
 
@@ -106,56 +90,60 @@ describe("Bot Mode Frontend Microkernel & Silk Morphing Integration", () => {
     const botHtml = harness.renderHtml();
     expect(botHtml).toContain('data-shell-mode="bot"');
     expect(botHtml).toContain('data-mode="bot"');
-    expect(botHtml).toContain("在 Agent 工作台中打开");
     expect(botHtml).toContain("本地虚拟服务器");
+    // Ensure zero prototype example strings leak into fresh UI
+    expect(botHtml).not.toContain("PR #142");
+    expect(botHtml).not.toContain("Qianji-Engine");
   });
 
-  it("renders all Bot views, Side-Chat drawer, Companion tabs, and Virtual Server console", async () => {
+  it("renders all Bot views, Side-Chat drawer, Companion tabs, and 9-tab Settings / Virtual Server console", async () => {
     const harness = await createBotShellHarness();
     cleanups.push(harness.dispose);
     harness.root.navigationService.setShellMode("bot", { persist: false });
 
     patchBotUi({ chatDrawerOpen: true });
-    expect(harness.renderHtml()).toContain("qj-bot-drawer open");
+    expect(harness.renderHtml()).toContain("qj-bot-drawer-wrap open");
 
     patchBotUi({ activeView: "feed" });
-    expect(harness.renderHtml()).toContain("主动动态与每日简报");
+    expect(harness.renderHtml()).toContain("还没有主动动态简报");
 
     patchBotUi({ activeView: "ideas" });
-    expect(harness.renderHtml()).toContain("一起探索新点子");
+    expect(harness.renderHtml()).toContain("点子");
 
     patchBotUi({ activeView: "goals" });
-    expect(harness.renderHtml()).toContain("长期目标与里程碑");
+    expect(harness.renderHtml()).toContain("创建目标");
 
-    patchBotUi({ activeView: "library", libSection: "system" });
-    expect(harness.renderHtml()).toContain("SOUL.md · 灵魂与行为契约");
+    patchBotUi({ activeView: "library", libSection: "sysfiles" });
+    expect(harness.renderHtml()).toContain("系统文件");
+    expect(harness.renderHtml()).toContain("SOUL.md");
 
     patchBotUi({ activeView: "spaces" });
-    expect(harness.renderHtml()).toContain("用一句话生成持久交互空间");
+    expect(harness.renderHtml()).toContain("在左侧对话输入主题即可实时生成空间");
 
-    // Companion tabs: Approvals, Identity, Inbox
-    patchBotUi({ rightTab: "approvals" });
-    expect(harness.renderHtml()).toContain("发送每周进展摘要至团队归档频道");
+    // Companion tabs on chat view: Approvals, Identity, Inbox
+    patchBotUi({ activeView: "chat", rightTab: "approvals" });
+    expect(harness.renderHtml()).toContain("暂无待批准记录");
 
     patchBotUi({ rightTab: "identity" });
-    expect(harness.renderHtml()).toContain("查看 / 编辑 SOUL.md");
+    expect(harness.renderHtml()).toContain("SOUL");
 
     patchBotUi({ rightTab: "inbox" });
-    expect(harness.renderHtml()).toContain("一键开通收件箱");
+    expect(harness.renderHtml()).toContain("创建邮箱");
 
-    // Virtual Server Console (Local & Remote modes)
-    openBotModal("settings", "vserver");
+    // 9-tab Settings & Virtual Server Console (Local & Remote modes)
+    openBotModal("settings", "server");
     const localServerHtml = harness.renderHtml();
     expect(localServerHtml).toContain('data-testid="bot-settings-modal"');
-    expect(localServerHtml).toContain("恢复干净快照（保留身份与记忆）");
+    expect(localServerHtml).toContain("一键重置环境");
+    expect(localServerHtml).toContain("声音和虚拟形象");
 
     botDataStore.set((prev) => ({
       ...prev,
       virtualServer: { ...prev.virtualServer, mode: "remote" },
     }));
     const remoteServerHtml = harness.renderHtml();
-    expect(remoteServerHtml).toContain("远端虚拟服务器连接配置");
-    expect(remoteServerHtml).toContain("一键初始化远端环境并同步记忆");
+    expect(remoteServerHtml).toContain("远端虚拟服务器地址");
+    expect(remoteServerHtml).toContain("一键初始化环境");
   });
 
   it("supports bidirectional Bot ⇄ Agent task handoff and falls back cleanly when bot-mode is disabled", async () => {
@@ -163,11 +151,13 @@ describe("Bot Mode Frontend Microkernel & Silk Morphing Integration", () => {
     cleanups.push(harness.dispose);
     harness.root.navigationService.setShellMode("bot", { persist: false });
 
-    const task = FALLBACK_BOT_SNAPSHOT.embeddedTasks[0];
-    expect(task).toBeDefined();
-    if (!task) return;
-
-    harness.root.navigationService.beginBotHandoff(task);
+    harness.root.navigationService.beginBotHandoff({
+      id: "space-arch-review",
+      title: "核心架构演进看板",
+      kindLabel: "常驻空间",
+      summary: "从 Bot 空间移交至 Agent 工作台深度推进",
+      targetCwd: "",
+    });
     expect(harness.root.navigationService.getSnapshot().shellMode).toBe("agent");
 
     const handoffAgentHtml = harness.renderHtml();

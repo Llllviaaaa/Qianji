@@ -1,15 +1,17 @@
 /**
- * Right `356px` Digital Companion Panel for Qianji Bot Mode:
- * - Interactive 3D felt companion avatar + inline editable display name
- * - Clickable Virtual Server status pill (`本地虚拟服务器` / `远端虚拟服务器`)
- * - 4-tab sliding capsule: `动态 (Activity)`, `批准 (Approvals)`, `身份 (Identity)`, `邮箱 (Inbox)`
+ * 1:1 High-Fidelity Right `356px` Companion Panel matching `qj-v7-1-bot-chat.png`.
  */
-import { useState, type ReactElement } from "react";
+import type { ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import { ArrowUpRight, Check, Edit3, Mail, Server, ShieldCheck, X } from "lucide-react";
-import { Switch } from "@qianji/client-primitives";
+import { useFrontendService } from "@qianji/client";
 import type { BotAvatarPresetId } from "@qianji/protocol";
-import { BotCompanionAvatar } from "./BotAvatarArt";
+import {
+  AVATAR_PRESET_LABELS,
+  BotCompanionAvatar,
+  BotIcon,
+  type BotIconName,
+} from "./BotAvatarArt";
+import { BotCompanionIdentityTab, BotCompanionInboxTab } from "./BotCompanionIdentityAndInbox";
 import {
   openBotModal,
   patchBotUi,
@@ -19,232 +21,341 @@ import {
   type BotCompanionTab,
 } from "./botStore";
 
-const PRESET_CYCLE: readonly BotAvatarPresetId[] = ["alabaster-felt", "warm-felt", "plush-ears"];
+const PRESET_ORDER: ReadonlyArray<Exclude<BotAvatarPresetId, "custom">> = [
+  "alabaster-felt",
+  "warm-felt",
+  "plush-ears",
+];
 
-export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactElement | null {
+const RIGHT_TABS: ReadonlyArray<{ readonly id: BotCompanionTab; readonly title: string; readonly icon: BotIconName }> = [
+  { id: "activity", title: "动态", icon: "tabActivity" },
+  { id: "approvals", title: "批准", icon: "tabShield" },
+  { id: "identity", title: "身份", icon: "tabIdentity" },
+  { id: "inbox", title: "邮箱", icon: "tabMail" },
+];
+
+export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactElement {
   const ui = useBotUiState();
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
-
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState("");
-
-  if (!ui.rightPanelOpen) {
-    return null;
-  }
+  const navigationService = useFrontendService("navigationService", ctx);
 
   const vs = snapshot.virtualServer;
-  const serverModeLabel = vs.mode === "remote" ? "远端虚拟服务器" : "本地虚拟服务器";
-  const lifecycleLabel =
+  const serverLabel =
+    vs.mode === "local"
+      ? vs.lifecycle === "sleeping"
+        ? "休眠待命 · 本地虚拟服务器"
+        : "运行中 · 本地虚拟服务器"
+      : vs.lifecycle === "running"
+        ? "云端守护 · 远端虚拟服务器"
+        : "未连接 · 远端虚拟服务器";
+  const dotColor =
     vs.lifecycle === "running"
-      ? vs.mode === "remote"
-        ? "云端守护"
-        : "运行中"
+      ? "var(--qj-status-success)"
       : vs.lifecycle === "sleeping"
-        ? "休眠待命"
-        : vs.lifecycle === "connecting"
-          ? "连接中"
-          : "未连接";
-  const dotClass =
-    vs.lifecycle === "running" ? "" : vs.lifecycle === "sleeping" || vs.lifecycle === "connecting" ? " sleeping" : " error";
+        ? "var(--qj-status-warning)"
+        : "var(--qj-status-danger)";
 
-  const cycleAvatarPreset = () => {
-    const idx = PRESET_CYCLE.indexOf(snapshot.profile.avatarPreset);
-    const next = PRESET_CYCLE[(idx + 1) % PRESET_CYCLE.length] ?? "alabaster-felt";
+  const tabIdx = Math.max(0, RIGHT_TABS.findIndex((t) => t.id === ui.rightTab));
+
+  const cycleAvatar = () => {
+    const cur = snapshot.profile.avatarPreset;
+    const idx = cur === "custom" ? -1 : PRESET_ORDER.indexOf(cur);
+    const next = PRESET_ORDER[(idx + 1) % PRESET_ORDER.length] ?? "alabaster-felt";
     void ctrl.updateProfile({ avatarPreset: next });
+    navigationService?.showToast(`已切换形象：${AVATAR_PRESET_LABELS[next]}`, "info");
   };
-
-  const commitName = () => {
-    setEditingName(false);
-    const trimmed = nameDraft.trim();
-    if (trimmed !== "" && trimmed !== snapshot.profile.displayName) {
-      void ctrl.updateProfile({ displayName: trimmed });
-    }
-  };
-
-  const pendingCount = snapshot.pendingApprovals.length;
 
   return (
-    <aside className="qj-bot-companion" aria-label="数字分身伴侣面板" data-testid="bot-companion-panel">
-      <div className="qj-bot-companion-hero">
-        <button
-          type="button"
-          className="qj-bot-avatar-stage"
-          style={{ border: 0 }}
-          title="点击切换毛毡分身外观"
-          aria-label="切换分身外观"
-          onClick={cycleAvatarPreset}
-        >
+    <aside id="bot-right-inner" className="qj-bot-right-inner" aria-label="数字分身伴侣面板" data-testid="bot-companion-panel">
+      <div style={{ height: 42, flexShrink: 0 }} data-tauri-drag-region="" />
+
+      <div style={{ padding: "12px 16px 12px", display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+        <div id="companion-hero-avatar" style={{ position: "relative", width: 124, height: 124 }}>
           <BotCompanionAvatar
             preset={snapshot.profile.avatarPreset}
             customDataUrl={snapshot.profile.customAvatarDataUrl}
-            size={88}
+            size={124}
           />
-        </button>
-
-        {editingName ? (
-          <input
-            autoFocus
-            className="qj-bot-input"
-            style={{ width: 148, textAlign: "center", padding: "4px 8px" }}
-            value={nameDraft}
-            onChange={(e) => setNameDraft(e.target.value)}
-            onBlur={commitName}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") e.currentTarget.blur();
-              if (e.key === "Escape") setEditingName(false);
-            }}
-          />
-        ) : (
           <button
+            id="companion-pencil-btn"
             type="button"
-            className="qj-bot-name-btn"
-            title="点击修改分身昵称"
-            onClick={() => {
-              setNameDraft(snapshot.profile.displayName);
-              setEditingName(true);
+            title="切换虚拟形象"
+            aria-label="切换虚拟形象"
+            onClick={cycleAvatar}
+            style={{
+              position: "absolute",
+              right: -2,
+              bottom: 0,
+              width: 32,
+              height: 32,
+              border: 0,
+              borderRadius: "9999px",
+              background: "var(--muse-soft-fill)",
+              color: "var(--qj-text-primary)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
             }}
           >
-            <span>{snapshot.profile.displayName}</span>
-            <Edit3 size={12} style={{ opacity: 0.55 }} />
+            <BotIcon name="pencil" />
           </button>
-        )}
+        </div>
+
+        <div style={{ marginTop: 10, fontSize: 21, fontWeight: 500, lineHeight: "28px", letterSpacing: "-0.015em" }}>
+          {snapshot.profile.displayName}
+        </div>
 
         <button
           type="button"
           data-testid="bot-vserver-pill"
-          className="qj-bot-server-pill"
-          title="点击配置本地或远端虚拟服务器"
-          onClick={() => openBotModal("settings", "vserver")}
+          title="点击切换本地或远端常驻虚拟服务器"
+          onClick={() => openBotModal("settings", "server")}
+          style={{
+            marginTop: 2,
+            padding: "2px 10px",
+            border: 0,
+            borderRadius: "9999px",
+            background: "transparent",
+            color: "var(--qj-text-secondary)",
+            fontSize: 12.5,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: "pointer",
+          }}
         >
-          <span className={`qj-bot-server-dot${dotClass}`} aria-hidden="true" />
-          <span>
-            {lifecycleLabel} · {serverModeLabel}
-          </span>
-          <Server size={12} style={{ opacity: 0.65 }} />
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: dotColor }} />
+          <span>{serverLabel}</span>
         </button>
+
+        <div
+          id="right-tab-pill"
+          className="qj-right-tab-pill"
+          role="tablist"
+          aria-label="陪伴面板分栏"
+          style={{ marginTop: 20, ["--tab-idx" as string]: String(tabIdx) }}
+        >
+          <div id="right-tab-thumb" className="qj-right-tab-thumb" />
+          {RIGHT_TABS.map((t) => {
+            const active = ui.rightTab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                data-companion-tab={t.id}
+                aria-selected={active}
+                title={t.title}
+                aria-label={t.title}
+                className={`qj-right-tab-btn${active ? " active" : ""}`}
+                onClick={() => patchBotUi({ rightTab: t.id })}
+              >
+                <BotIcon name={t.icon} />
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* 4-Tab Sliding Capsule */}
-      <div className="qj-bot-seg" role="tablist" aria-label="分身详情页签">
-        {(
-          [
-            { id: "activity", label: "动态" },
-            { id: "approvals", label: pendingCount > 0 ? `批准 (${pendingCount})` : "批准" },
-            { id: "identity", label: "身份" },
-            { id: "inbox", label: "邮箱" },
-          ] as ReadonlyArray<{ readonly id: BotCompanionTab; readonly label: string }>
-        ).map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            data-companion-tab={tab.id}
-            aria-selected={ui.rightTab === tab.id}
-            className={ui.rightTab === tab.id ? "active" : undefined}
-            onClick={() => patchBotUi({ rightTab: tab.id })}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab Body */}
-      <div className="qj-bot-companion-body">
+      <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: "12px 16px 32px" }}>
         {ui.rightTab === "activity" && (
-          <>
-            <div
-              className="qj-bot-soft-card"
-              style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: "12px 14px" }}
-            >
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <strong style={{ fontSize: 13 }}>主动心跳守护</strong>
-                <span style={{ fontSize: 11.5, color: "var(--qj-text-secondary)" }}>
-                  定时巡检待办、目标与简报
+          <div className="qj-animate-page-in" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div>
+              <button
+                type="button"
+                onClick={() => patchBotUi({ scheduledExpanded: !ui.scheduledExpanded })}
+                style={{
+                  width: "100%",
+                  padding: "4px 0",
+                  border: 0,
+                  background: "transparent",
+                  color: "var(--qj-text-primary)",
+                  fontSize: 14.5,
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  cursor: "pointer",
+                }}
+              >
+                <span>{ui.scheduledTasks.length} 项预定任务</span>
+                <span
+                  style={{
+                    color: "var(--qj-text-secondary)",
+                    transform: ui.scheduledExpanded ? "none" : "rotate(-90deg)",
+                    transition: "transform 160ms ease",
+                  }}
+                >
+                  <BotIcon name="chevronDown" />
                 </span>
-              </div>
-              <Switch
-                checked={ui.heartbeatEnabled}
-                onCheckedChange={(checked) => patchBotUi({ heartbeatEnabled: checked })}
-                aria-label="切换主动心跳守护"
-              />
+              </button>
+
+              {ui.scheduledExpanded && (
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                  {ui.scheduledTasks.map((task, idx) => (
+                    <button
+                      key={task.id}
+                      type="button"
+                      onClick={() => {
+                        const next = ui.scheduledTasks.map((it, i) =>
+                          i === idx ? { ...it, enabled: !it.enabled } : it,
+                        );
+                        patchBotUi({ scheduledTasks: next });
+                        navigationService?.showToast(
+                          `${task.name} ${!task.enabled ? "已启用" : "已暂停"}`,
+                          "info",
+                        );
+                      }}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: 6,
+                        border: 0,
+                        borderRadius: 14,
+                        background: "transparent",
+                        color: "var(--qj-text-primary)",
+                        textAlign: "left",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: "9999px",
+                          background: "var(--muse-soft-fill)",
+                          color: "var(--qj-status-danger)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+                          <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                        </svg>
+                      </div>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 14, fontWeight: 500 }}>{task.name}</div>
+                        <div style={{ fontSize: 12.5, color: "var(--qj-text-secondary)" }}>
+                          {task.cronOrInterval}
+                          {task.enabled ? "" : " · 已暂停"}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+
+                  <button
+                    type="button"
+                    className="qj-soft-btn"
+                    style={{ marginTop: 4, width: "100%", height: 36, fontSize: 13, fontWeight: 500, background: "transparent" }}
+                    onClick={() => {
+                      navigationService?.setShellMode("agent");
+                      navigationService?.navigate({ kind: "hub", view: "scheduled" });
+                    }}
+                  >
+                    查看所有预定任务
+                  </button>
+                </div>
+              )}
             </div>
 
-            {snapshot.activityGroups.map((group) => (
-              <div key={group.date} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--qj-text-muted)", padding: "2px 4px" }}>
-                  {group.date}
-                </span>
-                {group.items.map((item) => {
-                  const handoff = item.handoff;
-                  return (
-                  <div key={item.id} className="qj-bot-soft-card" style={{ padding: "12px 14px", gap: 6 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <strong style={{ fontSize: 13 }}>{item.title}</strong>
-                      <span style={{ fontSize: 11, color: "var(--qj-text-muted)", flexShrink: 0 }}>
-                        {item.timeLabel}
-                      </span>
-                    </div>
-                    <span style={{ fontSize: 12.5, color: "var(--qj-text-secondary)", lineHeight: 1.5 }}>
-                      {item.description}
-                    </span>
-                    {handoff && (
-                      <div>
-                        <button
-                          type="button"
-                          className="qj-bot-pill-btn"
-                          style={{ height: 26, fontSize: 11.5, padding: "0 10px" }}
-                          onClick={() => ctrl.triggerHandoff(handoff)}
-                        >
-                          <span>在工作台查看</span>
-                          <ArrowUpRight size={12} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  );
-                })}
+            {snapshot.activityGroups.length === 0 ? (
+              <div style={{ padding: "24px 8px", textAlign: "center", color: "var(--qj-text-secondary)", fontSize: 13 }}>
+                暂无后台执行记录 · 发起对话或执行任务后，动态将按日期呈现在这里
               </div>
-            ))}
-          </>
+            ) : (
+              snapshot.activityGroups.map((g) => (
+                <div key={g.date} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0", fontSize: 14.5, fontWeight: 600 }}>
+                    <span>{g.date}</span>
+                    <span style={{ color: "var(--qj-text-secondary)" }}>
+                      <BotIcon name="chevronDown" />
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    {g.items.map((it) => {
+                      const handoff = it.handoff;
+                      return (
+                        <div
+                          key={it.id}
+                          onClick={() => {
+                            if (handoff) ctrl.triggerHandoff(handoff);
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: 12,
+                            padding: "8px 6px",
+                            borderRadius: 14,
+                            cursor: handoff ? "pointer" : "default",
+                          }}
+                        >
+                          <div style={{ width: 36, height: 36, borderRadius: "9999px", background: "var(--muse-soft-fill)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
+                            <BotIcon name="checkCircle" />
+                          </div>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 13.5, fontWeight: 500, lineHeight: 1.38 }}>{it.title}</div>
+                            <div style={{ fontSize: 12.5, color: "var(--qj-text-secondary)", lineHeight: 1.4 }}>{it.description}</div>
+                            <div style={{ fontSize: 12, color: "var(--qj-text-muted)", marginTop: 2 }}>{it.timeLabel}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         )}
 
         {ui.rightTab === "approvals" && (
-          <>
+          <div className="qj-animate-page-in" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 15, fontWeight: 600 }}>审核</span>
+              <span style={{ fontSize: 12, color: "var(--qj-text-secondary)" }}>
+                {snapshot.pendingApprovals.length > 0 ? `${snapshot.pendingApprovals.length} 项待确认` : "全部已处理"}
+              </span>
+            </div>
+
             {snapshot.pendingApprovals.length === 0 ? (
-              <div className="qj-bot-soft-card" style={{ alignItems: "center", textAlign: "center", padding: "22px 16px" }}>
-                <ShieldCheck size={22} />
-                <strong style={{ fontSize: 13.5 }}>当前无待批准请求</strong>
-                <span style={{ fontSize: 12.5, color: "var(--qj-text-secondary)" }}>
-                  当分身需要对外发信、评论或执行敏感变更时，会安静排入此处等你确认。
-                </span>
+              <div style={{ padding: "40px 12px", textAlign: "center" }}>
+                <div style={{ fontSize: 15, fontWeight: 500 }}>审核</div>
+                <div style={{ fontSize: 13, color: "var(--qj-text-secondary)", marginTop: 4 }}>暂无待批准记录</div>
               </div>
             ) : (
-              snapshot.pendingApprovals.map((item) => (
-                <div key={item.id} className="qj-bot-soft-card" style={{ padding: "13px 14px", gap: 8 }}>
-                  <strong style={{ fontSize: 13 }}>{item.title}</strong>
-                  <code style={{ fontSize: 11.5, color: "var(--qj-text-muted)" }}>{item.commandSignature}</code>
-                  <span style={{ fontSize: 12.5, color: "var(--qj-text-secondary)", lineHeight: 1.5 }}>
-                    {item.summary}
-                  </span>
+              snapshot.pendingApprovals.map((apr) => (
+                <div key={apr.id} style={{ padding: 16, borderRadius: 20, background: "var(--muse-soft-fill)", display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: "9999px", background: "var(--qj-bg-surface)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <BotIcon name="tabShield" />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{apr.title}</div>
+                      <div style={{ fontSize: 12, color: "var(--qj-text-secondary)" }}>{apr.commandSignature}</div>
+                    </div>
+                  </div>
+                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--qj-text-secondary)" }}>{apr.summary}</p>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       type="button"
-                      className="qj-bot-task-handoff-btn"
-                      style={{ height: 28, fontSize: 12 }}
-                      onClick={() => void ctrl.resolveApproval(item.id, "approved")}
+                      className="qj-primary-pill-btn"
+                      style={{ flex: 1, height: 36, fontSize: 13, fontWeight: 500 }}
+                      onClick={() => void ctrl.resolveApproval(apr.id, "approved")}
                     >
-                      <Check size={13} />
-                      <span>允许</span>
+                      批准
                     </button>
                     <button
                       type="button"
-                      className="qj-bot-pill-btn"
-                      style={{ height: 28, fontSize: 12 }}
-                      onClick={() => void ctrl.resolveApproval(item.id, "denied")}
+                      className="qj-soft-btn"
+                      style={{ flex: 1, height: 36, fontSize: 13, fontWeight: 500, background: "var(--qj-bg-surface)" }}
+                      onClick={() => void ctrl.resolveApproval(apr.id, "denied")}
                     >
-                      <X size={13} />
-                      <span>拒绝</span>
+                      拒绝
                     </button>
                   </div>
                 </div>
@@ -252,94 +363,24 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
             )}
 
             {snapshot.recentApprovals.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--qj-text-muted)", padding: "0 4px" }}>
-                  最近处理记录
-                </span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 500, color: "var(--qj-text-muted)" }}>最近审核记录</div>
                 {snapshot.recentApprovals.map((rec) => (
-                  <div key={rec.id} className="qj-bot-soft-card" style={{ padding: "10px 12px", gap: 4 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
-                      <span>{rec.title}</span>
-                      <span style={{ color: "var(--qj-text-muted)", fontSize: 11 }}>
-                        {rec.decision === "approved" ? "已允许" : rec.decision === "denied" ? "已拒绝" : "受控放行"}
-                      </span>
+                  <div key={rec.id} style={{ padding: 12, borderRadius: 16, background: "var(--muse-soft-fill)", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{rec.title}</div>
+                      <div style={{ color: "var(--qj-text-secondary)" }}>{rec.summary}</div>
                     </div>
+                    <span style={{ color: "var(--qj-text-secondary)" }}>{rec.timeLabel}</span>
                   </div>
                 ))}
               </div>
             )}
-          </>
+          </div>
         )}
 
-        {ui.rightTab === "identity" && (
-          <>
-            <div className="qj-bot-soft-card" style={{ padding: "13px 14px", gap: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <strong style={{ fontSize: 13.5 }}>灵魂契约 (SOUL.md)</strong>
-                <span style={{ fontSize: 11, color: "var(--qj-text-muted)" }}>{snapshot.soulUpdatedAt}</span>
-              </div>
-              <span style={{ fontSize: 12.5, color: "var(--qj-text-secondary)", lineHeight: 1.5 }}>
-                设定性格温度、回答风格与不可逾越的外部行动红线。
-              </span>
-              <button type="button" className="qj-bot-pill-btn" onClick={() => openBotModal("soul")}>
-                查看 / 编辑 SOUL.md
-              </button>
-            </div>
-
-            <div className="qj-bot-soft-card" style={{ padding: "13px 14px", gap: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <strong style={{ fontSize: 13.5 }}>长期记忆 (MEMORY.md)</strong>
-                <span style={{ fontSize: 11, color: "var(--qj-text-muted)" }}>{snapshot.memoryUpdatedAt}</span>
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: "var(--qj-text-secondary)", lineHeight: 1.55 }}>
-                {snapshot.learnedPreferences.map((pref, i) => (
-                  <li key={i}>{pref}</li>
-                ))}
-              </ul>
-              <button type="button" className="qj-bot-pill-btn" onClick={() => openBotModal("memory")}>
-                管理记忆账本
-              </button>
-            </div>
-          </>
-        )}
-
-        {ui.rightTab === "inbox" && (
-          <>
-            {!snapshot.inboxEnabled ? (
-              <div className="qj-bot-soft-card" style={{ alignItems: "center", textAlign: "center", padding: "22px 16px" }}>
-                <Mail size={22} />
-                <strong style={{ fontSize: 13.5 }}>启用千机专属收件箱</strong>
-                <span style={{ fontSize: 12.5, color: "var(--qj-text-secondary)", lineHeight: 1.5 }}>
-                  将订阅周报、构建通知或行程确认转发给分身，自动为你提炼摘要并跟进待办。
-                </span>
-                <button
-                  type="button"
-                  className="qj-bot-task-handoff-btn"
-                  onClick={() => void ctrl.enableInbox()}
-                >
-                  一键开通收件箱
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="qj-bot-soft-card" style={{ padding: "10px 12px", gap: 4 }}>
-                  <span style={{ fontSize: 11.5, color: "var(--qj-text-muted)" }}>专属投递地址</span>
-                  <code style={{ fontSize: 12 }}>{snapshot.inboxAddress}</code>
-                </div>
-                {snapshot.inboxItems.map((mail) => (
-                  <div key={mail.id} className="qj-bot-soft-card" style={{ padding: "12px 14px", gap: 5 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--qj-text-muted)" }}>
-                      <span>{mail.sender}</span>
-                      <span>{mail.timeLabel}</span>
-                    </div>
-                    <strong style={{ fontSize: 13 }}>{mail.subject}</strong>
-                    <span style={{ fontSize: 12.5, color: "var(--qj-text-secondary)" }}>{mail.preview}</span>
-                  </div>
-                ))}
-              </>
-            )}
-          </>
-        )}
+        {ui.rightTab === "identity" && <BotCompanionIdentityTab ctx={ctx} />}
+        {ui.rightTab === "inbox" && <BotCompanionInboxTab ctx={ctx} />}
       </div>
     </aside>
   );

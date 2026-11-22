@@ -51,6 +51,19 @@ function toSessionFile(sessionId: string): string {
   return isHarnessSessionFile(sessionId) ? sessionId : `${HARNESS_SESSION_PREFIX}${sessionId}`;
 }
 
+function pickFallbackModel(explicit: ModelInfo | null, available: readonly ModelInfo[]): ModelInfo | null {
+  if (explicit !== null) return explicit;
+  const app = useAppStore.getState();
+  if (app.model !== null) return app.model;
+  const prefProvider = app.settings?.provider?.trim() ?? "";
+  const prefModel = app.settings?.model?.trim() ?? "";
+  if (prefProvider !== "" && prefModel !== "") {
+    const matched = available.find((m) => m.provider === prefProvider && m.id === prefModel);
+    if (matched !== undefined) return matched;
+  }
+  return available[0] ?? null;
+}
+
 export function createIsolatedPoolEntry(
   key: string,
   sessionId: string,
@@ -196,16 +209,28 @@ export function createIsolatedPoolEntry(
           return null;
         }
         const stateInfo = await harnessRuntimes.state(started.runtimeId).catch(() => null);
-        const [models, cmds] = await Promise.all([
+        const [models, cmds, initialHistory] = await Promise.all([
           harnessRuntimes.models().catch(() => snapshot.availableModels as ModelInfo[]),
           harnessRuntimes.commands(snapshot.cwd).catch(() => snapshot.commands as SlashCommand[]),
+          snapshot.messages.length === 0
+            ? harnessRuntimes.messages(started.runtimeId).catch(() => snapshot.messages)
+            : Promise.resolve(snapshot.messages),
         ]);
-        const resolvedModel = stateInfo?.model ?? snapshot.model;
+        let resolvedModel = stateInfo?.model ?? null;
+        if (resolvedModel === null) {
+          const fallback = pickFallbackModel(snapshot.model, models);
+          if (fallback !== null) {
+            resolvedModel = await harnessRuntimes
+              .setModel(started.runtimeId, fallback.provider, fallback.id)
+              .catch(() => fallback);
+          }
+        }
         patch({
           runtimeId: started.runtimeId,
           sessionFile: stateInfo?.sessionFile ?? harnessRuntimes.sessionFileOf(started.runtimeId) ?? snapshot.sessionFile,
           sessionId: stateInfo?.sessionId ?? snapshot.sessionId,
           sessionName: stateInfo?.sessionName ?? snapshot.sessionName,
+          messages: snapshot.messages.length === 0 ? initialHistory : snapshot.messages,
           model: resolvedModel,
           thinkingLevel: stateInfo?.thinkingLevel ?? snapshot.thinkingLevel,
           availableModels: models,
@@ -245,6 +270,19 @@ export function createIsolatedPoolEntry(
       if (!payload.message && payload.images.length === 0) return false;
       const runtimeId = await ensureRuntime();
       if (!runtimeId) return false;
+      if (snapshot.model === null) {
+        const latestModels =
+          snapshot.availableModels.length > 0
+            ? snapshot.availableModels
+            : await harnessRuntimes.models().catch(() => [] as ModelInfo[]);
+        const fallback = pickFallbackModel(null, latestModels);
+        if (fallback !== null) {
+          const confirmed = await harnessRuntimes
+            .setModel(runtimeId, fallback.provider, fallback.id)
+            .catch(() => fallback);
+          patch({ model: confirmed, availableModels: latestModels });
+        }
+      }
       const wasStreaming = snapshot.isStreaming;
       if (!wasStreaming) {
         activeTurnStartedAt = Date.now();

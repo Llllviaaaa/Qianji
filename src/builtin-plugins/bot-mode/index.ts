@@ -70,5 +70,17 @@ export const botModePlugin: Plugin.Object = {
         patchBotUi({ activeView: "chat", chatDrawerOpen: !cur.chatDrawerOpen });
       },
     });
+
+    ctx.shortcutService.register({
+      id: `${BOT_MODE_PLUGIN_ID}:shortcuts`,
+      pluginId: BOT_MODE_PLUGIN_ID,
+      key: "Ctrl+/",
+      label: "查看键盘快捷键",
+      allowInEditable: false,
+      when: (sc) => isBotActive() && !sc.inTerminal,
+      run: () => {
+        openBotModal("shortcuts");
+      },
+    });
   },
 };

@@ -1,373 +1,486 @@
-/**
- * Evergreen Main Chat + Side-Chat Drawer + Embedded Task Handoff Cards +
- * Floating Capsule Composer for Qianji Bot Mode.
- */
-import { useState, type FormEvent, type ReactElement } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import {
-  ArrowUp,
-  ArrowUpRight,
-  Mic,
-  PanelLeft,
-  PanelRight,
-  Phone,
-  Plus,
-  Square,
-  X,
-} from "lucide-react";
-import { useFrontendService, useSessionHandle } from "@qianji/client";
+import { ArrowUp, Paperclip, Square, X } from "lucide-react";
+import { useFrontendService, useSessionHandle, useSessionState, type AttachmentPayload } from "@qianji/client";
 import { Markdown } from "@qianji/client-primitives";
-import {
-  patchBotUi,
-  useBotController,
-  useBotSnapshot,
-  useBotUiState,
-} from "./botStore";
+import { BotCompanionAvatar, BotIcon, CalendarTaskTileIcon } from "./BotAvatarArt";
+import { BotSideChatDrawer } from "./BotSideChatDrawer";
+import { patchBotUi, useBotController, useBotSnapshot, useBotUiState } from "./botStore";
+export { BotSideChatDrawer };
 
-interface LocalFallbackMessage {
-  readonly id: string;
-  readonly role: "user" | "assistant";
-  readonly content: string;
-}
-
-const WELCOME_MESSAGES: readonly LocalFallbackMessage[] = [
-  {
-    id: "welcome-bot-1",
-    role: "assistant",
-    content:
-      "早安，我一直在后台待命。今天我已经为你整理好 `develop` 分支进展与双形态体验走查要点；你可以随时在这里自然聊想法，或者点击下方协同卡片切入 **Agent 工作台**逐行审阅。",
-  },
-];
-
-export function BotChatView({
-  ctx,
-  cwd,
-}: {
-  readonly ctx?: Context;
-  readonly cwd: string;
-}): ReactElement {
+export function BotChatColumn(props: { readonly ctx?: Context; readonly cwd: string; readonly isSplitSpace: boolean }): ReactElement {
+  const { ctx, cwd, isSplitSpace } = props;
   const ui = useBotUiState();
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
+  const sessionSnap = useSessionState(ctx);
   const navigationService = useFrontendService("navigationService", ctx);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const effectiveSessionId = ui.activeSessionId ?? snapshot.mainSessionId;
-  const isMainThread = effectiveSessionId === snapshot.mainSessionId;
+  const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
+  const [reactedIds, setReactedIds] = useState<Readonly<Record<string, boolean>>>({});
+  const [moreMsgId, setMoreMsgId] = useState<string | null>(null);
+
+  const targetSessionId = ui.activeSessionId ?? snapshot.mainSessionId;
+  const targetSessionFile =
+    targetSessionId !== ""
+      ? targetSessionId.startsWith("harness:")
+        ? targetSessionId
+        : `harness:${targetSessionId}`
+      : null;
   const effectiveCwd = snapshot.botCwd || cwd;
+  const canAttach = targetSessionFile !== null && effectiveCwd !== "";
 
   const retained = useSessionHandle(
-    effectiveSessionId,
-    { isolated: true, cwd: effectiveCwd },
+    canAttach ? targetSessionFile : null,
+    canAttach
+      ? {
+          isolated: false,
+          autoStart: true,
+          cwd: effectiveCwd,
+          permissionMode: "workspace-write",
+          agentMode: "agent",
+          ...(sessionSnap?.model ? { model: sessionSnap.model } : {}),
+        }
+      : undefined,
     ctx,
   );
 
-  const [localRepliesBySession, setLocalRepliesBySession] = useState<
-    Readonly<Record<string, readonly LocalFallbackMessage[]>>
-  >({});
-  const [likedIds, setLikedIds] = useState<Readonly<Record<string, boolean>>>({});
-
-  const liveMessages = retained.snapshot?.messages ?? [];
-  const localMessages = localRepliesBySession[effectiveSessionId] ?? [];
-  const mergedMessages: ReadonlyArray<{ id: string; role: string; content: string }> =
-    liveMessages.length > 0
-      ? liveMessages
-      : isMainThread
-        ? [...WELCOME_MESSAGES, ...localMessages]
-        : localMessages;
-
+  const messages = retained.snapshot?.messages ?? [];
   const isStreaming = retained.snapshot?.isStreaming === true;
-  const activeSideThread = snapshot.sideThreads.find((t) => t.sessionId === effectiveSessionId);
-  const headerTitle = isMainThread ? "聊天" : (activeSideThread?.title ?? "旁聊");
+  const runtimeError = retained.snapshot?.error ?? null;
+  const isMain = ui.activeSessionId === null || ui.activeSessionId === snapshot.mainSessionId;
+  const activeSide = snapshot.sideThreads.find((t) => t.sessionId === targetSessionId);
+  const topTitle = isMain ? "聊天" : (activeSide?.title ?? "旁聊");
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    const rawDraft = ui.composerDraft.trim();
-    if (rawDraft === "") return;
-
-    const fullPrompt = ui.quotedText
-      ? `> ${ui.quotedText}\n\n${rawDraft}`
-      : rawDraft;
-
-    patchBotUi({ composerDraft: "", quotedText: null });
-
-    if (retained.handle !== null) {
-      const sent = await retained.handle.sendMessage(fullPrompt).catch(() => false);
-      if (sent) return;
+  const handleFilesSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    const loaded: AttachmentPayload[] = [];
+    for (const file of Array.from(files)) {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i] ?? 0);
+      const isImg = file.type.startsWith("image/");
+      loaded.push({
+        path: file.name,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        kind: isImg ? "image" : "text",
+        ...(isImg ? { data: btoa(binary) } : { text: await file.text().catch(() => "") }),
+      });
     }
-
-    // Graceful offline conversational response when Host LLM is not yet connected
-    const userMsg: LocalFallbackMessage = {
-      id: `local-u-${Date.now()}`,
-      role: "user",
-      content: fullPrompt,
-    };
-    const botMsg: LocalFallbackMessage = {
-      id: `local-a-${Date.now() + 1}`,
-      role: "assistant",
-      content: `收到，已记录到${isMainThread ? "常青主对话" : `「${headerTitle}」分支`}。需要深入代码或文件级核验时，随时点击顶栏或协同卡片切入 Agent 工作台。`,
-    };
-    setLocalRepliesBySession((prev) => ({
-      ...prev,
-      [effectiveSessionId]: [...(prev[effectiveSessionId] ?? []), userMsg, botMsg],
-    }));
+    setAttachments((prev) => [...prev, ...loaded]);
+    event.target.value = "";
   };
 
+  const handleSubmit = async (event?: FormEvent) => {
+    event?.preventDefault();
+    const trimmed = ui.composerDraft.trim();
+    if (trimmed === "" && attachments.length === 0) return;
+
+    if (isSplitSpace && trimmed !== "") {
+      patchBotUi({ composerDraft: "" });
+      await ctrl.createSpace(trimmed);
+      if (retained.handle !== null) {
+        void retained.handle.sendMessage(trimmed, attachments).catch(() => false);
+      }
+      setAttachments([]);
+      return;
+    }
+
+    const fullText = ui.quotedText ? `> ${ui.quotedText}\n\n${trimmed}` : trimmed;
+    const queued = attachments;
+    patchBotUi({ composerDraft: "", quotedText: null });
+    setAttachments([]);
+
+    if (retained.handle === null) {
+      navigationService?.showToast("正在连接后台会话服务，请稍候重试", "warning");
+      return;
+    }
+    await retained.handle.sendMessage(fullText, queued);
+  };
+
+  const hasDraft = ui.composerDraft.trim() !== "" || attachments.length > 0;
+  const pillStyle = {
+    height: 32,
+    padding: "0 14px",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 13.5,
+    fontWeight: 500,
+    cursor: "pointer",
+  } as const;
+
   return (
-    <div className="qj-bot-center">
-      {/* 256px Collapsible Side-Chat Drawer */}
-      <aside
-        id="bot-drawer-wrap"
-        className={`qj-bot-drawer${ui.chatDrawerOpen ? " open" : ""}`}
-        aria-label="主聊天与旁聊列表"
-      >
-        <div className="qj-bot-drawer-inner">
-          <div>
-            <div className="qj-bot-drawer-sec-head">
-              <span>主要聊天</span>
-            </div>
-            <button
-              type="button"
-              className={`qj-bot-thread-item${isMainThread ? " active" : ""}`}
-              onClick={() => patchBotUi({ activeSessionId: null })}
-            >
-              <span className="qj-bot-thread-title">{snapshot.profile.displayName} · 常青主线</span>
-              <span className="qj-bot-thread-sub">贯穿全局记忆与每日主动进展</span>
-            </button>
-          </div>
-
-          <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto" }}>
-            <div className="qj-bot-drawer-sec-head">
-              <span>旁聊 (Ctrl+J)</span>
-              <button
-                type="button"
-                className="qj-bot-icon-btn"
-                style={{ width: 24, height: 24 }}
-                title="新建独立旁聊"
-                aria-label="新建旁聊"
-                onClick={() => void ctrl.createSideChat()}
-              >
-                <Plus size={14} />
-              </button>
-            </div>
-            {snapshot.sideThreads.map((thread) => {
-              const active = thread.sessionId === effectiveSessionId;
-              return (
-                <button
-                  key={thread.id}
-                  type="button"
-                  className={`qj-bot-thread-item${active ? " active" : ""}`}
-                  onClick={() => patchBotUi({ activeSessionId: thread.sessionId })}
-                >
-                  <span className="qj-bot-thread-title">{thread.title}</span>
-                  <span className="qj-bot-thread-sub">
-                    {thread.snippet ?? "独立分支上下文，不污染主聊天"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+    <div className={`qj-bot-chat-col${isSplitSpace ? " split-left" : ""}`}>
+      <header className="qj-bot-topbar" data-tauri-drag-region="">
+        <div className="qj-bot-topbar-left">
+          <button
+            id="btn-toggle-chat-drawer"
+            type="button"
+            onClick={() => patchBotUi({ chatDrawerOpen: !ui.chatDrawerOpen })}
+            className="qj-muse-glass-pill"
+            style={pillStyle}
+          >
+            <BotIcon name="menu" />
+            <span>{topTitle}</span>
+          </button>
         </div>
-      </aside>
 
-      {/* Main Chat Column */}
-      <section className="qj-bot-main" aria-label="Bot 对话舞台">
-        <header className="qj-bot-topbar" data-tauri-drag-region="">
-          <div className="qj-bot-topbar-left">
-            <button
-              id="btn-toggle-chat-drawer"
-              type="button"
-              className={`qj-bot-pill-btn${ui.chatDrawerOpen ? " active" : ""}`}
-              onClick={() => patchBotUi({ chatDrawerOpen: !ui.chatDrawerOpen })}
-              title="展开或收起旁聊抽屉 (Ctrl+J)"
-            >
-              <PanelLeft size={15} />
-              <span>{headerTitle}</span>
-            </button>
-          </div>
+        <div className={!isSplitSpace ? "qj-bot-topbar-right" : "qj-bot-topbar-left"}>
+          <button
+            type="button"
+            onClick={() => {
+              const next = !ui.voiceCallActive;
+              patchBotUi({ voiceCallActive: next });
+              navigationService?.showToast(next ? "实时语音模式已开启" : "已结束语音模式", "info");
+            }}
+            className="qj-muse-glass-pill"
+            style={{ ...pillStyle, gap: 6, fontSize: 13 }}
+          >
+            <BotIcon name="phone" />
+            <span>{ui.voiceCallActive ? "通话中" : "通话"}</span>
+          </button>
 
-          <div className="qj-bot-topbar-right">
+          {!isSplitSpace && (
             <button
+              id="btn-toggle-right-panel"
               type="button"
-              className={`qj-bot-pill-btn${ui.voiceCallActive ? " active" : ""}`}
-              onClick={() => {
-                const next = !ui.voiceCallActive;
-                patchBotUi({ voiceCallActive: next });
-                navigationService?.showToast(
-                  next ? "已开启千机实时语音伴聊模式" : "已结束语音通话",
-                  "info",
-                );
+              title={ui.rightPanelOpen ? "收起陪伴面板" : "展开陪伴面板"}
+              aria-label="切换右侧陪伴面板"
+              onClick={() => patchBotUi({ rightPanelOpen: !ui.rightPanelOpen })}
+              className="qj-muse-glass-pill"
+              style={{
+                width: 32,
+                height: 32,
+                padding: 0,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: ui.rightPanelOpen ? "var(--qj-text-primary)" : "var(--qj-text-secondary)",
+                cursor: "pointer",
               }}
             >
-              <Phone size={14} />
-              <span>{ui.voiceCallActive ? "通话中 · 00:18" : "通话"}</span>
+              <BotIcon name="panelRight" />
             </button>
+          )}
+        </div>
+      </header>
 
-            <button
-              type="button"
-              className={`qj-bot-icon-btn${ui.rightPanelOpen ? " active" : ""}`}
-              title={ui.rightPanelOpen ? "收起右侧分身面板" : "展开右侧分身面板"}
-              aria-label="切换右侧分身面板"
-              onClick={() => patchBotUi({ rightPanelOpen: !ui.rightPanelOpen })}
+      <div id="muse-chat-scroll" className="qj-bot-chat-scroll">
+        <div className="qj-bot-chat-stream">
+          {messages.length === 0 && (
+            <div
+              style={{
+                paddingTop: isSplitSpace ? 48 : 88,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                textAlign: "center",
+                gap: 14,
+              }}
             >
-              <PanelRight size={15} />
-            </button>
-          </div>
-        </header>
-
-        <div className="qj-bot-chat-scroll">
-          <div className="qj-bot-chat-column">
-            {mergedMessages.length === 0 && (
-              <div className="qj-bot-soft-card">
-                <strong>{headerTitle}</strong>
-                <span style={{ color: "var(--qj-text-secondary)", fontSize: 13.5 }}>
-                  这是一个独立的旁聊分支，适合临时头脑风暴、敏感议题快问快答，不会干扰主聊天的长期记忆节奏。
-                </span>
+              <BotCompanionAvatar
+                preset={snapshot.profile.avatarPreset}
+                customDataUrl={snapshot.profile.customAvatarDataUrl}
+                size={76}
+              />
+              <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.015em" }}>
+                {isMain ? `你好，我是${snapshot.profile.displayName}` : topTitle}
               </div>
-            )}
+              <div style={{ fontSize: 14, color: "var(--qj-text-secondary)", maxWidth: 420, lineHeight: 1.6 }}>
+                {isSplitSpace
+                  ? "在下方输入框描述你想追踪的主题，我会为你创建常驻空间看板。"
+                  : isMain
+                    ? "随时直接发消息交流，或安排后台巡检、资料整理与工作台协同任务。"
+                    : "这是一个独立旁聊分支，适合临时实验或独立提问，不会混入主聊天时间线。"}
+              </div>
+            </div>
+          )}
 
-            {mergedMessages.map((msg) => {
-              const isUser = msg.role === "user";
-              const liked = likedIds[msg.id] === true;
+          {messages.map((msg) => {
+            if (msg.role === "user") {
               return (
-                <div key={msg.id} className={`qj-bot-msg-row ${isUser ? "user" : "assistant"}`}>
-                  {isUser ? (
-                    <div className="qj-bot-bubble-user">{msg.content}</div>
-                  ) : (
-                    <div className="qj-bot-bubble-bot">
-                      <Markdown content={msg.content} />
-                    </div>
-                  )}
-
-                  <div className="qj-bot-msg-actions">
-                    <button
-                      type="button"
-                      onClick={() => setLikedIds((prev) => ({ ...prev, [msg.id]: !liked }))}
-                    >
-                      {liked ? "👍 已赞" : "👍"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => patchBotUi({ quotedText: msg.content.slice(0, 96) })}
-                    >
-                      ↩ 引用
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void navigator.clipboard?.writeText(msg.content);
-                        navigationService?.showToast("已复制消息内容", "info");
-                      }}
-                    >
-                      复制
-                    </button>
-                  </div>
+                <div key={msg.id} style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <div className="qj-muse-bubble-user">{msg.content}</div>
                 </div>
               );
-            })}
+            }
+            const reacted = reactedIds[msg.id] === true;
+            return (
+              <div key={msg.id} className="qj-msg-row">
+                <div className="qj-muse-bubble-bot">
+                  {msg.content ? (
+                    <Markdown content={msg.content} isStreaming={isStreaming} />
+                  ) : (
+                    <span style={{ color: "var(--qj-text-muted)", fontSize: 13.5 }}>正在思考…</span>
+                  )}
+                </div>
 
-            {/* Embedded Task Handoff Cards in Main Thread */}
-            {isMainThread &&
-              snapshot.embeddedTasks.map((task) => (
-                <div key={task.id} className="qj-bot-task-card" data-testid="bot-handoff-card">
-                  <div className="qj-bot-task-card-head">
-                    <span className="qj-bot-task-card-title">{task.title}</span>
-                    <span className="qj-bot-task-card-meta">
-                      <span className="qj-bot-task-diff-add">+148</span>
-                      <span className="qj-bot-task-diff-del">−12</span>
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 12.5, color: "var(--qj-text-secondary)", lineHeight: 1.5 }}>
-                    {task.summary}
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ fontSize: 11.5, color: "var(--qj-text-muted)" }}>{task.kindLabel}</span>
+                <div className="qj-msg-actions" style={{ position: "relative" }}>
+                  <button
+                    type="button"
+                    className="qj-msg-action-btn"
+                    title="留下心情"
+                    style={{ color: reacted ? "var(--qj-brand-primary)" : undefined }}
+                    onClick={() => setReactedIds((prev) => ({ ...prev, [msg.id]: !reacted }))}
+                  >
+                    <BotIcon name="smile" />
+                  </button>
+                  <button
+                    type="button"
+                    className="qj-msg-action-btn"
+                    title="引用回复"
+                    onClick={() => patchBotUi({ quotedText: msg.content.slice(0, 100) })}
+                  >
+                    <BotIcon name="reply" />
+                  </button>
+                  <button
+                    type="button"
+                    className="qj-msg-action-btn"
+                    title="更多操作"
+                    onClick={() => setMoreMsgId((cur) => (cur === msg.id ? null : msg.id))}
+                  >
+                    <BotIcon name="dots" />
+                  </button>
+
+                  {moreMsgId === msg.id && (
+                    <div
+                      className="qj-bot-more-popover"
+                      style={{ bottom: 34, left: 0, width: 176 }}
+                      onMouseLeave={() => setMoreMsgId(null)}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMoreMsgId(null);
+                          void navigator.clipboard?.writeText(msg.content);
+                          navigationService?.showToast("已复制消息", "info");
+                        }}
+                      >
+                        <span>复制文本</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMoreMsgId(null);
+                          ctrl.triggerHandoff({
+                            id: `msg-${msg.id}`,
+                            title: msg.content.slice(0, 32) || "对话任务接力",
+                            kindLabel: "对话上下文接力",
+                            summary: msg.content.slice(0, 180),
+                            targetCwd: cwd || effectiveCwd,
+                          });
+                        }}
+                      >
+                        <span>在工作台中打开</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {isMain &&
+            snapshot.embeddedTasks.map((task) => (
+              <div key={task.id} className="qj-msg-row" data-testid="bot-handoff-card">
+                <div className="qj-muse-bubble-bot" style={{ width: 348 }}>
+                  <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <CalendarTaskTileIcon />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {task.title}
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--qj-text-secondary)" }}>{task.kindLabel}</div>
+                      </div>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.45 }}>{task.summary}</p>
                     <button
                       type="button"
-                      className="qj-bot-task-handoff-btn"
                       onClick={() => ctrl.triggerHandoff(task)}
+                      style={{
+                        width: "100%",
+                        height: 36,
+                        border: 0,
+                        borderRadius: 9999,
+                        background: "var(--qj-bg-surface)",
+                        color: "var(--qj-text-primary)",
+                        fontSize: 13.5,
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+                      }}
                     >
-                      <span>在 Agent 工作台中打开</span>
-                      <ArrowUpRight size={14} />
+                      在 Agent 工作台中打开
                     </button>
-                  </div>
+                  </section>
                 </div>
-              ))}
-          </div>
-        </div>
-
-        {/* Floating Glass Capsule Composer */}
-        <div className="qj-bot-composer-dock">
-          <form className="qj-bot-composer-capsule" onSubmit={(e) => void handleSubmit(e)}>
-            {ui.quotedText !== null && (
-              <div className="qj-bot-quote-bar">
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  引用：{ui.quotedText}
-                </span>
-                <button
-                  type="button"
-                  className="qj-bot-icon-btn"
-                  style={{ width: 20, height: 20 }}
-                  aria-label="取消引用"
-                  onClick={() => patchBotUi({ quotedText: null })}
-                >
-                  <X size={12} />
-                </button>
               </div>
-            )}
+            ))}
 
-            <div className="qj-bot-composer-row">
+          {runtimeError && (
+            <div
+              style={{
+                padding: "12px 16px",
+                borderRadius: 16,
+                background: "var(--muse-soft-fill)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                fontSize: 13,
+              }}
+            >
+              <span style={{ color: "var(--qj-text-secondary)" }}>{runtimeError}</span>
               <button
                 type="button"
-                className="qj-bot-icon-btn"
-                title="在新建旁聊中提问"
-                aria-label="附加或新建旁聊"
-                onClick={() => void ctrl.createSideChat()}
+                className="qj-primary-pill-btn"
+                style={{ height: 30, padding: "0 14px", fontSize: 12, flexShrink: 0 }}
+                onClick={() => navigationService?.openSettings("providers")}
               >
-                <Plus size={16} />
+                配置模型服务
               </button>
+            </div>
+          )}
+        </div>
+      </div>
 
-              <input
-                type="text"
-                className="qj-bot-composer-input"
-                aria-label="与千机对话输入框"
-                placeholder={`发消息给${snapshot.profile.displayName}…`}
-                value={ui.composerDraft}
-                onChange={(e) => patchBotUi({ composerDraft: e.target.value })}
-              />
-
+      <div className="qj-bot-composer-wrap">
+        <form className="qj-muse-glass-pill qj-bot-composer-pill" onSubmit={(e) => void handleSubmit(e)}>
+          {ui.quotedText !== null && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "4px 10px",
+                borderRadius: 10,
+                background: "var(--muse-soft-fill)",
+                fontSize: 12,
+                color: "var(--qj-text-secondary)",
+              }}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                回复：{ui.quotedText}
+              </span>
               <button
                 type="button"
-                className="qj-bot-icon-btn"
+                className="qj-msg-action-btn"
+                style={{ width: 20, height: 20 }}
+                onClick={() => patchBotUi({ quotedText: null })}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
+          {attachments.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "2px 4px" }}>
+              {attachments.map((att, idx) => (
+                <span
+                  key={`${att.fileName}-${idx}`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "2px 8px",
+                    borderRadius: 9999,
+                    background: "var(--muse-soft-fill)",
+                    fontSize: 12,
+                  }}
+                >
+                  <Paperclip size={11} />
+                  <span>{att.fileName}</span>
+                  <button
+                    type="button"
+                    style={{ border: 0, background: "transparent", cursor: "pointer", padding: 0, color: "inherit" }}
+                    onClick={() => setAttachments((prev) => prev.filter((_, i) => i !== idx))}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => void handleFilesSelected(e)} />
+            <button
+              type="button"
+              title="添加文件或图片附件"
+              aria-label="添加附件"
+              className="qj-msg-action-btn"
+              style={{ width: 32, height: 32, color: "var(--qj-text-secondary)" }}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+
+            <input
+              id="muse-msg-input"
+              type="text"
+              aria-label="消息输入框"
+              placeholder="消息"
+              value={ui.composerDraft}
+              onChange={(e) => patchBotUi({ composerDraft: e.target.value })}
+              style={{
+                flex: "1 1 auto",
+                minWidth: 0,
+                border: 0,
+                outline: "none",
+                background: "transparent",
+                color: "var(--qj-text-primary)",
+                fontSize: 15,
+              }}
+            />
+
+            {isStreaming ? (
+              <button
+                type="button"
+                title="停止生成"
+                aria-label="停止生成"
+                className="qj-primary-pill-btn"
+                style={{ width: 32, height: 32, display: "grid", placeItems: "center", flexShrink: 0 }}
+                onClick={() => void retained.handle?.abort()}
+              >
+                <Square size={12} />
+              </button>
+            ) : hasDraft ? (
+              <button
+                type="submit"
+                title="发送"
+                aria-label="发送消息"
+                className="qj-primary-pill-btn"
+                style={{ width: 32, height: 32, display: "grid", placeItems: "center", flexShrink: 0 }}
+              >
+                <ArrowUp size={16} />
+              </button>
+            ) : (
+              <button
+                type="button"
                 title="语音输入"
                 aria-label="语音输入"
-                onClick={() => navigationService?.showToast("语音听写已就绪", "info")}
+                className="qj-msg-action-btn"
+                style={{ width: 32, height: 32, color: "var(--qj-text-secondary)" }}
+                onClick={() => navigationService?.showToast("请开始说话，或直接输入文字消息", "info")}
               >
-                <Mic size={15} />
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="2" width="6" height="12" rx="3" />
+                  <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
+                </svg>
               </button>
-
-              {isStreaming ? (
-                <button
-                  type="button"
-                  className="qj-bot-send-btn"
-                  aria-label="停止回复"
-                  onClick={() => void retained.handle?.abort()}
-                >
-                  <Square size={13} />
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  className="qj-bot-send-btn"
-                  disabled={ui.composerDraft.trim() === ""}
-                  aria-label="发送消息"
-                >
-                  <ArrowUp size={16} />
-                </button>
-              )}
-            </div>
-          </form>
-        </div>
-      </section>
+            )}
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

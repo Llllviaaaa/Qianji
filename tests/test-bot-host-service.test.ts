@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,9 +19,20 @@ describe("Host Bot service (bot-mode backend)", () => {
     }
   });
 
-  it("persists evergreen main session, injects <bot_soul> only for Bot sessions, queues external writes, and preserves SOUL across snapshot reset", async () => {
+  it("starts completely clean with zero fake demo records, upgrades v1 state cleanly, scans real workspace files, probes TCP latency, and isolates <bot_soul>", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "qj-bot-test-"));
     tempDirs.push(dataDir);
+
+    // Seed a legacy v1 state.json containing prototype demo text to prove upgrade purges it
+    mkdirSync(join(dataDir, "bot"), { recursive: true });
+    writeFileSync(
+      join(dataDir, "bot", "state.json"),
+      JSON.stringify({
+        version: 1,
+        spaces: [{ id: "fake-pr-142", title: "PR #142 巡检" }],
+      }),
+      "utf8",
+    );
 
     const host = createHost({
       version: "0.3.0-test",
@@ -47,7 +59,20 @@ describe("Host Bot service (bot-mode backend)", () => {
       expect(snap.profile.displayName).toBe("千机测试");
       expect(snap.mainSessionId).toBeTruthy();
 
-      // Create an ordinary Agent Workbench session and ensure <bot_soul> is NOT leaked into it.
+      // Fresh / upgraded v2 state has ZERO fake demo conversations, spaces, approvals, or tasks
+      expect(snap.sideThreads).toHaveLength(0);
+      expect(snap.activityGroups).toHaveLength(0);
+      expect(snap.pendingApprovals).toHaveLength(0);
+      expect(snap.recentApprovals).toHaveLength(0);
+      expect(snap.feed).toHaveLength(0);
+      expect(snap.goals).toHaveLength(0);
+      expect(snap.spaces).toHaveLength(0);
+      expect(snap.embeddedTasks).toHaveLength(0);
+      expect(snap.documents).toHaveLength(0);
+      const mainSess = await host.ctx.sessions.get(snap.mainSessionId);
+      expect(mainSess?.state().messages ?? []).toHaveLength(0);
+
+      // Ordinary Agent Workbench sessions never receive <bot_soul>
       const agentSession = host.ctx.sessions.create({ cwd: dataDir });
       const agentPrompt = await host.ctx.systemPrompt.build({
         sessionId: agentSession.id,
@@ -57,16 +82,40 @@ describe("Host Bot service (bot-mode backend)", () => {
       });
       expect(agentPrompt).not.toContain("<bot_soul>");
 
-      // Ensure <bot_soul> IS injected when running inside the Bot main session once loaded in the plugin store.
-      // Trigger pre-execute on a temporary Bot side thread created directly on host.ctx.
+      // Custom SOUL.md persists across snapshot reset
       const customSoul = "# SOUL\n始终保持简洁温润。";
       store.saveSoul(customSoul);
       expect(store.readSoul()).toBe(customSoul);
 
-      // Side-chat lifecycle
+      // Real files written inside <dataDir>/bot-workspace surface in documents
+      const wsDir = join(dataDir, "bot-workspace");
+      mkdirSync(wsDir, { recursive: true });
+      writeFileSync(join(wsDir, "weekly-notes.md"), "# 本周工作纪要\n真实生成内容", "utf8");
+      const snapWithDocs = await store.snapshot();
+      expect(snapWithDocs.documents.some((d) => d.name === "weekly-notes.md")).toBe(true);
+
+      // Real CRUD for side-chats, spaces, goals, and approvals
       const side = await store.createSideChat("算力比价旁聊");
-      expect(side.title).toBe("算力比价旁聊");
       expect((await store.snapshot()).sideThreads.some((t) => t.id === side.id)).toBe(true);
+
+      const space = await store.createSpace("架构演进看板", "持续追踪核心模块重构");
+      expect((await store.snapshot()).spaces.some((s) => s.id === space.id)).toBe(true);
+      await store.deleteSpace(space.id);
+      expect((await store.snapshot()).spaces.some((s) => s.id === space.id)).toBe(false);
+
+      const goal = await store.createGoal("降低单测耗时", "工程效率");
+      expect((await store.snapshot()).goals.some((g) => g.id === goal.id)).toBe(true);
+      await store.deleteGoal(goal.id);
+      expect((await store.snapshot()).goals.some((g) => g.id === goal.id)).toBe(false);
+
+      const approval = await store.enqueueApproval({
+        title: "执行外部发布脚本",
+        commandSignature: "bash ./publish.sh",
+        summary: "推送构建产物到归档目录",
+      });
+      expect((await store.snapshot()).pendingApprovals.some((a) => a.id === approval.id)).toBe(true);
+      const resolved = await store.resolveApproval(approval.id, "denied");
+      expect(resolved.decision).toBe("denied");
 
       // Virtual Server sleep -> reset-snapshot preserves custom SOUL.md
       const slept = await store.performServerAction("sleep");
@@ -76,19 +125,31 @@ describe("Host Bot service (bot-mode backend)", () => {
       expect(reset.virtualServer.lifecycle).toBe("running");
       expect(store.readSoul()).toBe(customSoul);
 
-      // Approval resolution & handoff completion
-      const pendingId = snap.pendingApprovals[0]?.id;
-      expect(pendingId).toBeTruthy();
-      if (pendingId !== undefined) {
-        const resolved = await store.resolveApproval(pendingId, "approved");
-        expect(resolved.decision).toBe("approved");
+      // Real TCP probe against ephemeral localhost socket
+      const tcpServer = createServer((sock) => sock.end());
+      await new Promise<void>((resolve) => tcpServer.listen(0, "127.0.0.1", () => resolve()));
+      const addr = tcpServer.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+      try {
+        await store.configureVirtualServer({ mode: "remote", remoteHost: "127.0.0.1", remotePort: port });
+        const probeRes = await store.performServerAction("test-remote");
+        expect(probeRes.ok).toBe(true);
+        expect(probeRes.virtualServer.lifecycle).toBe("running");
+        expect(typeof probeRes.virtualServer.latencyMs).toBe("number");
+      } finally {
+        await new Promise<void>((resolve) => tcpServer.close(() => resolve()));
       }
 
+      // Handoff completion & full data reset
       const handoffAct = await store.completeHandoff({
-        handoffId: "handoff-pr-142",
-        summary: "已在独立副本通过全部 42 项回归单测",
+        handoffId: "handoff-real-task",
+        summary: "已在工作台完成重构验证",
       });
-      expect(handoffAct.description).toContain("42 项");
+      expect(handoffAct.description).toContain("重构验证");
+
+      const resetSnap = await store.resetAllBotData();
+      expect(resetSnap.sideThreads).toHaveLength(0);
+      expect(resetSnap.activityGroups).toHaveLength(0);
     } finally {
       await host.stop();
     }

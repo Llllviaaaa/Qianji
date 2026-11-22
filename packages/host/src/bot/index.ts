@@ -1,11 +1,5 @@
 /**
  * Built-in Host `bot` Cordis plugin (`packages/host/src/bot/index.ts`).
- *
- * Provides:
- * - `<bot-soul>` system prompt section scoped strictly to Bot sessions (`bot-main` & `bot-side`).
- * - `tools/pre-execute` interception queuing external write operations (`gh pr comment`, `git push`,
- *   mail send, etc.) on Bot sessions into the non-intrusive Bot Approvals queue.
- * - Full `bot.*` JSON-RPC 2.0 control & query surface + `bot/updated` live broadcast.
  */
 import type { Context } from "@deepseek-ai/cordis";
 import {
@@ -16,6 +10,7 @@ import {
   type BotServerMode,
 } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
+import "@qianji/agent";
 import "@qianji/session";
 import { SectionOrder } from "@qianji/system-prompt";
 import "@qianji/tools";
@@ -71,7 +66,14 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
     { order: SectionOrder.guidelines + 10 },
   );
 
-  // 2. Queue external side-effect shell commands in Bot sessions into the Approvals inbox.
+  // 2. Record real activity whenever a Bot session turn settles.
+  ctx.on("agent/settled", async (session) => {
+    if (!store.isBotSession(session.id)) return;
+    await store.recordSettledTurn(session);
+    ctx.rpc?.broadcast("bot/updated", { reason: "turn-settled", sessionId: session.id });
+  });
+
+  // 3. Queue external side-effect shell commands in Bot sessions into the Approvals inbox.
   ctx.on(
     "tools/pre-execute",
     async (call, env) => {
@@ -80,12 +82,15 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
       const cmd = typeof call.args.command === "string" ? call.args.command.trim() : "";
       if (cmd === "" || !EXTERNAL_SIDE_EFFECT_RE.test(cmd)) return undefined;
 
-      const approval = await store.enqueueApproval({
-        title: `执行外部操作：${cmd.slice(0, 48)}`,
-        commandSignature: `${cmd.slice(0, 64)} · 外部写操作`,
-        summary: "分身请求执行具有外部影响的命令，已自动挂入右侧「批准」栏等待确认，不会擅自打断你。",
-        sessionId: env.sessionId,
-      });
+      const approval = await store.enqueueApproval(
+        {
+          title: `执行外部操作：${cmd.slice(0, 48)}`,
+          commandSignature: `${cmd.slice(0, 64)} · 外部写操作`,
+          summary: "分身请求执行具有外部影响的命令，已自动挂入右侧「批准」栏等待你的确认。",
+          sessionId: env.sessionId,
+        },
+        cmd,
+      );
       ctx.rpc?.broadcast("bot/updated", { reason: "approval-queued", approvalId: approval.id });
       return {
         deny: true,
@@ -95,7 +100,7 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
     true,
   );
 
-  // 3. Register JSON-RPC 2.0 `bot.*` methods whenever `rpc` service is mounted.
+  // 4. Register JSON-RPC 2.0 `bot.*` methods whenever `rpc` service is mounted.
   ctx.inject(["rpc"], (rpcCtx) => {
     const notifyUpdated = (reason: string) => {
       rpcCtx.rpc.broadcast("bot/updated", { reason, ts: Date.now() });
@@ -165,6 +170,13 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
       return { space };
     });
 
+    rpcCtx.rpc.method("bot.spaces.delete", async (raw) => {
+      const p = asObject(raw);
+      await store.deleteSpace(reqString(p, "id"));
+      notifyUpdated("space-deleted");
+      return { ok: true };
+    });
+
     rpcCtx.rpc.method("bot.goals.create", async (raw) => {
       const p = asObject(raw);
       const goal = await store.createGoal(
@@ -173,6 +185,24 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
       );
       notifyUpdated("goal-created");
       return { goal };
+    });
+
+    rpcCtx.rpc.method("bot.goals.delete", async (raw) => {
+      const p = asObject(raw);
+      await store.deleteGoal(reqString(p, "id"));
+      notifyUpdated("goal-deleted");
+      return { ok: true };
+    });
+
+    rpcCtx.rpc.method("bot.feed.create", async (raw) => {
+      const p = asObject(raw);
+      const item = await store.createFeedItem(
+        reqString(p, "title"),
+        reqString(p, "body"),
+        typeof p.seedPrompt === "string" ? p.seedPrompt : undefined,
+      );
+      notifyUpdated("feed-created");
+      return { item };
     });
 
     rpcCtx.rpc.method("bot.inbox.enable", async () => {
@@ -190,6 +220,10 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
 
     rpcCtx.rpc.method("bot.server.configure", async (raw) => {
       const p = asObject(raw);
+      const addFolder =
+        p.sharedFolderAdd && typeof p.sharedFolderAdd === "object" && !Array.isArray(p.sharedFolderAdd)
+          ? (p.sharedFolderAdd as { path?: unknown; access?: unknown })
+          : undefined;
       const virtualServer = await store.configureVirtualServer({
         ...(p.mode === "local" || p.mode === "remote" ? { mode: p.mode as BotServerMode } : {}),
         ...(typeof p.cpuCores === "number" ? { cpuCores: p.cpuCores } : {}),
@@ -200,6 +234,15 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
         ...(typeof p.remotePort === "number" ? { remotePort: p.remotePort } : {}),
         ...(typeof p.remoteUser === "string" ? { remoteUser: p.remoteUser } : {}),
         ...(typeof p.remoteWorkDir === "string" ? { remoteWorkDir: p.remoteWorkDir } : {}),
+        ...(addFolder && typeof addFolder.path === "string"
+          ? {
+              sharedFolderAdd: {
+                path: addFolder.path,
+                access: addFolder.access === "read-only" ? "read-only" : "isolated-copy",
+              },
+            }
+          : {}),
+        ...(typeof p.sharedFolderRemove === "string" ? { sharedFolderRemove: p.sharedFolderRemove } : {}),
       });
       notifyUpdated("server-configured");
       return { virtualServer };
@@ -214,6 +257,12 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
       const res = await store.performServerAction(action);
       notifyUpdated("server-action");
       return res;
+    });
+
+    rpcCtx.rpc.method("bot.data.reset", async () => {
+      const snap = await store.resetAllBotData();
+      notifyUpdated("data-reset");
+      return snap;
     });
 
     rpcCtx.rpc.method("bot.handoff.complete", async (raw): Promise<BotHandoffCompleteResult> => {

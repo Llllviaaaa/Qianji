@@ -62,8 +62,7 @@ export function CoreShellModeSwitch({ ctx }: { readonly ctx?: Context }): ReactE
         className={`qj-mode-pill-btn${mode === "agent" ? " active" : ""}`}
         onClick={() => navigationService?.setShellMode("agent")}
       >
-        <span className="qj-mode-pill-dot" aria-hidden="true" />
-        <span>Agent</span>
+        Agent
       </button>
       <button
         type="button"
@@ -73,8 +72,7 @@ export function CoreShellModeSwitch({ ctx }: { readonly ctx?: Context }): ReactE
         className={`qj-mode-pill-btn${mode === "bot" ? " active" : ""}`}
         onClick={() => navigationService?.setShellMode("bot")}
       >
-        <span className="qj-mode-pill-dot" aria-hidden="true" />
-        <span>Bot</span>
+        Bot
       </button>
     </div>
   );

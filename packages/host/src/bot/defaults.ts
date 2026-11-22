@@ -1,5 +1,9 @@
 /**
- * Default seed data and templates for `<dataDir>/bot/` (`@qianji/host` Bot service).
+ * Clean initial state templates for `<dataDir>/bot/` (`@qianji/host` Bot service).
+ *
+ * Strictly contains ZERO fake conversation logs, fake PR numbers, or demo artifacts:
+ * user-owned collections (threads, activities, approvals, feed, goals, spaces,
+ * documents, media, inbox) start clean and populate only from real actions & files.
  */
 import type {
   BotActivityGroup,
@@ -24,13 +28,13 @@ export const MAX_SOUL_BYTES = 128 * 1024;
 
 export const DEFAULT_SOUL_MARKDOWN = `# SOUL — 千机核心人格契约
 
-- 温和、克制、直奔重点：后台巡检无异常时保持静默，绝不在主聊天发送无意义刷屏通知。
-- 本地与虚拟服务器安全优先：绝不擅自改动用户当前正在编写的主分支；凡涉及代码试修，一律在独立隔离副本中准备草案，等用户进入工作台审阅。
-- 敏感写操作必经批准：凡涉及对外评论、发邮件、推送受保护分支或删除重要数据，一律挂入右侧「批准」栏等待用户拍板。
+- 温和、克制、直奔重点：后台巡检无异常时保持静默，不在无异常时发通知打扰你。
+- 本地与虚拟服务器安全优先：涉及代码试修时优先在独立隔离环境中准备方案，不擅自改动你正在编写的主分支。
+- 敏感写操作必经批准：遇到对外评论、发送邮件、推送分支或删除重要文件时，始终先挂入右侧「批准」栏请求你的确认。
 `;
 
 export interface PersistedBotState {
-  version: 1;
+  version: 2;
   mainSessionId: string;
   profile: BotProfile;
   sideThreads: BotSideThreadInfo[];
@@ -71,6 +75,73 @@ export function formatClock(ts = Date.now()): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+export const STARTER_IDEA_SECTIONS: BotIdeaSection[] = [
+  {
+    category: null,
+    items: [
+      {
+        id: "idea-health-check",
+        icon: "✓",
+        title: "给你一份验证过的本地仓库健康度清单",
+        description: "等你忙完手头代码，我可以按顺序核实当前工作区的未提交分支、依赖状态与测试结果，给你一份状态清楚的总结。",
+        seedPrompt: "帮我检查当前工作区的未提交变更、分支状态与测试健康度，整理一份清晰的总结清单。",
+      },
+      {
+        id: "idea-space-board",
+        icon: "❖",
+        title: "我可以为你构建个人千机面板，把我处理的所有事项集中在一处展示",
+        description: "无需繁琐配置。需要你拍板的事项置顶显示，每天早上静默刷新。",
+        seedPrompt: "我想创建一个空间，关于 每日待拍板事项与工作推进看板",
+      },
+      {
+        id: "idea-cost-plan",
+        icon: "$",
+        title: "我可以按真实对话习惯梳理多模型怎么搭配最省心省钱",
+        description: "结合日常问答、深度长文与代码推理场景，规划主力模型与高性价比轻量模型的分工建议。",
+        seedPrompt: "帮我规划一套兼顾响应速度、推理质量与调用成本的多模型日常搭配方案。",
+      },
+    ],
+  },
+  {
+    category: "开发与工作区",
+    items: [
+      {
+        id: "idea-pre-pr",
+        icon: "⑂",
+        title: "提交合并前，自动在隔离环境跑完门禁并生成变更摘要",
+        description: "自动执行类型检查、代码规范与单测校验，完全不打乱你当前正在编辑的文件。",
+        seedPrompt: "帮我梳理当前项目的提交前门禁检查步骤，并生成本次改动的变更摘要。",
+      },
+      {
+        id: "idea-watch-ci",
+        icon: "✦",
+        title: "监测重点任务与异常日志，并在第一时间备好排查草案",
+        description: "把需要盯守的目标交给我。只有真正出现异常时才提醒你，并附上可直接切入工作台的排查线索。",
+        seedPrompt: "帮我制定一份重点仓库与构建异常的定时巡检计划。",
+      },
+    ],
+  },
+  {
+    category: "效率提升",
+    items: [
+      {
+        id: "idea-morning-brief",
+        icon: "☀",
+        title: "把一整天的安排整理成清爽早报，不用一早翻零散通知",
+        description: "一页汇集待办重点、长期目标进度与关注资讯，每天早上准时就绪。",
+        seedPrompt: "我们来定制一份适合我节奏的每日清爽早报模板。",
+      },
+      {
+        id: "idea-overnight-research",
+        icon: "☾",
+        title: "在休息前把长耗时调研交给我，整理好对比结论等你拍板",
+        description: "搜集技术资料、对比方案优劣、汇总成结构化文档并归档进资源库。",
+        seedPrompt: "帮我针对以下主题做一次深度对比调研，并把结论整理成结构化报告：",
+      },
+    ],
+  },
+];
+
 export function buildDefaultBotState(options: {
   mainSessionId: string;
   defaultCwd: string;
@@ -78,18 +149,8 @@ export function buildDefaultBotState(options: {
   avatarPreset?: string;
 }): PersistedBotState {
   const now = Date.now();
-  const handoffTask: BotTaskHandoffPayload = {
-    id: "handoff-pr-142",
-    title: "PR #142 CI 巡检与修复草案",
-    kindLabel: "定时任务",
-    summary: "检测到 PR #142 有一项并发队列回归异常，已在独立安全副本备好修复草案，主工作区保持干净。",
-    targetCwd: options.defaultCwd,
-    highlightFile: "packages/host/src/plugin-watchers.ts",
-    highlightLine: 118,
-  };
-
   return {
-    version: 1,
+    version: 2,
     mainSessionId: options.mainSessionId,
     profile: {
       displayName: options.displayName?.trim() || "千机",
@@ -97,233 +158,41 @@ export function buildDefaultBotState(options: {
     },
     sideThreads: [],
     soulUpdatedAt: formatShortDate(now),
-    learnedPreferences: [
-      "代码改写草案一律在独立隔离副本中准备，不直接改动主分支",
-      "后台 Heartbeat 巡检无异常时保持静默，不弹打扰通知",
-      "涉及外部评论或邮件发送时统一挂入右侧「批准」栏",
-    ],
-    activityGroups: [
-      {
-        date: "今天",
-        items: [
-          {
-            id: "act-1",
-            dateGroup: "今天",
-            title: "巡检重点仓库构建与测试状态",
-            description: "Prepared isolated fix draft and queued PR #142 summary widget",
-            timeLabel: formatClock(now - 20 * 60_000),
-            createdAt: now - 20 * 60_000,
-            handoff: handoffTask,
-          },
-        ],
-      },
-      {
-        date: "昨天",
-        items: [
-          {
-            id: "act-2",
-            dateGroup: "昨天",
-            title: "核查多模型前缀缓存命中与成本指标",
-            description: "Verified 74.2% prompt cache hit rate across recent long sessions",
-            timeLabel: "09:58",
-            createdAt: now - 86_400_000,
-          },
-          {
-            id: "act-3",
-            dateGroup: "昨天",
-            title: "清理过期工具溢出缓存目录",
-            description: "Reclaimed 428 MB from temporary spill output directory",
-            timeLabel: "08:30",
-            createdAt: now - 90_000_000,
-          },
-        ],
-      },
-    ],
-    pendingApprovals: [
-      {
-        id: "apr-pr-142",
-        title: "发布 GitHub PR #142 诊断摘要评论",
-        commandSignature: "gh pr comment 142 · 外部写操作",
-        summary: "向仓库 PR #142 发送并发队列根因说明，不会推送代码或改动任何分支。",
-        createdAt: now - 15 * 60_000,
-        expiresAt: now + 86_400_000 * 3,
-      },
-    ],
-    recentApprovals: [
-      {
-        id: "apr-wt-auto",
-        title: "创建独立隔离副本 (fix/pr-142)",
-        summary: "今天 · 虚拟服务器安全白名单自动放行",
-        decision: "auto-allowed",
-        timeLabel: "已允许",
-        resolvedAt: now - 18 * 60_000,
-      },
-    ],
-    feed: [
-      {
-        id: "feed-1",
-        title: "重点仓库新增高并发热重载回归压测",
-        timeLabel: "2小时前",
-        body: "最新构建验证了双文件监听器同时完成周期时，增量任务队列不会丢失后续入队项，42 项核心单测全部通过。",
-        actionLabel: "讨论",
-        seedPrompt: "帮我详细梳理最新高并发热重载回归压测覆盖了哪些边界情况",
-        createdAt: now - 7_200_000,
-      },
-      {
-        id: "feed-2",
-        title: "本周多模型缓存命中率提升至 74.2%",
-        timeLabel: "5小时前",
-        body: "过去 7 天长对话上下文命中稳定，单轮综合调用开销较无缓存基准下降约 72%，未出现前缀失效波动。",
-        actionLabel: "开始吧",
-        seedPrompt: "把本周模型缓存命中与节省明细整理成一份简明周报",
-        createdAt: now - 18_000_000,
-      },
-    ],
-    ideaSections: [
-      {
-        category: null,
-        items: [
-          {
-            id: "idea-1",
-            icon: "✓",
-            title: "给你一份验证过的本地项目健康度清单",
-            description: "等你忙完手头任务，我可以按顺序核实各仓库未提交分支、过时依赖与测试耗时，输出一页清晰总结。",
-            seedPrompt: "帮我巡检当前工作区的未提交变更与项目健康度，整理成简明清单",
-          },
-          {
-            id: "idea-2",
-            icon: "❖",
-            title: "构建个人常驻千机面板，把待拍板事项集中在一处展示",
-            description: "无需繁琐配置，需要你确认的事项置顶显示，每天早上自动静默刷新。",
-            seedPrompt: "我想创建一个空间，关于 每日待拍板事项与项目健康脉冲面板",
-          },
-          {
-            id: "idea-3",
-            icon: "$",
-            title: "按近期真实对话轨迹测算多模型怎么搭配最省成本",
-            description: "结合最近 7 天上下文规模，对比不同主力模型与缓存策略下的真实账单。",
-            seedPrompt: "帮我分析近期会话的模型用量与缓存省钱搭配建议",
-          },
-        ],
-      },
-      {
-        category: "开发与工作区",
-        items: [
-          {
-            id: "idea-4",
-            icon: "⑂",
-            title: "提交合并前，自动在独立虚拟副本跑完门禁并生成摘要",
-            description: "自动执行类型检查、代码规范、单测与文档链接校验，丝毫不打扰你正在编写的文件。",
-            seedPrompt: "帮我配置提交前的门禁自动巡检清单并生成变更摘要",
-          },
-        ],
-      },
-      {
-        category: "效率提升",
-        items: [
-          {
-            id: "idea-5",
-            icon: "☀",
-            title: "把一整天的重点整理成清爽早报，不用一早翻零散通知",
-            description: "一页汇总待审事项、构建结果与今日目标，每天早上准时就绪。",
-            seedPrompt: "帮我定制每日 08:30 清爽早报的关注维度",
-          },
-        ],
-      },
-    ],
-    goals: [
-      {
-        id: "goal-1",
-        title: "核心插件热重载与模块边界零回归",
-        category: "职业与研发",
-        summary: "持续追踪门禁单测与 PR #142 修复草案；等待你在 Agent 工作台中审阅确认。",
-        status: "active",
-        updatedAt: now - 600_000,
-        handoff: handoffTask,
-      },
-    ],
-    spaces: [
-      {
-        id: "space-1",
-        title: "PR #142 巡检与并发回归脉冲",
-        description: "实时追踪并发队列修复进度、门禁单测通过率与待审评论状态",
-        metricBadge: "42 / 42 通过",
-        updatedLabel: "15分钟前",
-        updatedAt: now - 900_000,
-        handoff: handoffTask,
-      },
-      {
-        id: "space-2",
-        title: "多模型缓存命中与成本看板",
-        description: "汇总长会话前缀缓存命中率与周度成本节省趋势",
-        metricBadge: "74.2% 命中",
-        updatedLabel: "昨天",
-        updatedAt: now - 86_400_000,
-      },
-    ],
-    documents: [
-      {
-        id: "doc-1",
-        name: "PR-142-并发队列竞态诊断报告.md",
-        updatedLabel: "今天",
-        sizeLabel: "4.2 KB",
-        content: "# PR #142 并发队列竞态诊断\n\n定位到双事件同周期完成时的清理时序问题，已在独立副本准备好代际计数修复方案。",
-        updatedAt: now - 900_000,
-      },
-      {
-        id: "doc-2",
-        name: "多模型前缀缓存周度成本分析.md",
-        updatedLabel: "昨天",
-        sizeLabel: "6.8 KB",
-        content: "# 多模型缓存周度报告\n\n过去 7 天平均命中率 74.2%，有效降低长会话重复前缀开销。",
-        updatedAt: now - 86_400_000,
-      },
-    ],
+    learnedPreferences: [],
+    activityGroups: [],
+    pendingApprovals: [],
+    recentApprovals: [],
+    feed: [],
+    ideaSections: STARTER_IDEA_SECTIONS,
+    goals: [],
+    spaces: [],
+    documents: [],
     media: [],
     inboxEnabled: false,
-    inboxAddress: "qianji.bot@local.box",
-    inboxItems: [
-      {
-        id: "mail-1",
-        sender: "GitHub Actions",
-        subject: "[Qianji] PR #142 check suite summary",
-        preview: "1 check requires attention in plugin-watchers concurrent flush suite.",
-        timeLabel: "15:19",
-        unread: true,
-        createdAt: now - 1_200_000,
-      },
-      {
-        id: "mail-2",
-        sender: "Workspace Digest",
-        subject: "本周缓存命中与工作区健康周报已生成",
-        preview: "全部核心门禁保持通过，缓存命中率稳定在 74.2%。",
-        timeLabel: "昨天",
-        unread: false,
-        createdAt: now - 86_400_000,
-      },
-    ],
+    inboxAddress: "qianji@bot.local",
+    inboxItems: [],
     connectors: [
-      { id: "git-local", name: "本地工作区副本", description: "受控共享目录与独立副本读写保护", enabled: true },
-      { id: "github", name: "GitHub", description: "PR / Issues / Actions 状态巡检", enabled: true },
-      { id: "browser-vm", name: "虚拟服务器专属浏览器", description: "在隔离环境内静默浏览并支持实时画面人工接管", enabled: true },
-      { id: "calendar", name: "日程与定时提醒", description: "周期性早报与待办节点提醒", enabled: false },
+      { id: "git-local", name: "本地 Git 工作区", description: "受控共享目录与独立隔离副本保护", enabled: true },
+      { id: "github", name: "GitHub", description: "PR / Issues / Actions 状态只读监听", enabled: false },
+      { id: "browser-vm", name: "CDP 隔离浏览器", description: "按会话隔离浏览器自动化与实时人工接管", enabled: true },
+      { id: "calendar", name: "日历与提醒", description: "本地定时任务与每日早报投递", enabled: true },
     ],
     virtualServer: {
       mode: "local",
       lifecycle: "running",
-      uptimeLabel: "已连续运行 3天 14小时",
+      uptimeLabel: "运行中",
       local: {
         cpuCores: 2,
-        cpuUsagePercent: 8,
-        memoryUsedGb: 1.4,
+        cpuUsagePercent: 2,
+        memoryUsedGb: 0.2,
         memoryLimitGb: 4,
-        diskUsedGb: 6.2,
+        diskUsedGb: 0.01,
         diskLimitGb: 32,
         autoSleepIdle: true,
         sharedFolders: options.defaultCwd
           ? [{ path: options.defaultCwd, access: "isolated-copy" }]
           : [],
-        lastSnapshotAt: now - 86_400_000,
+        lastSnapshotAt: now,
       },
       remote: {
         alias: "远端常驻虚拟服务器",
@@ -333,9 +202,9 @@ export function buildDefaultBotState(options: {
         workDir: "~/.qianji-vm",
         initialized: false,
       },
-      liveViewTaskTitle: "虚拟服务器专属浏览器 · 空闲待命",
+      liveViewTaskTitle: "虚拟服务器受控环境空闲待命",
       takeoverRequired: false,
     },
-    embeddedTasks: [handoffTask],
+    embeddedTasks: [],
   };
 }
