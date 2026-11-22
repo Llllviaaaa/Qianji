@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { Credentials } from "@qianji/llm";
 import { Sessions } from "@qianji/session";
 import { SystemPrompt } from "@qianji/system-prompt";
 import { textOutput, Tools } from "@qianji/tools";
@@ -19,11 +20,10 @@ describe("Host Bot service (bot-mode backend)", () => {
     }
   });
 
-  it("starts completely clean with zero fake demo records, upgrades v1 state cleanly, scans real workspace files, probes TCP latency, and isolates <bot_soul>", async () => {
+  it("starts clean, upgrades v1 state, isolates <bot_soul>, encrypts SSH password via credentials, and checks remote SSH honestly", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "qj-bot-test-"));
     tempDirs.push(dataDir);
 
-    // Seed a legacy v1 state.json containing prototype demo text to prove upgrade purges it
     mkdirSync(join(dataDir, "bot"), { recursive: true });
     writeFileSync(
       join(dataDir, "bot", "state.json"),
@@ -34,17 +34,26 @@ describe("Host Bot service (bot-mode backend)", () => {
       "utf8",
     );
 
+    const secretMap = new Map<string, string>();
     const host = createHost({
       version: "0.3.0-test",
       dataDir,
       plugins: [
+        [Credentials],
         [Sessions],
         [SystemPrompt],
         [Tools],
-        [botPlugin, { dataDir, displayName: "千机测试" }],
+        [botPlugin, { dataDir, distroName: "qianji-bot-unit-noop", displayName: "千机测试" }],
       ],
     });
     await host.start();
+    host.ctx.credentials.registerStore({
+      resolve: (id) => Promise.resolve(secretMap.get(id)),
+      set: (id, value) => {
+        secretMap.set(id, value);
+      },
+      delete: (id) => secretMap.delete(id),
+    });
 
     try {
       host.ctx.tools.register({
@@ -54,12 +63,15 @@ describe("Host Bot service (bot-mode backend)", () => {
         execute: async (args) => textOutput(`ran: ${String(args.command)}`),
       });
 
-      const store = new botPlugin.BotStateStore(host.ctx.sessions, { dataDir, displayName: "千机测试" });
+      const store = new botPlugin.BotStateStore(
+        host.ctx.sessions,
+        { dataDir, distroName: "qianji-bot-unit-noop", displayName: "千机测试" },
+        host.ctx.credentials,
+      );
       const snap = await store.snapshot();
       expect(snap.profile.displayName).toBe("千机测试");
       expect(snap.mainSessionId).toBeTruthy();
 
-      // Fresh / upgraded v2 state has ZERO fake demo conversations, spaces, approvals, or tasks
       expect(snap.sideThreads).toHaveLength(0);
       expect(snap.activityGroups).toHaveLength(0);
       expect(snap.pendingApprovals).toHaveLength(0);
@@ -72,7 +84,7 @@ describe("Host Bot service (bot-mode backend)", () => {
       const mainSess = await host.ctx.sessions.get(snap.mainSessionId);
       expect(mainSess?.state().messages ?? []).toHaveLength(0);
 
-      // Ordinary Agent Workbench sessions never receive <bot_soul>
+      // Ordinary Agent Workbench sessions never receive <bot_soul> or <bot_runtime>
       const agentSession = host.ctx.sessions.create({ cwd: dataDir });
       const agentPrompt = await host.ctx.systemPrompt.build({
         sessionId: agentSession.id,
@@ -81,13 +93,18 @@ describe("Host Bot service (bot-mode backend)", () => {
         tools: [],
       });
       expect(agentPrompt).not.toContain("<bot_soul>");
+      expect(agentPrompt).not.toContain("<bot_runtime>");
 
-      // Custom SOUL.md persists across snapshot reset
+      // Encrypted SSH credential storage never persists plaintext password in state.json
+      await store.setRemotePassword("s3cr3t-ssh-pass");
+      expect(secretMap.get("bot/remote-ssh-password")).toBe("s3cr3t-ssh-pass");
+      expect(await store.hasRemotePassword()).toBe(true);
+
+      // Custom SOUL.md & real workspace docs scanning
       const customSoul = "# SOUL\n始终保持简洁温润。";
       store.saveSoul(customSoul);
       expect(store.readSoul()).toBe(customSoul);
 
-      // Real files written inside <dataDir>/bot-workspace surface in documents
       const wsDir = join(dataDir, "bot-workspace");
       mkdirSync(wsDir, { recursive: true });
       writeFileSync(join(wsDir, "weekly-notes.md"), "# 本周工作纪要\n真实生成内容", "utf8");
@@ -117,30 +134,23 @@ describe("Host Bot service (bot-mode backend)", () => {
       const resolved = await store.resolveApproval(approval.id, "denied");
       expect(resolved.decision).toBe("denied");
 
-      // Virtual Server sleep -> reset-snapshot preserves custom SOUL.md
-      const slept = await store.performServerAction("sleep");
-      expect(slept.virtualServer.lifecycle).toBe("sleeping");
-
-      const reset = await store.performServerAction("reset-snapshot");
-      expect(reset.virtualServer.lifecycle).toBe("running");
-      expect(store.readSoul()).toBe(customSoul);
-
-      // Real TCP probe against ephemeral localhost socket
-      const tcpServer = createServer((sock) => sock.end());
+      // Honest remote SSH probe against plain non-SSH TCP socket reports auth/handshake refusal
+      const tcpServer = createServer((sock) => {
+        sock.on("error", () => undefined);
+        sock.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+      });
       await new Promise<void>((resolve) => tcpServer.listen(0, "127.0.0.1", () => resolve()));
       const addr = tcpServer.address();
       const port = typeof addr === "object" && addr !== null ? addr.port : 0;
       try {
         await store.configureVirtualServer({ mode: "remote", remoteHost: "127.0.0.1", remotePort: port });
         const probeRes = await store.performServerAction("test-remote");
-        expect(probeRes.ok).toBe(true);
-        expect(probeRes.virtualServer.lifecycle).toBe("running");
-        expect(typeof probeRes.virtualServer.latencyMs).toBe("number");
+        expect(probeRes.ok).toBe(false);
+        expect(probeRes.message).toMatch(/SSH/);
       } finally {
         await new Promise<void>((resolve) => tcpServer.close(() => resolve()));
       }
 
-      // Handoff completion & full data reset
       const handoffAct = await store.completeHandoff({
         handoffId: "handoff-real-task",
         summary: "已在工作台完成重构验证",

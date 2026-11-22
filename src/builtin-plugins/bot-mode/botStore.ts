@@ -8,6 +8,7 @@ import { useFrontendService } from "@qianji/client";
 import type {
   BotAvatarPresetId,
   BotDocumentItem,
+  BotRemoteAuthMethod,
   BotServerActionKind,
   BotServerActionResult,
   BotServerMode,
@@ -69,6 +70,7 @@ export interface BotUiState {
   readonly scheduledTasks: readonly BotScheduledSummary[];
   readonly memoryContent: string;
   readonly serverFeedback: string | null;
+  readonly serverBusy: boolean;
   readonly activeDoc: BotDocumentItem | null;
   readonly activeSpace: BotSpaceSummary | null;
 }
@@ -91,6 +93,7 @@ export const INITIAL_BOT_UI_STATE: BotUiState = {
   scheduledTasks: [{ id: "heartbeat", name: "Heartbeat", cronOrInterval: "每30分钟", enabled: true }],
   memoryContent: "",
   serverFeedback: null,
+  serverBusy: false,
   activeDoc: null,
   activeSpace: null,
 };
@@ -350,6 +353,9 @@ export function useBotController(ctx?: Context) {
       remotePort?: number;
       remoteUser?: string;
       remoteWorkDir?: string;
+      remoteAuthMethod?: BotRemoteAuthMethod;
+      remotePrivateKeyPath?: string;
+      remotePassword?: string;
       sharedFolderAdd?: { path: string; access: "read-only" | "isolated-copy" };
       sharedFolderRemove?: string;
     }) => {
@@ -361,15 +367,19 @@ export function useBotController(ctx?: Context) {
 
   const runServerAction = useCallback(
     async (action: BotServerActionKind) => {
+      patchBotUi({ serverBusy: true, serverFeedback: action === "provision-local" ? "正在拉取 Alpine rootfs 并初始化独立 WSL2 虚拟机（首次约 10–30 秒）…" : null });
       try {
         const res = await rpcService?.call<BotServerActionResult>("bot.server.action", { action });
         if (res) {
           botDataStore.set((prev) => ({ ...prev, virtualServer: res.virtualServer }));
-          patchBotUi({ serverFeedback: res.message });
+          patchBotUi({ serverFeedback: res.message, serverBusy: false });
           navigationService?.showToast(res.message, res.ok ? "info" : "warning");
+        } else {
+          patchBotUi({ serverBusy: false });
         }
-      } catch {
-        patchBotUi({ serverFeedback: "操作执行失败，请检查后台服务状态" });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "操作执行失败，请检查后台服务状态";
+        patchBotUi({ serverFeedback: msg, serverBusy: false });
       }
     },
     [navigationService, rpcService],

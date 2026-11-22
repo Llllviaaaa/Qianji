@@ -38,7 +38,7 @@ export function BotChatColumn(props: { readonly ctx?: Context; readonly cwd: str
           isolated: false,
           autoStart: true,
           cwd: effectiveCwd,
-          permissionMode: "workspace-write",
+          permissionMode: "full-access",
           agentMode: "agent",
           ...(sessionSnap?.model ? { model: sessionSnap.model } : {}),
         }

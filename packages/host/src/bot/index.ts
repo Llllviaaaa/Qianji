@@ -2,10 +2,12 @@
  * Built-in Host `bot` Cordis plugin (`packages/host/src/bot/index.ts`).
  */
 import type { Context } from "@deepseek-ai/cordis";
+import type { Credentials } from "@qianji/llm";
 import {
   ErrorCode,
   type BotAvatarPresetId,
   type BotHandoffCompleteResult,
+  type BotRemoteAuthMethod,
   type BotServerActionKind,
   type BotServerMode,
 } from "@qianji/protocol";
@@ -15,6 +17,7 @@ import "@qianji/session";
 import { SectionOrder } from "@qianji/system-prompt";
 import "@qianji/tools";
 import { BotStateStore, type BotStoreConfig } from "./store.ts";
+import { sharedFolderSlug } from "./wsl-runtime.ts";
 
 export { BotStateStore, type BotStoreConfig };
 export * from "./defaults.ts";
@@ -22,7 +25,8 @@ export * from "./defaults.ts";
 export const name = "qianji-bot";
 export const inject = ["sessions", "systemPrompt", "tools"];
 
-const EXTERNAL_SIDE_EFFECT_RE = /\b(?:gh\s+pr\s+(?:comment|merge|close|review|create)|gh\s+issue\s+(?:comment|create|close)|git\s+push|sendmail|msmtp)\b/i;
+const EXTERNAL_SIDE_EFFECT_RE =
+  /\b(?:gh\s+pr\s+(?:comment|merge|close|review|create)|gh\s+issue\s+(?:comment|create|close)|git\s+push|sendmail|msmtp)\b/i;
 
 type Params = Record<string, unknown>;
 
@@ -46,15 +50,28 @@ const VALID_SERVER_ACTIONS = new Set<BotServerActionKind>([
   "start",
   "sleep",
   "restart",
+  "provision-local",
   "reset-snapshot",
   "test-remote",
   "init-remote",
 ]);
 
 export function apply(ctx: Context, config: BotStoreConfig): void {
-  const store = new BotStateStore(ctx.sessions, config);
+  const credentials = ctx.get("credentials") as Credentials | undefined;
+  const store = new BotStateStore(ctx.sessions, config, credentials);
 
-  // 1. Inject SOUL.md exclusively into Bot-scoped sessions (`bot-main` & `bot-side`).
+  const idleTimer = setInterval(() => {
+    void store.checkIdleAutoSleep().then((slept) => {
+      if (slept) ctx.rpc?.broadcast("bot/updated", { reason: "auto-sleep" });
+    });
+  }, 60_000);
+  idleTimer.unref?.();
+  ctx.effect(() => () => {
+    clearInterval(idleTimer);
+    void store.liveView.close();
+  });
+
+  // 1. Inject SOUL.md + Virtual Server runtime paths exclusively into Bot-scoped sessions.
   ctx.systemPrompt.section(
     "bot-soul",
     (env) => {
@@ -64,6 +81,34 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
       return `<bot_soul>\n${soul}\n</bot_soul>`;
     },
     { order: SectionOrder.guidelines + 10 },
+  );
+
+  ctx.systemPrompt.section(
+    "bot-runtime",
+    async (env) => {
+      if (!store.isBotSession(env.sessionId)) return undefined;
+      const snap = await store.snapshot().catch(() => null);
+      if (!snap) return undefined;
+      const vs = snap.virtualServer;
+      if (vs.mode === "remote" && vs.remote.initialized) {
+        return `<bot_runtime>\nYou are executing inside the user's Remote SSH Virtual Server (${vs.remote.username}@${vs.remote.host}). Working directory: ${vs.remote.workDir}/workspace.\n</bot_runtime>`;
+      }
+      if (vs.local.engine === "wsl2") {
+        const sharedList = vs.local.sharedFolders
+          .map((sf, idx) => `- /shared/${sharedFolderSlug(sf.path, idx)} (${sf.access})`)
+          .join("\n");
+        return [
+          "<bot_runtime>",
+          `You are executing inside an isolated WSL2 Alpine Linux container (${vs.local.distroName ?? "qianji-bot-vm"}).`,
+          "Host Windows drives (/mnt/c, /mnt/d) and host .exe interop are disabled for safety.",
+          "Primary read/write workspace: /workspace (backed by persistent host storage).",
+          sharedList ? `Mounted shared folders:\n${sharedList}` : "No external host folders mounted.",
+          "</bot_runtime>",
+        ].join("\n");
+      }
+      return undefined;
+    },
+    { order: SectionOrder.guidelines + 12 },
   );
 
   // 2. Record real activity whenever a Bot session turn settles.
@@ -100,7 +145,14 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
     true,
   );
 
-  // 4. Register JSON-RPC 2.0 `bot.*` methods whenever `rpc` service is mounted.
+  // 4. Route Bot tool execution into the WSL2 Container / Remote SSH Virtual Server / Bot Browser.
+  ctx.on("tools/execute", async (call, env, next) => {
+    const vmOut = await store.executeToolInVm(call, env);
+    if (vmOut !== undefined) return vmOut;
+    return next();
+  });
+
+  // 5. Register JSON-RPC 2.0 `bot.*` methods whenever `rpc` service is mounted.
   ctx.inject(["rpc"], (rpcCtx) => {
     const notifyUpdated = (reason: string) => {
       rpcCtx.rpc.broadcast("bot/updated", { reason, ts: Date.now() });
@@ -179,10 +231,7 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
 
     rpcCtx.rpc.method("bot.goals.create", async (raw) => {
       const p = asObject(raw);
-      const goal = await store.createGoal(
-        reqString(p, "title"),
-        typeof p.category === "string" ? p.category : "通用",
-      );
+      const goal = await store.createGoal(reqString(p, "title"), typeof p.category === "string" ? p.category : "通用");
       notifyUpdated("goal-created");
       return { goal };
     });
@@ -220,6 +269,9 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
 
     rpcCtx.rpc.method("bot.server.configure", async (raw) => {
       const p = asObject(raw);
+      if (typeof p.remotePassword === "string") {
+        await store.setRemotePassword(p.remotePassword);
+      }
       const addFolder =
         p.sharedFolderAdd && typeof p.sharedFolderAdd === "object" && !Array.isArray(p.sharedFolderAdd)
           ? (p.sharedFolderAdd as { path?: unknown; access?: unknown })
@@ -234,13 +286,12 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
         ...(typeof p.remotePort === "number" ? { remotePort: p.remotePort } : {}),
         ...(typeof p.remoteUser === "string" ? { remoteUser: p.remoteUser } : {}),
         ...(typeof p.remoteWorkDir === "string" ? { remoteWorkDir: p.remoteWorkDir } : {}),
+        ...(p.remoteAuthMethod === "agent-or-key" || p.remoteAuthMethod === "password"
+          ? { remoteAuthMethod: p.remoteAuthMethod as BotRemoteAuthMethod }
+          : {}),
+        ...(typeof p.remotePrivateKeyPath === "string" ? { remotePrivateKeyPath: p.remotePrivateKeyPath } : {}),
         ...(addFolder && typeof addFolder.path === "string"
-          ? {
-              sharedFolderAdd: {
-                path: addFolder.path,
-                access: addFolder.access === "read-only" ? "read-only" : "isolated-copy",
-              },
-            }
+          ? { sharedFolderAdd: { path: addFolder.path, access: addFolder.access === "read-only" ? "read-only" : "isolated-copy" } }
           : {}),
         ...(typeof p.sharedFolderRemove === "string" ? { sharedFolderRemove: p.sharedFolderRemove } : {}),
       });
@@ -257,6 +308,47 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
       const res = await store.performServerAction(action);
       notifyUpdated("server-action");
       return res;
+    });
+
+    rpcCtx.rpc.method("bot.liveView.snapshot", async () => {
+      const snap = await store.snapshot();
+      return store.liveView.getSnapshot(snap.virtualServer);
+    });
+
+    rpcCtx.rpc.method("bot.liveView.navigate", async (raw) => {
+      const p = asObject(raw);
+      const snap = await store.snapshot();
+      return store.liveView.navigate(reqString(p, "url"), snap.virtualServer);
+    });
+
+    rpcCtx.rpc.method("bot.liveView.click", async (raw) => {
+      const p = asObject(raw);
+      const snap = await store.snapshot();
+      return store.liveView.click(Number(p.x ?? 0), Number(p.y ?? 0), snap.virtualServer);
+    });
+
+    rpcCtx.rpc.method("bot.liveView.scroll", async (raw) => {
+      const p = asObject(raw);
+      const snap = await store.snapshot();
+      return store.liveView.scroll(Number(p.deltaX ?? 0), Number(p.deltaY ?? 0), snap.virtualServer);
+    });
+
+    rpcCtx.rpc.method("bot.liveView.type", async (raw) => {
+      const p = asObject(raw);
+      const snap = await store.snapshot();
+      return store.liveView.typeOrPress(
+        {
+          ...(typeof p.text === "string" ? { text: p.text } : {}),
+          ...(typeof p.key === "string" ? { key: p.key } : {}),
+        },
+        snap.virtualServer,
+      );
+    });
+
+    rpcCtx.rpc.method("bot.liveView.execDiag", async (raw) => {
+      const p = asObject(raw);
+      const snap = await store.snapshot();
+      return store.liveView.execDiag(reqString(p, "command"), snap.virtualServer);
     });
 
     rpcCtx.rpc.method("bot.data.reset", async () => {

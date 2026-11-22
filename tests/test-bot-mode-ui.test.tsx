@@ -90,7 +90,7 @@ describe("Bot Mode Frontend Microkernel & Silk Morphing Integration", () => {
     const botHtml = harness.renderHtml();
     expect(botHtml).toContain('data-shell-mode="bot"');
     expect(botHtml).toContain('data-mode="bot"');
-    expect(botHtml).toContain("本地虚拟服务器");
+    expect(botHtml).toContain("WSL2 本地容器");
     // Ensure zero prototype example strings leak into fresh UI
     expect(botHtml).not.toContain("PR #142");
     expect(botHtml).not.toContain("Qianji-Engine");

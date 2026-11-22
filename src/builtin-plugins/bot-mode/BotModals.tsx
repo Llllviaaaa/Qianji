@@ -3,10 +3,10 @@ import { useEffect, useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { useFrontendService } from "@qianji/client";
 import { BotIcon } from "./BotAvatarArt";
+import { BotLiveViewModal } from "./BotLiveViewModal";
 import { BotSearchDialog } from "./BotSearchDialog";
 import { BotSettingsPaneContent } from "./BotSettingsPanes";
 import {
-  openBotModal,
   patchBotUi,
   useBotController,
   useBotSnapshot,
@@ -220,50 +220,7 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
   }
 
   if (ui.modal === "live-view") {
-    return (
-      <div className="qj-bot-modal-backdrop" onClick={closeModal}>
-        <div
-          className="qj-bot-dialog"
-          style={{ width: 560, maxWidth: "92vw", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>虚拟服务器实时画面 · 受控工作环境</span>
-            <CloseCircleBtn label="关闭画面" onClick={closeModal} />
-          </div>
-          <div
-            style={{
-              minHeight: 200,
-              padding: 24,
-              borderRadius: 18,
-              background: "var(--muse-soft-fill)",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              textAlign: "center",
-              gap: 8,
-            }}
-          >
-            <BotIcon name="tabShield" />
-            <strong style={{ fontSize: 14 }}>当前受控运行环境处于安全待命状态</strong>
-            <span style={{ fontSize: 12.5, color: "var(--qj-text-secondary)", maxWidth: 400, lineHeight: 1.6 }}>
-              当分身在虚拟服务器中访问网页遇到登录授权或人机验证时，将在此窗口暂停并请求你手动完成验证，绝不私自绕过安全门禁。
-            </span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <button
-              type="button"
-              className="qj-soft-btn"
-              style={{ height: 34, padding: "0 14px", fontSize: 12, fontWeight: 520 }}
-              onClick={() => openBotModal("settings", "server")}
-            >
-              返回虚拟服务器设置
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    return <BotLiveViewModal ctx={ctx} onClose={closeModal} />;
   }
 
   if (ui.modal === "doc-preview" && ui.activeDoc !== null) {

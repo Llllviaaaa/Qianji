@@ -10,6 +10,7 @@ import { formatShortDate, normalizeAvatarPreset, type PersistedBotState } from "
 
 export interface BotStoreConfig {
   dataDir: string;
+  distroName?: string;
   displayName?: string;
   avatarPreset?: string;
   serverMode?: BotServerMode;

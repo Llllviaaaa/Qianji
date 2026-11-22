@@ -43,11 +43,15 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
   const vs = snapshot.virtualServer;
   const serverLabel =
     vs.mode === "local"
-      ? vs.lifecycle === "sleeping"
-        ? "休眠待命 · 本地虚拟服务器"
-        : "运行中 · 本地虚拟服务器"
+      ? vs.local.engine === "wsl2" && vs.local.engineState === "not-installed"
+        ? "未初始化 · WSL2 容器"
+        : vs.lifecycle === "sleeping" || vs.local.engineState === "stopped"
+          ? "休眠待命 · WSL2 容器"
+          : vs.local.engine === "wsl2"
+            ? "运行中 · WSL2 本地容器"
+            : "运行中 · 宿主机隔离目录"
       : vs.lifecycle === "running"
-        ? "云端守护 · 远端虚拟服务器"
+        ? "云端守护 · 远端 SSH 服务器"
         : "未连接 · 远端虚拟服务器";
   const dotColor =
     vs.lifecycle === "running"

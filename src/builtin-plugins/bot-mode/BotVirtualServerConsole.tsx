@@ -1,8 +1,5 @@
 /**
- * Local & Remote Virtual Server Console (`虚拟服务器` tab inside Bot Settings).
- *
- * Matches `qianji-dual-mode-hifi.html` 1:1 while driving real Host metrics,
- * controlled shared-folder mounting, snapshot reset, and real TCP latency probes.
+ * Local (WSL2 Container) & Remote (OpenSSH) Virtual Server Console (`虚拟服务器` tab).
  */
 import { useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
@@ -29,18 +26,18 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
   const workspaceService = useFrontendService("workspaceService", ctx);
   const vs = snapshot.virtualServer;
 
-  const [endpointDraft, setEndpointDraft] = useState(
-    vs.remote.host ? `${vs.remote.host}:${vs.remote.port || 22}` : "",
-  );
+  const [shareAccess, setShareAccess] = useState<"read-only" | "isolated-copy">("read-only");
+  const [endpointDraft, setEndpointDraft] = useState(vs.remote.host ? `${vs.remote.host}:${vs.remote.port || 22}` : "");
   const [userDraft, setUserDraft] = useState(vs.remote.username || "ubuntu");
   const [dirDraft, setDirDraft] = useState(vs.remote.workDir || "~/.qianji-vm");
+  const [authMethod, setAuthMethod] = useState<"agent-or-key" | "password">(vs.remote.authMethod ?? "agent-or-key");
+  const [keyPathDraft, setKeyPathDraft] = useState(vs.remote.privateKeyPath ?? "");
+  const [passwordDraft, setPasswordDraft] = useState("");
 
   const handleMountSharedFolder = async () => {
     const picked = await workspaceService?.pickFolder().catch(() => null);
     if (picked && picked.trim() !== "") {
-      await ctrl.configureServer({
-        sharedFolderAdd: { path: picked.trim(), access: "isolated-copy" },
-      });
+      await ctrl.configureServer({ sharedFolderAdd: { path: picked.trim(), access: shareAccess } });
     }
   };
 
@@ -52,30 +49,38 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
       remotePort: port,
       remoteUser: userDraft.trim() || "ubuntu",
       remoteWorkDir: dirDraft.trim() || "~/.qianji-vm",
+      remoteAuthMethod: authMethod,
+      remotePrivateKeyPath: keyPathDraft.trim(),
+      ...(passwordDraft !== "" ? { remotePassword: passwordDraft } : {}),
     });
+    setPasswordDraft("");
     await ctrl.runServerAction(action);
   };
+
+  const isWsl = vs.local.engine === "wsl2";
+  const needsProvision = isWsl && vs.local.engineState === "not-installed";
+  const isSleeping = vs.lifecycle === "sleeping" || vs.local.engineState === "stopped";
 
   const modes = [
     {
       id: "local" as const,
-      title: "本地虚拟服务器（本机隔离环境）",
-      desc: "在本机开辟与个人电脑严格隔离的分身专属虚拟服务器，支持资源限额、受控共享目录与空闲自动休眠",
+      title: "本地虚拟服务器（WSL2 隔离容器）",
+      desc: "基于本机 WSL2 创建独立 ext4 虚拟磁盘与 Alpine Linux 容器，屏蔽宿主机盘符并限制 CPU/内存配额",
     },
     {
       id: "remote" as const,
-      title: "远端虚拟服务器（7×24h 全天候在线）",
-      desc: "连接你自己的远端虚拟服务器，笔记本合盖关机后依然持续巡检、收信与执行通宵任务",
+      title: "远端虚拟服务器（SSH 7×24h）",
+      desc: "通过 OpenSSH 连接自有云服务器或家用 Linux 主机，合盖关机后依然持续在线守护与执行",
     },
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
         <div>
           <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>虚拟服务器</h3>
           <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--qj-text-secondary)" }}>
-            分身在独立的专属虚拟服务器内运行任务与浏览器，不弄乱你的个人电脑。
+            分身在独立的专属 WSL2 容器或远端 SSH 服务器内执行工具与浏览器，彻底隔离你的个人电脑。
           </p>
         </div>
         <button
@@ -88,7 +93,7 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
         </button>
       </div>
 
-      {/* Mode Selector Cards */}
+      {/* Mode Selector */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         {modes.map((m) => {
           const active = vs.mode === m.id;
@@ -101,12 +106,12 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
               style={{
                 border: 0,
                 borderRadius: 16,
-                padding: 14,
+                padding: 13,
                 textAlign: "left",
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "space-between",
-                gap: 10,
+                gap: 8,
                 cursor: "pointer",
                 background: "var(--muse-soft-fill)",
                 color: "var(--qj-text-primary)",
@@ -115,9 +120,7 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
             >
               <div>
                 <div style={{ fontSize: 13.5, fontWeight: 600 }}>{m.title}</div>
-                <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.55, color: "var(--qj-text-secondary)" }}>
-                  {m.desc}
-                </div>
+                <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5, color: "var(--qj-text-secondary)" }}>{m.desc}</div>
               </div>
               <span
                 style={{
@@ -130,7 +133,7 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
                   color: active ? "var(--muse-primary-fg)" : "var(--qj-text-secondary)",
                 }}
               >
-                {active ? "当前运行中" : "切换至此环境"}
+                {active ? "当前运行模式" : "切换至此环境"}
               </span>
             </button>
           );
@@ -138,36 +141,25 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
       </div>
 
       {ui.serverFeedback !== null && (
-        <div
-          style={{
-            padding: "9px 14px",
-            borderRadius: 14,
-            background: "var(--muse-soft-fill)",
-            fontSize: 12,
-            color: "var(--qj-text-primary)",
-          }}
-        >
+        <div style={{ padding: "9px 14px", borderRadius: 14, background: "var(--muse-soft-fill)", fontSize: 12 }}>
           {ui.serverFeedback}
         </div>
       )}
 
       {vs.mode === "local" ? (
-        <div
-          style={{
-            padding: 16,
-            borderRadius: 18,
-            background: "var(--muse-soft-fill)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            fontSize: 12,
-          }}
-        >
+        <div style={{ padding: 15, borderRadius: 18, background: "var(--muse-soft-fill)", display: "flex", flexDirection: "column", gap: 11, fontSize: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>
-              本地虚拟服务器状态 · {vs.lifecycle === "sleeping" ? "已休眠" : "运行中"}（{vs.uptimeLabel}）
-            </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--qj-text-secondary)" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {isWsl ? `WSL2 容器 (${vs.local.distroName ?? "qianji-bot-vm"})` : "宿主机隔离目录"} ·{" "}
+                {needsProvision ? "尚未初始化" : isSleeping ? "休眠待命" : "运行中"}（{vs.uptimeLabel}）
+              </div>
+              <div style={{ fontSize: 11, color: "var(--qj-text-muted)", marginTop: 2, fontFamily: "var(--qj-font-mono)" }}>
+                {vs.local.kernelVersion ? `${vs.local.kernelVersion} · ` : ""}
+                {vs.local.isolationSummary ?? "独立隔离执行环境"}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--qj-text-secondary)", flexShrink: 0 }}>
               <span>空闲自动休眠</span>
               <Switch
                 checked={vs.local.autoSleepIdle}
@@ -177,11 +169,32 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
             </div>
           </div>
 
+          {needsProvision && (
+            <div style={{ padding: 12, borderRadius: 14, background: "var(--qj-bg-surface)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 12.5 }}>创建专属 WSL2 容器实例（约 3.5 MB 轻量镜像）</div>
+                <div style={{ color: "var(--qj-text-secondary)", marginTop: 2 }}>
+                  自动下载 Alpine rootfs、禁用宿主机盘符透传并生成纯净恢复快照。
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="provision-wsl-btn"
+                className="qj-primary-pill-btn"
+                disabled={ui.serverBusy}
+                style={{ height: 34, padding: "0 14px", fontSize: 12, fontWeight: 550, flexShrink: 0 }}
+                onClick={() => void ctrl.runServerAction("provision-local")}
+              >
+                {ui.serverBusy ? "初始化中…" : "一键初始化 WSL2 容器"}
+              </button>
+            </div>
+          )}
+
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
             <div style={{ padding: 10, borderRadius: 12, background: "var(--qj-bg-surface)" }}>
-              <div style={{ color: "var(--qj-text-muted)" }}>处理器配额</div>
+              <div style={{ color: "var(--qj-text-muted)" }}>cgroup CPU 上限</div>
               <div style={{ fontWeight: 600, marginTop: 3, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span>{vs.local.cpuCores} 核（占用 {vs.local.cpuUsagePercent}%）</span>
+                <span>{vs.local.cpuCores} 核</span>
                 <select
                   aria-label="处理器核数"
                   value={String(vs.local.cpuCores)}
@@ -196,7 +209,7 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
             </div>
 
             <div style={{ padding: 10, borderRadius: 12, background: "var(--qj-bg-surface)" }}>
-              <div style={{ color: "var(--qj-text-muted)" }}>内存限额</div>
+              <div style={{ color: "var(--qj-text-muted)" }}>cgroup 内存限额</div>
               <div style={{ fontWeight: 600, marginTop: 3, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span>{vs.local.memoryUsedGb} / {vs.local.memoryLimitGb} GB</span>
                 <select
@@ -213,7 +226,7 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
             </div>
 
             <div style={{ padding: 10, borderRadius: 12, background: "var(--qj-bg-surface)" }}>
-              <div style={{ color: "var(--qj-text-muted)" }}>虚拟磁盘</div>
+              <div style={{ color: "var(--qj-text-muted)" }}>VHDX 虚拟磁盘</div>
               <div style={{ fontWeight: 600, marginTop: 3, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span>{vs.local.diskUsedGb} / {vs.local.diskLimitGb} GB</span>
                 <select
@@ -232,48 +245,25 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", color: "var(--qj-text-secondary)" }}>
-              <span>受控共享目录：</span>
-              {vs.local.sharedFolders.length === 0 ? (
-                <span style={{ color: "var(--qj-text-muted)" }}>未挂载外部目录</span>
-              ) : (
-                vs.local.sharedFolders.map((sf) => (
-                  <span
-                    key={sf.path}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 4,
-                      padding: "2px 8px",
-                      borderRadius: 9999,
-                      background: "var(--qj-bg-surface)",
-                      color: "var(--qj-text-primary)",
-                    }}
-                  >
-                    <span>{sf.path.split(/[\\/]/).pop() || sf.path}</span>
-                    <button
-                      type="button"
-                      aria-label={`移除目录 ${sf.path}`}
-                      onClick={() => void ctrl.configureServer({ sharedFolderRemove: sf.path })}
-                      style={{ border: 0, background: "transparent", color: "var(--qj-text-muted)", cursor: "pointer", padding: 0 }}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))
-              )}
-              <button
-                type="button"
-                onClick={() => void handleMountSharedFolder()}
-                style={{
-                  border: 0,
-                  borderRadius: 9999,
-                  padding: "3px 9px",
-                  fontSize: 11.5,
-                  background: "var(--qj-bg-surface)",
-                  color: "var(--qj-text-primary)",
-                  cursor: "pointer",
-                }}
+              <span>挂载至 /shared：</span>
+              {vs.local.sharedFolders.map((sf) => (
+                <span key={sf.path} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 9999, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)" }}>
+                  <span>{sf.path.split(/[\\/]/).pop() || sf.path} ({sf.access === "read-only" ? "只读" : "副本"})</span>
+                  <button type="button" aria-label={`移除目录 ${sf.path}`} onClick={() => void ctrl.configureServer({ sharedFolderRemove: sf.path })} style={{ border: 0, background: "transparent", color: "var(--qj-text-muted)", cursor: "pointer", padding: 0 }}>
+                    ×
+                  </button>
+                </span>
+              ))}
+              <select
+                aria-label="共享权限"
+                value={shareAccess}
+                onChange={(e) => setShareAccess(e.target.value === "isolated-copy" ? "isolated-copy" : "read-only")}
+                style={{ border: 0, borderRadius: 9999, padding: "2px 8px", fontSize: 11.5, background: "var(--qj-bg-surface)", color: "var(--qj-text-secondary)" }}
               >
+                <option value="read-only">只读挂载</option>
+                <option value="isolated-copy">独立副本</option>
+              </select>
+              <button type="button" onClick={() => void handleMountSharedFolder()} style={{ border: 0, borderRadius: 9999, padding: "3px 9px", fontSize: 11.5, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)", cursor: "pointer" }}>
                 + 挂载目录
               </button>
             </div>
@@ -281,33 +271,17 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
             <div style={{ display: "flex", gap: 8 }}>
               <button
                 type="button"
-                onClick={() => void ctrl.runServerAction(vs.lifecycle === "sleeping" ? "start" : "sleep")}
-                style={{
-                  height: 32,
-                  padding: "0 12px",
-                  borderRadius: 9999,
-                  border: 0,
-                  background: "var(--qj-bg-surface)",
-                  color: "var(--qj-text-primary)",
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
+                disabled={ui.serverBusy}
+                onClick={() => void ctrl.runServerAction(isSleeping || needsProvision ? "start" : "sleep")}
+                style={{ height: 32, padding: "0 12px", borderRadius: 9999, border: 0, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)", fontSize: 12, cursor: "pointer" }}
               >
-                {vs.lifecycle === "sleeping" ? "唤醒" : "休眠"}
+                {isSleeping || needsProvision ? "唤醒启动" : "休眠释放内存"}
               </button>
               <button
                 type="button"
+                disabled={ui.serverBusy}
                 onClick={() => void ctrl.runServerAction("reset-snapshot")}
-                style={{
-                  height: 32,
-                  padding: "0 12px",
-                  borderRadius: 9999,
-                  border: 0,
-                  background: "var(--qj-bg-surface)",
-                  color: "var(--qj-text-primary)",
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
+                style={{ height: 32, padding: "0 12px", borderRadius: 9999, border: 0, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)", fontSize: 12, cursor: "pointer" }}
               >
                 一键重置环境
               </button>
@@ -315,17 +289,7 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
           </div>
         </div>
       ) : (
-        <div
-          style={{
-            padding: 16,
-            borderRadius: 18,
-            background: "var(--muse-soft-fill)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            fontSize: 12,
-          }}
-        >
+        <div style={{ padding: 15, borderRadius: 18, background: "var(--muse-soft-fill)", display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
               <div style={{ marginBottom: 4, color: "var(--qj-text-secondary)" }}>远端虚拟服务器地址</div>
@@ -334,93 +298,70 @@ export function VirtualServerConsole({ ctx }: { readonly ctx?: Context }): React
                 value={endpointDraft}
                 onChange={(e) => setEndpointDraft(e.target.value)}
                 placeholder="host.example.com:22 或 192.168.1.10:22"
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  borderRadius: 12,
-                  border: 0,
-                  outline: "none",
-                  fontFamily: "var(--qj-font-mono)",
-                  fontSize: 12,
-                  background: "var(--qj-bg-surface)",
-                  color: "var(--qj-text-primary)",
-                }}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: 12, border: 0, outline: "none", fontFamily: "var(--qj-font-mono)", fontSize: 12, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)" }}
               />
             </div>
             <div>
               <div style={{ marginBottom: 4, color: "var(--qj-text-secondary)" }}>账号与隔离工作目录</div>
-              <div style={{ display: "grid", gridTemplateColumns: "92px 1fr", gap: 6 }}>
-                <input
-                  type="text"
-                  aria-label="远端用户名"
-                  value={userDraft}
-                  onChange={(e) => setUserDraft(e.target.value)}
-                  placeholder="ubuntu"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 12,
-                    border: 0,
-                    outline: "none",
-                    fontFamily: "var(--qj-font-mono)",
-                    fontSize: 12,
-                    background: "var(--qj-bg-surface)",
-                    color: "var(--qj-text-primary)",
-                  }}
-                />
-                <input
-                  type="text"
-                  aria-label="远端工作目录"
-                  value={dirDraft}
-                  onChange={(e) => setDirDraft(e.target.value)}
-                  placeholder="~/.qianji-vm"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 12,
-                    border: 0,
-                    outline: "none",
-                    fontFamily: "var(--qj-font-mono)",
-                    fontSize: 12,
-                    background: "var(--qj-bg-surface)",
-                    color: "var(--qj-text-primary)",
-                  }}
-                />
+              <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: 6 }}>
+                <input type="text" aria-label="远端用户名" value={userDraft} onChange={(e) => setUserDraft(e.target.value)} placeholder="ubuntu" style={{ width: "100%", padding: "8px 10px", borderRadius: 12, border: 0, outline: "none", fontFamily: "var(--qj-font-mono)", fontSize: 12, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)" }} />
+                <input type="text" aria-label="远端工作目录" value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} placeholder="~/.qianji-vm" style={{ width: "100%", padding: "8px 10px", borderRadius: 12, border: 0, outline: "none", fontFamily: "var(--qj-font-mono)", fontSize: 12, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)" }} />
               </div>
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10 }}>
+            <div>
+              <div style={{ marginBottom: 4, color: "var(--qj-text-secondary)" }}>SSH 认证方式</div>
+              <select
+                aria-label="SSH 认证方式"
+                value={authMethod}
+                onChange={(e) => setAuthMethod(e.target.value === "password" ? "password" : "agent-or-key")}
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 12, border: 0, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)", fontSize: 12 }}
+              >
+                <option value="agent-or-key">密钥 / ssh-agent</option>
+                <option value="password">密码（安全存储）</option>
+              </select>
+            </div>
+            {authMethod === "agent-or-key" ? (
+              <div>
+                <div style={{ marginBottom: 4, color: "var(--qj-text-secondary)" }}>SSH 私钥路径（留空则走系统 ssh-agent / ~/.ssh）</div>
+                <input
+                  type="text"
+                  value={keyPathDraft}
+                  onChange={(e) => setKeyPathDraft(e.target.value)}
+                  placeholder="如 C:\Users\you\.ssh\id_ed25519"
+                  style={{ width: "100%", padding: "8px 12px", borderRadius: 12, border: 0, outline: "none", fontFamily: "var(--qj-font-mono)", fontSize: 12, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)" }}
+                />
+              </div>
+            ) : (
+              <div>
+                <div style={{ marginBottom: 4, color: "var(--qj-text-secondary)" }}>
+                  SSH 密码{vs.remote.hasStoredSecret ? "（已加密存入安全存储，留空沿用）" : "（加密存入 OS Keychain）"}
+                </div>
+                <input
+                  type="password"
+                  value={passwordDraft}
+                  onChange={(e) => setPasswordDraft(e.target.value)}
+                  placeholder={vs.remote.hasStoredSecret ? "••••••••（已保存，输入可覆盖）" : "输入远端 SSH 登录密码"}
+                  style={{ width: "100%", padding: "8px 12px", borderRadius: 12, border: 0, outline: "none", fontFamily: "var(--qj-font-mono)", fontSize: 12, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)" }}
+                />
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 2 }}>
             <span style={{ color: vs.lifecycle === "running" ? "var(--qj-status-success)" : "var(--qj-text-secondary)" }}>
               {vs.lifecycle === "running"
-                ? `● 远端虚拟服务器在线${vs.latencyMs ? ` · 延迟 ${vs.latencyMs}ms` : ""}`
-                : "○ 尚未连接远端虚拟服务器"}
+                ? `● SSH 在线${vs.remote.osSummary ? ` (${vs.remote.osSummary})` : ""}${vs.latencyMs ? ` · ${vs.latencyMs}ms` : ""}`
+                : "○ 尚未完成远端 SSH 初始化"}
             </span>
             <div style={{ display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                onClick={() => void syncRemoteAndRun("test-remote")}
-                style={{
-                  height: 32,
-                  padding: "0 12px",
-                  borderRadius: 9999,
-                  border: 0,
-                  background: "var(--qj-bg-surface)",
-                  color: "var(--qj-text-primary)",
-                  fontSize: 12,
-                  fontWeight: 520,
-                  cursor: "pointer",
-                }}
-              >
+              <button type="button" disabled={ui.serverBusy} onClick={() => void syncRemoteAndRun("test-remote")} style={{ height: 32, padding: "0 12px", borderRadius: 9999, border: 0, background: "var(--qj-bg-surface)", color: "var(--qj-text-primary)", fontSize: 12, fontWeight: 520, cursor: "pointer" }}>
                 测试连接
               </button>
-              <button
-                type="button"
-                className="qj-primary-pill-btn"
-                style={{ height: 32, padding: "0 14px", fontSize: 12, fontWeight: 520 }}
-                onClick={() => void syncRemoteAndRun("init-remote")}
-              >
-                一键初始化环境
+              <button type="button" disabled={ui.serverBusy} className="qj-primary-pill-btn" style={{ height: 32, padding: "0 14px", fontSize: 12, fontWeight: 520 }} onClick={() => void syncRemoteAndRun("init-remote")}>
+                {ui.serverBusy ? "连接中…" : "一键初始化环境"}
               </button>
             </div>
           </div>

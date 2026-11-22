@@ -179,20 +179,21 @@ export function buildDefaultBotState(options: {
     ],
     virtualServer: {
       mode: "local",
-      lifecycle: "running",
-      uptimeLabel: "运行中",
+      lifecycle: process.platform === "win32" ? "offline" : "running",
+      uptimeLabel: process.platform === "win32" ? "WSL2 容器待初始化" : "运行中",
       local: {
         cpuCores: 2,
-        cpuUsagePercent: 2,
-        memoryUsedGb: 0.2,
+        cpuUsagePercent: 0,
+        memoryUsedGb: 0,
         memoryLimitGb: 4,
         diskUsedGb: 0.01,
         diskLimitGb: 32,
         autoSleepIdle: true,
-        sharedFolders: options.defaultCwd
-          ? [{ path: options.defaultCwd, access: "isolated-copy" }]
-          : [],
+        sharedFolders: [],
         lastSnapshotAt: now,
+        engine: process.platform === "win32" ? "wsl2" : "host-fallback",
+        engineState: process.platform === "win32" ? "not-installed" : "unavailable",
+        distroName: "qianji-bot-vm",
       },
       remote: {
         alias: "远端常驻虚拟服务器",
@@ -201,6 +202,9 @@ export function buildDefaultBotState(options: {
         username: "ubuntu",
         workDir: "~/.qianji-vm",
         initialized: false,
+        authMethod: "agent-or-key",
+        privateKeyPath: "",
+        hasStoredSecret: false,
       },
       liveViewTaskTitle: "虚拟服务器受控环境空闲待命",
       takeoverRequired: false,

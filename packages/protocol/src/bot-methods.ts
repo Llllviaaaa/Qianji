@@ -151,6 +151,12 @@ export interface BotSharedFolderRule {
   access: "read-only" | "isolated-copy";
 }
 
+export type BotLocalEngineKind = "wsl2" | "host-fallback";
+
+export type BotLocalEngineState = "not-installed" | "stopped" | "provisioning" | "running" | "unavailable";
+
+export type BotRemoteAuthMethod = "agent-or-key" | "password";
+
 export interface BotVirtualServerStatus {
   mode: BotServerMode;
   lifecycle: BotServerLifecycleState;
@@ -166,6 +172,12 @@ export interface BotVirtualServerStatus {
     autoSleepIdle: boolean;
     sharedFolders: BotSharedFolderRule[];
     lastSnapshotAt?: number;
+    engine?: BotLocalEngineKind;
+    engineState?: BotLocalEngineState;
+    distroName?: string;
+    kernelVersion?: string;
+    vhdxPath?: string;
+    isolationSummary?: string;
   };
   remote: {
     alias: string;
@@ -175,6 +187,10 @@ export interface BotVirtualServerStatus {
     workDir: string;
     initialized: boolean;
     offlineSyncedAt?: number;
+    authMethod?: BotRemoteAuthMethod;
+    privateKeyPath?: string;
+    hasStoredSecret?: boolean;
+    osSummary?: string;
   };
   liveViewUrl?: string;
   liveViewTaskTitle?: string;
@@ -219,6 +235,7 @@ export type BotServerActionKind =
   | "start"
   | "sleep"
   | "restart"
+  | "provision-local"
   | "reset-snapshot"
   | "test-remote"
   | "init-remote";
@@ -227,6 +244,26 @@ export interface BotServerActionResult {
   ok: boolean;
   message: string;
   virtualServer: BotVirtualServerStatus;
+}
+
+export interface BotLiveViewSnapshot {
+  url: string;
+  title: string;
+  screenshotBase64: string;
+  viewport: { width: number; height: number };
+  containerSummary: {
+    engine: string;
+    state: string;
+    kernelOrHost: string;
+    mounts: string[];
+    cgroupSummary: string;
+  };
+}
+
+export interface BotLiveViewExecDiagResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
 }
 
 export interface BotHandoffCompleteParams {
