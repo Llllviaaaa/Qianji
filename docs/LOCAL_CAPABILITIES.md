@@ -7,7 +7,7 @@
 | 能力域 | 当前状态 | 产品要求 |
 | --- | --- | --- |
 | 多任务 Agent | 已完成 | 一个 Harness Host 同时承载所有任务的会话；支持 `agent/before-stop`、受控隔离 Worktree 子代理（含 `outputSchema` 与 `roleModels`）、`activate_tools` 按需工具加载、工具超时/重复提醒守卫与 `bg_process` 受管后台进程；后台继续流式执行、切换任务不丢状态 |
-| 动态插件系统 | 已完成 | 统一插件中心管理核心能力、10 个官方内置插件（`code-review`、`diagram-viewer`、`goal-tracker`、`message-actions`、`observability`、`quick-prompts`、`session-usage`、`side-chat`、`smart-rewind`、`web-preview`）及用户/工作区插件；`@qianji/client` SDK 与 22 个故障隔离 `<PluginSlot>` 扩展点；运行中自动延迟 HMR；工作区显式信任门禁与 `qianji_inspect`/`plugin_manager` Agent 闭环工具（遵循 ADR 0017 完全信任边界） |
+| 动态插件系统 | 已完成 | 统一插件中心管理核心能力、12 个官方内置插件（`question`、`permission`、`code-review`、`diagram-viewer`、`goal-tracker`、`message-actions`、`observability`、`quick-prompts`、`session-usage`、`side-chat`、`smart-rewind`、`web-preview`）及用户/工作区插件；`@qianji/client` SDK 与 22 个故障隔离 `<PluginSlot>` 扩展点；运行中自动延迟 HMR；工作区显式信任门禁与 `qianji_inspect`/`plugin_manager` Agent 闭环工具（遵循 ADR 0017 完全信任边界） |
 | 会话与上下文 | 已完成 | 本地 JSONL 事件日志、`~/.qianji/index.sqlite` FTS5 全文搜索、`/` 快捷斜杠指令菜单、滑动窗口提前压缩与 50K 工具输出溢出（`~/.qianji/spill/`）、`rewind` 死胡同分支摘要、`/goal` 长程目标追踪、重命名、归档、恢复、删除、clone、fork、tree、compact、export |
 | 模型与提供商 | 已完成 | 原生支持 Anthropic（含 Claude 4.6+/5 自适应 thinking 与多断点 Prompt Caching）、OpenAI Chat（自动 `reasoning_effort` 推断与 400 回退）、OpenAI Responses（`/v1/responses`）与 Google Gemini（`streamGenerateContent`）；会话内切换模型与思考等级并下发到 runtime |
 | 成本与可观测性 | 已完成 | 采集 `reasoningTokens`，基于 `@qianji/pricing` 本地单价表估算会话与累计成本（支持自定义覆盖），`session-usage` 实时拆解上下文占比与 TTFT/TPS，配合 `observability` 三端闪退取证（`host-crashes.jsonl` + `/logs`）与诊断导出 |

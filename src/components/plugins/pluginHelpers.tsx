@@ -7,6 +7,7 @@ import {
   Boxes,
   CalendarClock,
   ChartPie,
+  CircleHelp,
   Cpu,
   GitCompare,
   GitFork,
@@ -19,6 +20,7 @@ import {
   Quote,
   RotateCcw,
   Shield,
+  ShieldCheck,
   Sparkles,
   Target,
   Terminal,
@@ -66,6 +68,8 @@ export const CORE_EXTENSION_ORDER: readonly string[] = [
 export const CORE_EXTENSION_SET = new Set<string>(CORE_EXTENSION_ORDER);
 
 export const BUNDLED_FEATURE_ORDER: readonly string[] = [
+  "question",
+  "permission",
   "smart-rewind",
   "goal-tracker",
   "code-review",
@@ -173,6 +177,8 @@ export function shouldShowVersion(version: string, tier: PluginInfo["tier"]): bo
 }
 
 export function iconAccentTone(id: string): string {
+  if (id === "question") return "indigo";
+  if (id === "permission") return "amber";
   if (id === "smart-rewind") return "violet";
   if (id === "goal-tracker") return "emerald";
   if (id === "code-review") return "indigo";
@@ -199,6 +205,8 @@ export function iconAccentTone(id: string): string {
 }
 
 export function PluginCategoryIcon({ id, tier }: { id: string; tier: PluginInfo["tier"] }) {
+  if (id === "question") return <CircleHelp size={18} strokeWidth={1.8} />;
+  if (id === "permission") return <ShieldCheck size={18} strokeWidth={1.8} />;
   if (id === "smart-rewind") return <RotateCcw size={18} strokeWidth={1.8} />;
   if (id === "goal-tracker") return <Target size={18} strokeWidth={1.8} />;
   if (id === "code-review") return <GitCompare size={18} strokeWidth={1.8} />;

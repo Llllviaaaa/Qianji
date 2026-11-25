@@ -11,7 +11,6 @@ const FINISH_REASONS: Record<string, FinishReason | "retryable-error"> = {
   end_turn: "stop",
   length: "length",
   max_tokens: "length",
-  model_context_window_exceeded: "length",
   tool_calls: "tool-use",
   function_call: "tool-use",
   tool_use: "tool-use",
@@ -143,6 +142,7 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
   let reason: FinishReason | undefined;
   let rawFinishReason: string | undefined;
   let rawErrorFinishReason: string | undefined;
+  let contextOverflowReason: string | undefined;
   let emittedContent = false;
   let reportedOutputTokens: number | undefined;
   let sawDone = false;
@@ -250,13 +250,20 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
 
       if (typeof choice.finish_reason === "string") {
         rawFinishReason = choice.finish_reason;
-        const classified = classifyOpenAiFinishReason(choice.finish_reason);
-        if (classified === "retryable-error") {
-          rawErrorFinishReason = choice.finish_reason;
-          reason = undefined;
-        } else {
+        const normalizedFinish = choice.finish_reason.trim().toLowerCase();
+        if (normalizedFinish === "model_context_window_exceeded" || normalizedFinish === "context_length_exceeded") {
+          contextOverflowReason = choice.finish_reason.trim();
           rawErrorFinishReason = undefined;
-          reason = classified;
+          reason = undefined;
+        } else if (contextOverflowReason === undefined) {
+          const classified = classifyOpenAiFinishReason(choice.finish_reason);
+          if (classified === "retryable-error") {
+            rawErrorFinishReason = choice.finish_reason;
+            reason = undefined;
+          } else {
+            rawErrorFinishReason = undefined;
+            reason = classified;
+          }
         }
       }
     }
@@ -275,10 +282,24 @@ export async function* translateStream(events: AsyncIterable<{ data: string }>, 
       };
     }
   }
-  if (!sawDone && reason === undefined && rawErrorFinishReason === undefined) {
+  if (!sawDone && reason === undefined && rawErrorFinishReason === undefined && contextOverflowReason === undefined) {
     throw new LlmError({ kind: "network", message: `${providerId}: upstream stream ended before completion`, retryable: true });
   }
   yield* emitSegments(thinkParser.finish());
+  if (contextOverflowReason !== undefined) {
+    yield {
+      type: "finish",
+      reason: "error",
+      error: {
+        kind: "context-length",
+        provider: providerId,
+        code: contextOverflowReason,
+        message: `${providerId} context window exceeded (${contextOverflowReason})`,
+        retryable: false,
+      },
+    };
+    return;
+  }
   for (const entry of toolState.values()) {
     if (!entry.started) {
       entry.started = true;

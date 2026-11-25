@@ -11,6 +11,7 @@ import { diagnostics } from "./diagnostics.ts";
 import { inspectFileBeforeRead, stripBom } from "./file-guards.ts";
 import { formatHashlines, isHashlineEdit, resolveHashlineSpan, type HashlineEdit, type TextEditSpan } from "./hashline.ts";
 import { find, grep } from "./search.ts";
+import { FileObservationTracker, appendWritethroughDiagnostics } from "./observation.ts";
 import { MAX_BYTES, MAX_LINES, resolvePath, truncateHead } from "./shared.ts";
 
 export * from "./shared.ts";
@@ -18,6 +19,7 @@ export * from "./file-guards.ts";
 export * from "./hashline.ts";
 export * from "./search.ts";
 export * from "./diagnostics.ts";
+export * from "./observation.ts";
 
 export const name = "qianji-tool-fs";
 export const inject = ["tools"];
@@ -298,7 +300,27 @@ export const ls: ToolDefinition<{ path?: string }> = {
 
 export const FS_TOOLS = [read, write, edit, ls, find, grep] as const;
 
-export function apply(ctx: Context): void {
+export interface Config {
+  /** Require an existing file to be read in the session before `edit` or `write` overwrites it (default: `true`). */
+  enforceReadBeforeEdit?: boolean;
+  /** Timeout budget in ms for post-edit/write error diagnostics; `0` disables writethrough diagnostics (default: `1500`). */
+  writethroughDiagnosticsMs?: number;
+}
+
+export function apply(ctx: Context, config: Config = {}): void {
   for (const tool of FS_TOOLS) ctx.effect(() => ctx.tools.register(tool), `${name}: ${tool.name}`);
   ctx.effect(() => ctx.tools.register(diagnostics), `${name}: diagnostics`);
+
+  if (config.enforceReadBeforeEdit !== false) {
+    const tracker = new FileObservationTracker(ctx);
+    ctx.on("tools/pre-execute", (call, env) => tracker.checkBeforeWriteOrEdit(call, env));
+    ctx.on("tools/result", (call, env, output) => {
+      if (output.isError === true) return;
+      if (call.name !== "read" && call.name !== "edit" && call.name !== "write") return;
+      const rawPath = typeof call.args.path === "string" ? call.args.path : undefined;
+      if (rawPath !== undefined) tracker.record(env.sessionId, env.cwd, rawPath);
+    });
+  }
+
+  appendWritethroughDiagnostics(ctx, config.writethroughDiagnosticsMs ?? 1_500);
 }

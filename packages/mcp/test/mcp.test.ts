@@ -65,10 +65,10 @@ describe("MCP plugin", () => {
 
   it("refuses when the user says no or nobody can answer", async () => {
     const declined = await setup({ servers: [server()] }, { answer: false });
-    expect(declined.text(await declined.call("mcp__fixture__echo", { text: "hi" }))).toBe("用户拒绝了 MCP 工具调用");
+    expect(declined.text(await declined.call("mcp__fixture__echo", { text: "hi" }))).toBe("Denied: 用户拒绝了 MCP 工具调用");
     await ctx?.fiber.dispose();
     const headless = await setup({ servers: [server()] });
-    expect(headless.text(await headless.call("mcp_list_resources"))).toBe("用户拒绝了 MCP 资源读取");
+    expect(headless.text(await headless.call("mcp_list_resources"))).toBe("Denied: 用户拒绝了 MCP 资源读取");
   });
 
   it("reads resources and prompts, and reports subscribed updates", async () => {
@@ -83,11 +83,81 @@ describe("MCP plugin", () => {
 
   it("keeps read-only sessions to trusted servers", async () => {
     const untrusted = await setup({ servers: [server()] }, { answer: true, mode: "read-only" });
-    expect(untrusted.text(await untrusted.call("mcp_list_resources"))).toBe("只读模式只允许访问已标记为受信任只读的 MCP 服务器");
+    expect(untrusted.text(await untrusted.call("mcp_list_resources"))).toBe("Denied: 只读模式只允许访问已标记为受信任只读的 MCP 服务器");
     await ctx?.fiber.dispose();
     const trusted = await setup({ servers: [server({ trustedReadOnly: true })] }, { answer: true, mode: "read-only" });
     expect(trusted.text(await trusted.call("mcp_list_resources"))).toContain("fixture://note");
     expect(trusted.asked).toEqual([]);
+  });
+
+  it("propagates readOnlyHint / trustedReadOnly to readOnly and runs ui.confirm in tools/pre-execute ahead of execute timers", async () => {
+    const annotatedScript = [
+      'const rl = require("node:readline").createInterface({ input: process.stdin, crlfDelay: Infinity });',
+      'const tools = [',
+      '  { name: "query_docs", description: "Read docs", inputSchema: { type: "object", properties: { q: { type: "string" } } }, annotations: { readOnlyHint: true } },',
+      '  { name: "mutate_db", description: "Write DB", inputSchema: { type: "object" }, annotations: { destructiveHint: true } },',
+      '];',
+      'const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");',
+      'rl.on("line", (line) => {',
+      '  if (!line.trim()) return;',
+      '  const msg = JSON.parse(line);',
+      '  if (msg.id === undefined) return;',
+      '  if (msg.method === "initialize") return reply(msg.id, { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "ann", version: "1.0.0" } });',
+      '  if (msg.method === "tools/list") return reply(msg.id, { tools });',
+      '  if (msg.method === "tools/call") return reply(msg.id, { content: [{ type: "text", text: "ok:" + msg.params.name }] });',
+      '  reply(msg.id, {});',
+      '});',
+    ].join("\n");
+
+    ctx = new Context();
+    const local = ctx;
+    await local.plugin(Sessions);
+    await local.plugin(Ui);
+    await local.plugin(Tools);
+
+    // Simulate slow user approval (120ms) while wrapping tools/execute with a tight 40ms execution timer.
+    local.ui.attach({
+      request: ({ requestId }) => {
+        setTimeout(() => local.ui.respond(requestId, true), 120);
+      },
+      cancel: () => {},
+      notify: () => {},
+    });
+    local.on("tools/execute", async (_call, _env, next) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<ToolOutput>((resolve) => {
+        timer = setTimeout(() => resolve({ content: [{ type: "text", text: "EXEC_TIMER_EXPIRED" }], isError: true }), 40);
+      });
+      try {
+        return await Promise.race([next(), timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+
+    await local.plugin(Mcp, {
+      servers: [
+        server({ id: "ann", name: "Annotated", args: ["-e", annotatedScript], trustedReadOnly: false }),
+        server({ id: "ro", name: "TrustedRO", trustedReadOnly: true }),
+      ],
+    });
+    await local.mcp.ready;
+    const session = local.sessions.create({ cwd: "." });
+
+    expect(local.tools.get("mcp__ann__query_docs")?.readOnly).toBe(true);
+    expect(local.tools.get("mcp__ann__mutate_db")?.readOnly).not.toBe(true);
+    expect(local.tools.get("mcp__ro__echo")?.readOnly).toBe(true);
+    expect(local.tools.isConcurrencySafe("mcp__ann__query_docs", { q: "api" }, session.id)).toBe(true);
+    expect(local.tools.isConcurrencySafe("mcp__ann__mutate_db", {}, session.id)).toBe(false);
+    expect(local.tools.isConcurrencySafe("mcp__ro__echo", { text: "ping" }, session.id)).toBe(true);
+
+    // Approval waited 120ms in tools/pre-execute, so the 40ms tools/execute timer did NOT fire!
+    const out = await local.tools.execute(
+      { id: "slow-confirm", name: "mcp__ann__mutate_db", args: {} },
+      { sessionId: session.id, cwd: ".", signal: new AbortController().signal },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(out.content[0]?.type === "text" ? out.content[0].text : "").toBe("ok:mutate_db");
   });
 
   it("records servers that fail to start", async () => {

@@ -204,13 +204,14 @@ Every layer of Qianji is hot-pluggable (`builtin` < `user` < `workspace`) with m
 
 <div align="center">
   <img src="docs/assets/screenshot-settings.png" alt="Qianji Connectors and Full-Stack Dynamic Plugin Hub" width="100%" />
-  <sub>Unified Plugins Hub: manage core capabilities, 10 official bundled plugins, MCP servers, and live hot-reload extensions.</sub>
+  <sub>Unified Plugins Hub: manage core capabilities, 12 official bundled plugins, MCP servers, and live hot-reload extensions.</sub>
 </div>
 
-### 10 Official Bundled Plugins (`plugins/*`)
+### 12 Official Bundled Plugins (`plugins/*`)
 
 | Plugin | What It Adds | Plugin | What It Adds |
 | :--- | :--- | :--- | :--- |
+| `question` | Multi-step single/multi-select `question` dialog & inline Q&A card | `permission` | 4-way approval (session/always allow & deny feedback) + `request_permission` |
 | `code-review` | `/review`, read-only diff tool & file context review | `quick-prompts` | Customizable home-screen quick starter pills |
 | `diagram-viewer` | Inline Mermaid / PlantUML rendering & `.mmd`/`.puml` viewer | `session-usage` | Live context breakdown, TTFT/TPS & `/usage` cost card |
 | `goal-tracker` | `/goal` dock banner, anti-drift & pre-stop verification | `side-chat` | `/side`, `/btw`, and `Ctrl+Alt+S` forked side thread |
@@ -296,7 +297,7 @@ Pop-Location
 Report security vulnerabilities privately via [SECURITY.md](SECURITY.md).
 
 <details>
-<summary><b>📦 Expand: Complete Monorepo Module Matrix (36 Workspace Packages + 10 Official Plugins)</b></summary>
+<summary><b>📦 Expand: Complete Monorepo Module Matrix (36 Workspace Packages + 12 Official Plugins)</b></summary>
 
 <br/>
 
@@ -317,7 +318,7 @@ Organized as an npm workspace (`packages/*`) with strict import boundaries enfor
 | `packages/plan`, `memory`, `hooks`, `commands`, `ui` | Capabilities | Step plans, progressive indexed Memory 2.0, lifecycle shell hooks, slash commands, and multi-transport UI bus |
 | `packages/subagents`, `mcp`, `browser`, `computer`, `schedule`, `intelligent-ui` | Extensions | Worktree subagents, STDIO/HTTP MCP host, CDP browser, Windows computer use, scheduler, and generative UI |
 | `packages/testkit` | Test Utilities | Deterministic scripted LLM providers (`ScriptedProvider`) and golden JSONL test helpers |
-| `plugins/*` | 10 Official Plugins | `code-review`, `diagram-viewer`, `goal-tracker`, `message-actions`, `observability`, `quick-prompts`, `session-usage`, `side-chat`, `smart-rewind`, `web-preview` |
+| `plugins/*` | 12 Official Plugins | `question`, `permission`, `code-review`, `diagram-viewer`, `goal-tracker`, `message-actions`, `observability`, `quick-prompts`, `session-usage`, `side-chat`, `smart-rewind`, `web-preview` |
 | `src/` (incl. `src/sdk/`) & `src-tauri/` | Desktop Client | React 19 + Zustand workbench, `@qianji/client` SDK (`src/sdk/`), and Tauri 2 Rust native shell |
 
 </details>

@@ -214,6 +214,14 @@ describe("local memory", () => {
       await call({ action: "upsert_section", section: "Release Process", content: "Tag v1.x releases cleanly." }),
     ).toBe("Section updated in local memory.");
     expect(readFileSync(globalFile, "utf8")).toContain("## Release Process\n\nTag v1.x releases cleanly.");
+
+    // Concurrency safety classification covers read, list, search and rejects mutating actions
+    expect(ctx.tools.isConcurrencySafe("desktop_memory", { action: "read" }, session.id)).toBe(true);
+    expect(ctx.tools.isConcurrencySafe("desktop_memory", { action: "list" }, session.id)).toBe(true);
+    expect(ctx.tools.isConcurrencySafe("desktop_memory", { action: "search", query: "build" }, session.id)).toBe(true);
+    expect(ctx.tools.isConcurrencySafe("desktop_memory", { action: "append", content: "x" }, session.id)).toBe(false);
+    expect(ctx.tools.isConcurrencySafe("desktop_memory", { action: "clear" }, session.id)).toBe(false);
+    expect(await call({ action: "list" })).toContain("Release Process");
     await ctx.fiber.dispose();
   });
 });

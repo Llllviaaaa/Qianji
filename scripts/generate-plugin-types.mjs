@@ -176,6 +176,7 @@ export type KeyboardEvent<T = Element> = {
   metaKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+  nativeEvent?: { isComposing?: boolean };
   preventDefault(): void;
   stopPropagation(): void;
 };
@@ -303,6 +304,7 @@ export interface LucideProps {
 export type LucideIcon = (props: LucideProps) => ReactElement | null;
 export const AlertTriangle: LucideIcon;
 export const Activity: LucideIcon;
+export const ArrowLeft: LucideIcon;
 export const ArrowRight: LucideIcon;
 export const Blocks: LucideIcon;
 export const BookOpen: LucideIcon;
@@ -313,6 +315,7 @@ export const CheckCircle2: LucideIcon;
 export const ChevronDown: LucideIcon;
 export const ChevronRight: LucideIcon;
 export const CircleAlert: LucideIcon;
+export const CircleHelp: LucideIcon;
 export const Clock: LucideIcon;
 export const Code2: LucideIcon;
 export const Compass: LucideIcon;
@@ -333,6 +336,7 @@ export const Layers: LucideIcon;
 export const Link2: LucideIcon;
 export const ListChecks: LucideIcon;
 export const LoaderCircle: LucideIcon;
+export const Lock: LucideIcon;
 export const MessageSquare: LucideIcon;
 export const MessageSquareReply: LucideIcon;
 export const Pause: LucideIcon;
@@ -346,6 +350,9 @@ export const RotateCcw: LucideIcon;
 export const Search: LucideIcon;
 export const Settings2: LucideIcon;
 export const Share2: LucideIcon;
+export const Shield: LucideIcon;
+export const ShieldAlert: LucideIcon;
+export const ShieldCheck: LucideIcon;
 export const Sparkles: LucideIcon;
 export const Target: LucideIcon;
 export const Terminal: LucideIcon;
@@ -408,11 +415,33 @@ export interface HostSessionModes {
   effective: PermissionModeName;
 }
 
+export interface HostPermissionConfirmContext {
+  sessionId: string;
+  session?: Session;
+  cwd: string;
+  mode: PermissionModeName;
+  toolName: string;
+  args: Record<string, unknown>;
+  title: string;
+  message: string;
+  signal: AbortSignal;
+}
+
+export type HostPermissionConfirmOutcome =
+  | boolean
+  | { allowed: true }
+  | { allowed: false; reason?: string };
+
+export type HostPermissionConfirmHandler = (
+  request: HostPermissionConfirmContext,
+) => Promise<HostPermissionConfirmOutcome | undefined> | HostPermissionConfirmOutcome | undefined;
+
 export interface HostPermissionsService {
   modes(session: Session): HostSessionModes;
   defaultModes(): HostSessionModes;
   defaultModesForSession(session?: Session): HostSessionModes;
   set(session: Session, change: { permission?: PermissionModeName; agentMode?: AgentModeName }): number;
+  registerConfirmHandler(handler: HostPermissionConfirmHandler): () => void;
 }
 
 export interface HostInfoService {

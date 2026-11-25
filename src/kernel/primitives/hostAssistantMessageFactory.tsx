@@ -37,7 +37,12 @@ import {
   ReasoningRow,
   RunningRow,
 } from "../../components/message/MessageProcessBlocks";
-import { TurnErrorCard } from "../../components/message/TurnErrorCard";
+import {
+  DEFAULT_TURN_CONTINUE_PROMPT,
+  DEFAULT_TURN_RETRY_PROMPT,
+  TurnErrorCard,
+  TurnIncompleteBanner,
+} from "../../components/message/TurnErrorCard";
 import { ToolCall } from "../../components/ToolCall";
 import { goalToolKind } from "../../lib/activeGoal";
 import { deriveTurnPlanState } from "../../lib/envSources";
@@ -96,6 +101,7 @@ export function HostAssistantMessageFactory({
   renderToolCall,
   renderThinking,
   renderActions,
+  ctx,
 }: SlotComponentProps<HostAssistantMessageFactoryProps, "root">): ReactElement | null {
   const [processOpen, setProcessOpen] = useState<boolean | null>(null);
   const kernel = useContext(SlotKernelContext);
@@ -202,6 +208,27 @@ export function HostAssistantMessageFactory({
     stopReason: message.stopReason,
   });
   const effectiveProcessOpen = processOpen ?? emptyTurn.autoOpenProcess;
+  const isLengthIncomplete =
+    !working && !message.isError && !message.isAborted && message.stopReason === "length";
+
+  const dispatchIsolatedPrompt =
+    sessionId !== undefined &&
+    sessionId !== "" &&
+    sessionId !== "active" &&
+    (ctx?.get("sessionService")?.getRetainCount(sessionId) ?? 0) > 0
+      ? (promptText: string) => {
+          const svc = ctx?.get("sessionService");
+          if (svc === undefined || svc.getRetainCount(sessionId) <= 0) return;
+          const retained = svc.retain(sessionId);
+          if (retained.getSnapshot().isStreaming) {
+            retained.release();
+            return;
+          }
+          void retained.sendMessage(promptText).finally(() => {
+            retained.release();
+          });
+        }
+      : undefined;
 
   if (
     !hasContent &&
@@ -210,6 +237,7 @@ export function HostAssistantMessageFactory({
     !hasUiWidgets &&
     !reasoningUnavailable &&
     !emptyTurn.hint &&
+    !isLengthIncomplete &&
     !message.isError &&
     !message.isAborted
   ) {
@@ -300,6 +328,7 @@ export function HostAssistantMessageFactory({
       (showThinking && durationMs !== null) ||
       reasoningUnavailable ||
       Boolean(emptyTurn.hint) ||
+      isLengthIncomplete ||
       message.isAborted === true ||
       message.isError === true);
   const turnProcessLabel = message.isError
@@ -308,9 +337,13 @@ export function HostAssistantMessageFactory({
       ? durationMs !== null
         ? "已停止，用时 "
         : "已停止"
-      : durationMs !== null
-        ? "已完成，用时 "
-        : "已完成";
+      : isLengthIncomplete
+        ? durationMs !== null
+          ? "未完成（输出受限），用时 "
+          : "未完成（输出受限）"
+        : durationMs !== null
+          ? "已完成，用时 "
+          : "已完成";
   const durationParts =
     !message.isError && durationMs !== null ? formatRunDuration(Math.max(1000, durationMs)) : [];
   const liveProcessVisible = working && hasProcess;
@@ -388,7 +421,28 @@ export function HostAssistantMessageFactory({
             </div>
           </div>
         )}
-      {message.isError && <TurnErrorCard message={message} fallbackContent={assistantContent} />}
+      {isLengthIncomplete && (
+        <TurnIncompleteBanner
+          isLast={isLast}
+          onContinue={
+            dispatchIsolatedPrompt === undefined
+              ? undefined
+              : () => dispatchIsolatedPrompt(DEFAULT_TURN_CONTINUE_PROMPT)
+          }
+        />
+      )}
+      {message.isError && (
+        <TurnErrorCard
+          message={message}
+          fallbackContent={assistantContent}
+          isLast={isLast}
+          onRetry={
+            dispatchIsolatedPrompt === undefined
+              ? undefined
+              : () => dispatchIsolatedPrompt(DEFAULT_TURN_RETRY_PROMPT)
+          }
+        />
+      )}
       {working && (
         <RunningRow
           label={liveLabel}

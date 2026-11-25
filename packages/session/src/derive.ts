@@ -4,6 +4,7 @@
  * event list, so tests can assert on JSONL fixtures directly.
  */
 import type { AssistantContent, AssistantMessage, Effort, Message, ToolResultMessage } from "@qianji/llm";
+import { applyPrunedToolContent, collectPruneReplacements } from "./prune.ts";
 import { currentBranch } from "./summarize.ts";
 import { estimateEventTokens } from "./tokens.ts";
 import type { ModelRef, SessionEvent } from "./types.ts";
@@ -23,7 +24,10 @@ export interface ContinuationEventData {
   reason: "length" | "empty" | "before-stop";
   text: string;
 }
-export const INTERRUPTED_TOOL_RESULT = "The tool call was interrupted before it returned a result.";
+export const UNSTARTED_TOOL_RESULT = "[TOOL_NOT_STARTED] The host exited before this tool started; safe to retry.";
+export const UNKNOWN_OUTCOME_TOOL_RESULT =
+  "[TOOL_OUTCOME_UNKNOWN] The tool call was interrupted before it returned a result; retry read-only calls directly, and verify workspace/external state before re-running mutating calls.";
+export const INTERRUPTED_TOOL_RESULT = UNKNOWN_OUTCOME_TOOL_RESULT;
 
 const LEADING_INLINE_THINK_RE = /^\s*<think>(?:\r?\n)?[\s\S]*?(?:<\/think>\s*|$)/i;
 
@@ -77,11 +81,12 @@ export interface SessionState {
   compactedThrough?: number;
 }
 
-function closeDanglingCalls(messages: Message[], pending: Map<string, string>): void {
-  // A call without a result (the host died mid-tool) would make the next
-  // request invalid at every provider, so it gets an error result.
+function closeDanglingCalls(messages: Message[], pending: Map<string, string>, startedCalls: ReadonlySet<string>): void {
+  // A call without a result (the host died before or mid-tool) would make the next
+  // request invalid at every provider, so it gets a risk-split error result.
   for (const [callId] of pending) {
-    messages.push({ role: "tool-result", callId, content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }], isError: true });
+    const text = startedCalls.has(callId) ? INTERRUPTED_TOOL_RESULT : UNSTARTED_TOOL_RESULT;
+    messages.push({ role: "tool-result", callId, content: [{ type: "text", text }], isError: true });
   }
   pending.clear();
 }
@@ -157,11 +162,13 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
   }
 
   const recordedToolResults = new Set<string>();
+  const startedCalls = new Set<string>();
   for (const event of branch) {
-    if (event.type === "tool-result" && (compaction === undefined || event.seq > compaction.throughSeq)) {
-      recordedToolResults.add(event.data.callId);
-    }
+    if (compaction !== undefined && event.seq <= compaction.throughSeq) continue;
+    if (event.type === "tool-result") recordedToolResults.add(event.data.callId);
+    else if (event.type === "tool-call") startedCalls.add(event.data.callId);
   }
+  const prunedByCallId = collectPruneReplacements(branch, compaction?.throughSeq ?? 0);
 
   const messages: Message[] = [];
   if (compaction !== undefined) {
@@ -192,11 +199,11 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
   for (const event of branch) {
     if (compaction !== undefined && event.seq <= compaction.throughSeq) continue;
     if (event.type === "user") {
-      closeDanglingCalls(messages, pending);
+      closeDanglingCalls(messages, pending, startedCalls);
       flushReadyNotes(event.seq - 1, 0);
       messages.push({ role: "user", content: event.data.content });
     } else if (event.type === "assistant") {
-      closeDanglingCalls(messages, pending);
+      closeDanglingCalls(messages, pending, startedCalls);
       flushReadyNotes(event.seq - 1, 0);
       const content = normalizeAssistantContent(event.data.content, event.data.model, event.data.stop, recordedToolResults);
       const hasToolCall = content.some((block) => block.type === "tool-call");
@@ -209,13 +216,17 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
       }
     } else if (event.type === "tool-result") {
       if (pending.delete(event.data.callId)) {
-        const result: ToolResultMessage = { role: "tool-result", callId: event.data.callId, content: event.data.content, isError: event.data.isError };
+        const prunedText = prunedByCallId.get(event.data.callId);
+        const content = prunedText === undefined
+          ? event.data.content
+          : applyPrunedToolContent(event.data.content, prunedText);
+        const result: ToolResultMessage = { role: "tool-result", callId: event.data.callId, content, isError: event.data.isError };
         messages.push(result);
       }
     } else if (event.type === "custom" && event.data.ns === CONTINUATION_NAMESPACE) {
       const rawText = (event.data.data as { text?: unknown } | null)?.text;
       if (typeof rawText === "string" && rawText.trim() !== "") {
-        closeDanglingCalls(messages, pending);
+        closeDanglingCalls(messages, pending, startedCalls);
         flushReadyNotes(event.seq - 1, 0);
         const trimmed = rawText.trim();
         const prev = messages.at(-1);
@@ -236,7 +247,7 @@ export function deriveState(events: readonly SessionEvent[]): SessionState {
     }
     flushReadyNotes(event.seq, pending.size);
   }
-  closeDanglingCalls(messages, pending);
+  closeDanglingCalls(messages, pending, startedCalls);
   flushReadyNotes(Infinity, 0);
   state.messages = messages;
   return state;

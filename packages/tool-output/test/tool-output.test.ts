@@ -76,4 +76,38 @@ describe("tool output limit (ADR 0019)", () => {
     expect(existsSync(join(temp, "old"))).toBe(false);
     expect(existsSync(join(temp, "new"))).toBe(true);
   });
+
+  it("caps cumulative per-turn tool output at 200K chars and resets on agent/turn-start", async () => {
+    temp = mkdtempSync(join(tmpdir(), "qianji-spill-turn-"));
+    const ctx = await setup({ spillDir: temp });
+
+    // 6 calls x 45,000 chars = 270,000 chars total in one turn (each below single-call 50,000 cap).
+    const outputs = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        ctx.tools.execute({ id: `turn1_c${index + 1}`, name: "dump", args: { size: 45_000 } }, env()),
+      ),
+    );
+
+    const lengths = outputs.map((out) =>
+      out.content.reduce((sum, block) => sum + (block.type === "text" ? block.text.length : 0), 0),
+    );
+    // First 4 calls (180,000 chars) stay whole; 5th and 6th spill once cumulative output crosses 200,000.
+    expect(lengths.slice(0, 4)).toEqual([45_000, 45_000, 45_000, 45_000]);
+    expect(lengths[4]).toBeLessThan(20_000);
+    expect(lengths[5]).toBeLessThan(4_000);
+
+    const fifthText = outputs[4]?.content[0]?.type === "text" ? outputs[4].content[0].text : "";
+    const sixthText = outputs[5]?.content[0]?.type === "text" ? outputs[5].content[0].text : "";
+    expect(fifthText).toContain("[Output truncated: 45000 characters");
+    expect(sixthText).toContain("[Output truncated: 45000 characters");
+    expect(readFileSync(join(temp, "s_1", "turn1_c5.txt"), "utf8")).toHaveLength(45_000);
+    expect(readFileSync(join(temp, "s_1", "turn1_c6.txt"), "utf8")).toHaveLength(45_000);
+
+    // Starting the next turn resets the session's turn budget cleanly.
+    await ctx.serial("agent/turn-start", { id: "s/1" } as never, 2);
+    const freshTurnOut = await ctx.tools.execute({ id: "turn2_c1", name: "dump", args: { size: 45_000 } }, env());
+    const freshText = freshTurnOut.content[0]?.type === "text" ? freshTurnOut.content[0].text : "";
+    expect(freshText).toHaveLength(45_000);
+    expect(existsSync(join(temp, "s_1", "turn2_c1.txt"))).toBe(false);
+  });
 });

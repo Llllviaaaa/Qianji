@@ -192,6 +192,8 @@ flowchart LR
 | `goal-tracker` | `host` + `client` | DSH 风格目标追踪：`create_goal`/`get_goal`/`update_goal` 工具（含 CAS 与连续受阻门限）、`/goal` 控制面命令、`agent/settled` `<goal_round>` 长程驱动及精简 `GoalBar`（`composerBanners`） |
 | `message-actions` | `client` | 为助手消息操作栏（`message.actions`）挂载分享、锚点定位高亮与引用追问按钮 |
 | `observability` | `host` + `client` | 三端异常与卡顿取证：`observability_inspect` 只读工具、`/logs`（及 `/obs`）命令、状态栏健康胶囊、右侧观测面板与诊断导出 |
+| `permission` | `host` + `client` | 四态工具审批增强（允许一次 / 本会话允许同类 / 始终允许 / 附言拒绝）、`request_permission` 主动提权工具、`/permission` 指令与设置页规则管理（`conversation.approvalDialog`、`conversation.toolCall`、`settings.sections`） |
+| `question` | `host` + `client` | 结构化多题追问问卷：`question` 只读工具（支持单选、多选、推荐项标注、自由补充与审阅页）、`/question` 指令、专属问卷审批卡与对话内联问答摘要卡（`conversation.approvalDialog`、`conversation.toolCall`） |
 | `quick-prompts` | `client` | 新会话首页快捷启动指令胶囊（`home.quickActions`），支持自定义与点击回填/直发 |
 | `session-usage` | `host` + `client` | 输入框状态胶囊与悬浮明细卡（`composerStatus`）及 `/usage` 命令：实时拆解系统/工具/对话上下文占比、TTFT、TPS 与费用 |
 | `side-chat` | `client` | 控制右侧「侧边对话」面板，提供 `/side`、`/btw` 拦截器、`thread.more` 菜单项与 `Ctrl+Alt+S` 快捷键 |
@@ -390,7 +392,7 @@ Rust 层在 V2 架构重构后实现了大幅瘦身（移除了 HTTP 客户端 `
 ### 8.1 构建与单文件打包流水线
 1. **Host 编译与资源同步 ([`scripts/prepare-harness-host.mjs`](../scripts/prepare-harness-host.mjs)、[`scripts/generate-plugin-types.mjs`](../scripts/generate-plugin-types.mjs))**：
    - 第一阶段：使用 `esbuild` 将 [`packages/host/src/bin.ts`](../packages/host/src/bin.ts) 及其引用的全部 `@qianji/*` 源码包打包为单个 ESM bundle，注入版本号 `QIANJI_HOST_VERSION` 并保留 `legalComments: "eof"` 与 `ws` 可选加速模块外部引用。
-   - 第二阶段：调用 `syncBundledPluginAssets` 将仓库内 10 个官方内置插件（`plugins/*`）、官方内置技能（`skills/*`）以及离线无依赖的插件类型声明（`plugin-types/`）同步至 `src-tauri/resources/harness/{bundled-plugins,bundled-skills,plugin-types}`。
+   - 第二阶段：调用 `syncBundledPluginAssets` 将仓库内 12 个官方内置插件（`plugins/*`）、官方内置技能（`skills/*`）以及离线无依赖的插件类型声明（`plugin-types/`）同步至 `src-tauri/resources/harness/{bundled-plugins,bundled-skills,plugin-types}`。
    - 第三阶段：调用仓库锁定的 Bun 编译器执行 `bun build --compile`，产出独立可执行文件 `src-tauri/resources/harness/qianji-harness.exe` 与 `build-manifest.json` 哈希清单（支持增量跳过重复编译）。
 2. **桌面端打包 (`npm run tauri -- build`)**：Vite 打包前端产物至 `dist/`，Cargo 编译 `src-tauri` 并将 `qianji-harness.exe` 及其附属 `bundled-plugins`、`bundled-skills`、`plugin-types` 资源目录一并封装进 NSIS / MSI Windows 安装包。
 

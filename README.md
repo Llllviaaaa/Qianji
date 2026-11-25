@@ -204,13 +204,14 @@ flowchart TB
 
 <div align="center">
   <img src="docs/assets/screenshot-settings.png" alt="千机连接器与全栈动态插件中心" width="100%" />
-  <sub>统一插件中心：一站式管理核心能力、10 个官方功能插件、MCP 服务桥接与第三方热重载扩展</sub>
+  <sub>统一插件中心：一站式管理核心能力、12 个官方功能插件、MCP 服务桥接与第三方热重载扩展</sub>
 </div>
 
-### 10 个开箱即用的官方插件 (`plugins/*`)
+### 12 个开箱即用的官方插件 (`plugins/*`)
 
 | 官方插件 | 能力速览 | 官方插件 | 能力速览 |
 | :--- | :--- | :--- | :--- |
+| `question` | `question` 单选/多选/自由补充多题问卷卡片与内联问答摘要 | `permission` | 四态工具审批（本会话允许 / 始终允许 / 附言拒绝）与 `request_permission` |
 | `code-review` | `/review` 命令、只读差异检视与文件右键审查 | `quick-prompts` | 首页可自定义的快捷启动指令胶囊 |
 | `diagram-viewer` | 对话内 Mermaid / PlantUML 渲染与 `.mmd`/`.puml` 预览 | `session-usage` | 输入框实时上下文拆解、TTFT/TPS 与 `/usage` 费用面板 |
 | `goal-tracker` | `/goal` 长程目标控制卡、防偏航提醒与自动验收 | `side-chat` | `/side`、`/btw` 与 `Ctrl+Alt+S` 侧边分支追问 |
@@ -296,7 +297,7 @@ Pop-Location
 如发现安全漏洞，请遵循 [SECURITY.md](SECURITY.md) 私密报告。
 
 <details>
-<summary><b>📦 展开查看：Monorepo 完整模块矩阵（36 个工作区包 + 10 个官方插件）</b></summary>
+<summary><b>📦 展开查看：Monorepo 完整模块矩阵（36 个工作区包 + 12 个官方插件）</b></summary>
 
 <br/>
 
@@ -317,7 +318,7 @@ Pop-Location
 | `packages/plan`, `memory`, `hooks`, `commands`, `ui` | 基础能力插件 | 分步计划追踪、渐进式双层记忆 2.0、生命周期脚本钩子、斜杠命令总线与多传输交互通道 |
 | `packages/subagents`, `mcp`, `browser`, `computer`, `schedule`, `intelligent-ui` | 高阶扩展插件 | Worktree 子代理、STDIO/HTTP MCP 客户端、CDP 浏览器、Windows 桌面控制、定时调度与生成式 UI |
 | `packages/testkit` | 测试工具包 | 确定性脚本化 LLM Mock 提供商（`ScriptedProvider`）与黄金日志测试辅助 |
-| `plugins/*` | 10 个官方内置插件 | `code-review`、`diagram-viewer`、`goal-tracker`、`message-actions`、`observability`、`quick-prompts`、`session-usage`、`side-chat`、`smart-rewind`、`web-preview` |
+| `plugins/*` | 12 个官方内置插件 | `question`、`permission`、`code-review`、`diagram-viewer`、`goal-tracker`、`message-actions`、`observability`、`quick-prompts`、`session-usage`、`side-chat`、`smart-rewind`、`web-preview` |
 | `src/`（含 `src/sdk/`）& `src-tauri/` | 桌面客户端 | React 19 + Zustand 工作台、`@qianji/client` SDK（`src/sdk/`）与 Tauri 2 Rust 原生壳层 |
 
 </details>

@@ -14,6 +14,9 @@
  */
 import { Context, Service } from "@deepseek-ai/cordis";
 import type { ToolResultContent, ToolSchema } from "@qianji/llm";
+import { argumentProblem, MAX_SCHEMA_DEPTH } from "./schema-validate.ts";
+
+export { argumentProblem, MAX_SCHEMA_DEPTH };
 
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -39,6 +42,8 @@ export interface ToolEnv {
   sessionId: string;
   cwd: string;
   signal: AbortSignal;
+  /** Optional cooperative signal aborted when the user queues a mid-turn `steer` message. */
+  steeringSignal?: AbortSignal;
   /** The call being executed; set by `Tools.execute`. */
   callId?: string;
   /** Optional incremental progress callback emitted while a tool executes. */
@@ -78,6 +83,11 @@ export interface ToolDefinition<Args extends Record<string, unknown> = Record<st
    */
   readOnly?: boolean;
   /**
+   * Optional per-call concurrency safety classifier evaluated on validated arguments.
+   * When omitted, `Tools.isConcurrencySafe` falls back to `readOnly === true`.
+   */
+  isConcurrencySafe?(args: Args): boolean;
+  /**
    * The longest a call may run, in milliseconds, before the tool-guards plugin
    * aborts it and reports a timeout. Omitted means the plugin's default; 0
    * means no limit (for tools that bound their own run time, like `bash`).
@@ -107,31 +117,17 @@ function bindCallerEffect(ctx: Context | undefined, dispose: () => void, label: 
   return once;
 }
 
-const JSON_TYPES: Record<string, (value: unknown) => boolean> = {
-  string: (value) => typeof value === "string",
-  number: (value) => typeof value === "number" && Number.isFinite(value),
-  integer: (value) => Number.isInteger(value),
-  boolean: (value) => typeof value === "boolean",
-  array: (value) => Array.isArray(value),
-  object: (value) => typeof value === "object" && value !== null && !Array.isArray(value),
+const ACTIVATE_TOOLS_PARAMETERS: ToolDefinition["parameters"] = {
+  type: "object",
+  properties: {
+    names: {
+      type: "array",
+      items: { type: "string" },
+      description: "Group names (e.g. 'browser', 'computer') or tool names to activate.",
+    },
+  },
+  required: ["names"],
 };
-
-/** Why `args` do not fit `parameters`, or undefined when they do. Checks the top level only. */
-export function argumentProblem(parameters: ToolDefinition["parameters"], args: Record<string, unknown>): string | undefined {
-  if ("__invalidJson" in args) return "the arguments were not valid JSON";
-  const required = Array.isArray(parameters.required) ? (parameters.required as string[]) : [];
-  for (const key of required) {
-    if (args[key] === undefined) return `missing required argument "${key}"`;
-  }
-  const properties = (parameters.properties ?? {}) as Record<string, { type?: unknown }>;
-  for (const [key, value] of Object.entries(args)) {
-    const type = properties[key]?.type;
-    if (value === undefined || typeof type !== "string") continue;
-    const check = JSON_TYPES[type];
-    if (check !== undefined && !check(value)) return `argument "${key}" must be ${type === "integer" ? "an integer" : `a ${type}`}`;
-  }
-  return undefined;
-}
 
 export class Tools extends Service {
   private readonly definitions = new Map<string, ToolDefinition>();
@@ -228,6 +224,32 @@ export class Tools extends Service {
     return allowed === undefined || allowed.has(name);
   }
 
+  /**
+   * Whether `name` with `args` is safe to execute concurrently alongside other concurrency-safe calls.
+   * Unknown tools, disallowed tools, schema validation failures, and classifier throws fail closed (`false`).
+   */
+  isConcurrencySafe(name: string, args: Record<string, unknown> = {}, sessionId?: string): boolean {
+    if (args === null || typeof args !== "object" || Array.isArray(args)) return false;
+    if (name === ACTIVATE_TOOLS_NAME) {
+      if (sessionId !== undefined && !this.allows(sessionId, ACTIVATE_TOOLS_NAME) && this.deferredCatalogFor(sessionId).length === 0) {
+        return false;
+      }
+      return argumentProblem(ACTIVATE_TOOLS_PARAMETERS, args) === undefined;
+    }
+    if (!this.allows(sessionId, name)) return false;
+    const def = this.definitions.get(name);
+    if (def === undefined) return false;
+    if (argumentProblem(def.parameters, args) !== undefined) return false;
+    if (typeof def.isConcurrencySafe === "function") {
+      try {
+        return def.isConcurrencySafe(args) === true;
+      } catch {
+        return false;
+      }
+    }
+    return def.readOnly === true;
+  }
+
   private buildActivateToolsSchema(definitions: ToolDefinition[]): ToolSchema {
     const groups = new Map<string, ToolDefinition[]>();
     for (const def of definitions) {
@@ -252,17 +274,7 @@ export class Tools extends Service {
     return {
       name: ACTIVATE_TOOLS_NAME,
       description: `Load full schemas for on-demand toolsets before calling them. Available: ${summaries.join("; ")}.`,
-      parameters: {
-        type: "object",
-        properties: {
-          names: {
-            type: "array",
-            items: { type: "string" },
-            description: "Group names (e.g. 'browser', 'computer') or tool names to activate.",
-          },
-        },
-        required: ["names"],
-      },
+      parameters: ACTIVATE_TOOLS_PARAMETERS,
     };
   }
 
@@ -329,11 +341,13 @@ export class Tools extends Service {
       }
       if (env.signal.aborted) return textOutput("Aborted before the tool ran.", true);
       const schema = this.buildActivateToolsSchema(availableDeferred);
+      const preProblem = argumentProblem(schema.parameters as ToolDefinition["parameters"], call.args);
+      if (preProblem !== undefined) return textOutput(`Invalid arguments for ${call.name}: ${preProblem}.`, true);
       try {
         const decision = await this.ctx.serial("tools/pre-execute", call, env);
         if (decision !== undefined && "deny" in decision) return textOutput(`Denied: ${decision.reason}`, true);
-        const problem = argumentProblem(schema.parameters as ToolDefinition["parameters"], call.args);
-        if (problem !== undefined) return textOutput(`Invalid arguments for ${call.name}: ${problem}.`, true);
+        const postProblem = argumentProblem(schema.parameters as ToolDefinition["parameters"], call.args);
+        if (postProblem !== undefined) return textOutput(`Invalid arguments for ${call.name}: ${postProblem}.`, true);
         return await this.ctx.waterfall("tools/execute", call, env, async () => {
           const requested = Array.isArray(call.args.names) ? call.args.names.map(String) : [];
           const matched = this.activate(env.sessionId, requested);
@@ -359,14 +373,16 @@ export class Tools extends Service {
     const definition = this.allows(env.sessionId, call.name) ? this.definitions.get(call.name) : undefined;
     if (definition === undefined) return textOutput(`Unknown tool "${call.name}".`, true);
     if (env.signal.aborted) return textOutput("Aborted before the tool ran.", true);
+    const preProblem = argumentProblem(definition.parameters, call.args);
+    if (preProblem !== undefined) return textOutput(`Invalid arguments for ${call.name}: ${preProblem}.`, true);
     if (definition.deferred) {
       this.activate(env.sessionId, [definition.group ?? definition.name]);
     }
     try {
       const decision = await this.ctx.serial("tools/pre-execute", call, env);
       if (decision !== undefined && "deny" in decision) return textOutput(`Denied: ${decision.reason}`, true);
-      const problem = argumentProblem(definition.parameters, call.args);
-      if (problem !== undefined) return textOutput(`Invalid arguments for ${call.name}: ${problem}.`, true);
+      const postProblem = argumentProblem(definition.parameters, call.args);
+      if (postProblem !== undefined) return textOutput(`Invalid arguments for ${call.name}: ${postProblem}.`, true);
       return await this.ctx.waterfall("tools/execute", call, env, async () => definition.execute(call.args, { ...env, callId: call.id }));
     } catch (error) {
       if (env.signal.aborted) return textOutput("Aborted.", true);

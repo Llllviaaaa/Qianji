@@ -72,12 +72,44 @@ describe("BlockAssembler", () => {
     ]);
   });
 
-  it("keeps malformed tool arguments for the loop to report", () => {
+  it("keeps malformed tool arguments for the loop to report when finish is not length", () => {
     const assembler = new BlockAssembler();
     assembler.push({ type: "tool-call-start", index: 0, id: "t", name: "x" });
     assembler.push({ type: "tool-call-delta", index: 0, argumentsDelta: "{oops" });
     assembler.push({ type: "finish", reason: "tool-use" });
     expect(assembler.result().message.content[0]).toEqual({ type: "tool-call", id: "t", name: "x", arguments: { __invalidJson: "{oops" } });
+  });
+
+  it("strips truncated or nameless tool calls on length finish while keeping prose and thinking", () => {
+    const assembler = new BlockAssembler();
+    assembler.push({ type: "thinking-delta", index: 0, text: "Need to edit file." });
+    assembler.push({ type: "text-delta", index: 1, text: "Updating config now." });
+    assembler.push({ type: "tool-call-start", index: 2, id: "call_trunc", name: "write" });
+    assembler.push({ type: "tool-call-delta", index: 2, argumentsDelta: "{\"path\":\"a.ts\",\"content\":\"unclosed" });
+    assembler.push({ type: "tool-call-start", index: 3, id: "call_nameless", name: "   " });
+    assembler.push({ type: "finish", reason: "length" });
+
+    const res = assembler.result();
+    expect(res.reason).toBe("length");
+    expect(res.message.content).toEqual([
+      { type: "thinking", text: "Need to edit file." },
+      { type: "text", text: "Updating config now." },
+    ]);
+  });
+
+  it("keeps earlier valid tool calls and drops trailing truncated tool calls on length finish", () => {
+    const assembler = new BlockAssembler();
+    assembler.push({ type: "tool-call-start", index: 0, id: "call_ok", name: "read" });
+    assembler.push({ type: "tool-call-delta", index: 0, argumentsDelta: "{\"path\":\"ok.ts\"}" });
+    assembler.push({ type: "tool-call-start", index: 1, id: "call_half", name: "read" });
+    assembler.push({ type: "tool-call-delta", index: 1, argumentsDelta: "{\"path\":\"half" });
+    assembler.push({ type: "finish", reason: "length" });
+
+    const res = assembler.result();
+    expect(res.reason).toBe("length");
+    expect(res.message.content).toEqual([
+      { type: "tool-call", id: "call_ok", name: "read", arguments: { path: "ok.ts" } },
+    ]);
   });
 
   it("reports a stream that never finished as an error", () => {

@@ -1,0 +1,55 @@
+{
+  "name": "permission",
+  "version": "0.1.0",
+  "description": "智能权限审批与提权中心：支持「允许一次 / 本会话允许同类 / 始终允许 / 附言拒绝」四态审批卡片、request_permission 主动权限申请工具、/permission 命令与授权管理。",
+  "qianji": {
+    "id": "permission",
+    "name": "智能权限审批与提权中心",
+    "description": "对标主流 Harness 的完整权限体验：提供四态工具审批卡片（允许一次 / 本会话允许同类 / 始终允许 / 附言拒绝）、智能体主动申请权限工具 request_permission、/permission 指令以及会话与持久授权管理面板。",
+    "inject": ["tools", "ui", "sessions", "commands", "rpc", "systemPrompt", "hostInfo"],
+    "host": "./host.ts",
+    "client": "./client.tsx",
+    "contributes": {
+      "tools": ["request_permission"],
+      "commands": ["permission", "permissions"],
+      "slots": ["conversation.approvalDialog", "conversation.toolCall", "settings.sections"]
+    },
+    "defaultConfig": {
+      "enableSessionGrants": true,
+      "enableAlwaysAllow": true,
+      "enableDenyFeedback": true,
+      "enableRequestTool": true,
+      "showRiskLevelBadge": true
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "enableSessionGrants": {
+          "type": "boolean",
+          "default": true,
+          "description": "在审批弹窗中提供「本会话允许同类」快捷按钮，自动记忆当前会话内匹配前缀或路径的操作"
+        },
+        "enableAlwaysAllow": {
+          "type": "boolean",
+          "default": true,
+          "description": "在低中风险单命令或工具审批中提供「始终允许」选项，持久化至插件白名单规则库"
+        },
+        "enableDenyFeedback": {
+          "type": "boolean",
+          "default": true,
+          "description": "拒绝工具执行时允许附带修改指示，直接作为拒绝原因回传给模型"
+        },
+        "enableRequestTool": {
+          "type": "boolean",
+          "default": true,
+          "description": "向模型提供 request_permission 主动提权工具（如 Plan/只读模式完成后申请切入执行写入或预授权测试命令）"
+        },
+        "showRiskLevelBadge": {
+          "type": "boolean",
+          "default": true,
+          "description": "在审批卡片右上角自动评估并标注操作风险等级（低风险 / 常规变更 / 高风险）"
+        }
+      }
+    }
+  }
+}

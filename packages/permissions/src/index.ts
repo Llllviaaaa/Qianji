@@ -63,6 +63,27 @@ export interface Config {
   toolRules?: ToolPermissionRule[];
 }
 
+export interface PermissionConfirmContext {
+  sessionId: string;
+  session?: Session;
+  cwd: string;
+  mode: PermissionMode;
+  toolName: string;
+  args: Record<string, unknown>;
+  title: string;
+  message: string;
+  signal: AbortSignal;
+}
+
+export type PermissionConfirmOutcome =
+  | boolean
+  | { allowed: true }
+  | { allowed: false; reason?: string };
+
+export type PermissionConfirmHandler = (
+  request: PermissionConfirmContext,
+) => Promise<PermissionConfirmOutcome | undefined> | PermissionConfirmOutcome | undefined;
+
 /** Rules from config, with the guard's defaults; tool rules go through the guard's own validation. */
 export function rulesFromConfig(config: Config): PermissionRules {
   return {
@@ -79,6 +100,7 @@ export class Permissions extends Service {
   static provide = "permissions";
 
   readonly rules: PermissionRules;
+  private readonly confirmHandlers: PermissionConfirmHandler[] = [];
 
   constructor(ctx: Context, private readonly config: Config = {}) {
     super(ctx, "permissions");
@@ -106,6 +128,32 @@ export class Permissions extends Service {
       if (decision.action === "allow") return undefined;
       if (decision.action === "block") return { deny: true, reason: decision.reason };
       if (!ctx.ui.canAsk(env.sessionId)) return { deny: true, reason: "Confirmation required but no UI is available" };
+
+      for (let i = this.confirmHandlers.length - 1; i >= 0; i -= 1) {
+        const handler = this.confirmHandlers[i];
+        if (handler === undefined) continue;
+        const outcome = await handler({
+          sessionId: env.sessionId,
+          ...(session === undefined ? {} : { session }),
+          cwd: env.cwd,
+          mode,
+          toolName: call.name,
+          args: call.args,
+          title: decision.title,
+          message: decision.message,
+          signal: env.signal,
+        });
+        if (outcome === undefined) continue;
+        if (outcome === true) return undefined;
+        if (outcome === false) return { deny: true, reason: `${decision.title} denied by user` };
+        if (outcome.allowed) return undefined;
+        const customReason = outcome.reason?.trim();
+        return {
+          deny: true,
+          reason: customReason !== undefined && customReason !== "" ? customReason : `${decision.title} denied by user`,
+        };
+      }
+
       const allowed = await ctx.ui.confirm(env.sessionId, decision.title, decision.message, env.signal);
       return allowed ? undefined : { deny: true, reason: `${decision.title} denied by user` };
     }, true);
@@ -182,5 +230,30 @@ export class Permissions extends Service {
       ns: NAMESPACE,
       data: { permission: change.permission ?? current.permission, agentMode: change.agentMode ?? current.agentMode },
     }).seq;
+  }
+
+  /**
+   * Register a custom interactive confirmation handler (e.g. from the built-in
+   * `permission` plugin for session-scoped grants, always-allow rules, and deny
+   * feedback). Hard caps (`read-only`, workspace confinement, self-kill, force-push,
+   * and explicit `block` rules) are always evaluated first.
+   */
+  registerConfirmHandler(handler: PermissionConfirmHandler): () => void {
+    this.confirmHandlers.push(handler);
+    let disposed = false;
+    const remove = (): void => {
+      if (disposed) return;
+      disposed = true;
+      const idx = this.confirmHandlers.lastIndexOf(handler);
+      if (idx >= 0) this.confirmHandlers.splice(idx, 1);
+    };
+    if (this.ctx?.fiber?.uid != null && this.ctx.fiber.state !== 5) {
+      try {
+        return this.ctx.effect(() => remove, "permissions.registerConfirmHandler") as unknown as () => void;
+      } catch {
+        return remove;
+      }
+    }
+    return remove;
   }
 }

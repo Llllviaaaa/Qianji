@@ -12,6 +12,7 @@
     "@qianji/agent": "*",
     "@qianji/protocol": "*",
     "@qianji/rpc": "*",
-    "@qianji/session": "*"
+    "@qianji/session": "*",
+    "@qianji/tools": "*"
   }
 }

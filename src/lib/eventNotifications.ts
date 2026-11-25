@@ -1,6 +1,6 @@
 import type { ExtensionUIRequest } from "../types";
 import type { NotificationDraft } from "./notificationCenter";
-import { headlineForUiRequest } from "./batchAsk";
+import { headlineForUiRequest, isPermissionEnvelopeRequest } from "./batchAsk";
 
 /**
  * Notification policy for Pi runtime events.
@@ -78,13 +78,13 @@ export function uiRequestNotification(
   background: boolean,
 ): NotificationPlan | null {
   if (isSilentUiRequest(request.method)) return null;
-  const kind = request.method === "confirm" ? "approval" : "question";
+  const reqTitle = "title" in request ? request.title : undefined;
+  const reqPlaceholder = request.method === "input" ? request.placeholder : undefined;
+  const isPerm = request.method === "confirm" || isPermissionEnvelopeRequest(request.method, reqTitle, reqPlaceholder);
+  const kind = isPerm ? "approval" : "question";
   const title =
-    headlineForUiRequest(
-      request.method,
-      "title" in request ? request.title : undefined,
-      request.method === "input" ? request.placeholder : undefined,
-    ) || (kind === "approval" ? "需要确认" : "需要输入");
+    headlineForUiRequest(request.method, reqTitle, reqPlaceholder) ||
+    (kind === "approval" ? "需要确认" : "需要输入");
   const body = background
     ? kind === "approval"
       ? "打开任务以确认本地操作。"
