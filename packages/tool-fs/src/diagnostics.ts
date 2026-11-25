@@ -130,6 +130,7 @@ function runTsc(
       resolvePromise({ output: Buffer.concat(chunks).toString("utf8"), timedOut });
     };
     const onAbort = () => {
+      if (signal.aborted) timedOut = true;
       try { child.kill(); } catch { /* ignore */ }
       finish();
     };
@@ -137,7 +138,9 @@ function runTsc(
       timedOut = true;
       onAbort();
     }, TSC_TIMEOUT_MS);
+    timer.unref?.();
     signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
     child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.once("error", finish);
@@ -212,3 +215,44 @@ export const diagnostics: ToolDefinition<{ paths?: string[]; limit?: number }> =
     return textOutput(formatted.join("\n") + note);
   },
 };
+
+const TS_EXT_RE = /\.(?:[cm]?ts|tsx)$/i;
+
+/**
+ * Fast, bounded error-only diagnostics check for a single written/edited file.
+ * Resolves to `[]` silently on unsupported extensions, missing checkers, or timeout/abort.
+ */
+export async function collectFileErrorDiagnostics(
+  cwd: string,
+  resolvedFile: string,
+  signal: AbortSignal,
+): Promise<DiagnosticEntry[]> {
+  try {
+    if (signal.aborted || !existsSync(resolvedFile)) return [];
+    const lower = resolvedFile.toLowerCase();
+    if (lower.endsWith(".json")) {
+      const issue = checkJsonFile(cwd, resolvedFile);
+      return issue !== undefined && issue.severity === "error" ? [issue] : [];
+    }
+    if (!TS_EXT_RE.test(lower)) return [];
+
+    const fileDir = dirname(resolvedFile);
+    const tsconfig = findNearestFileUp(fileDir, ["tsconfig.json"]) ?? findNearestFileUp(cwd, ["tsconfig.json"]);
+    const tscScript = findNearestFileUp(fileDir, ["node_modules", "typescript", "bin", "tsc"])
+      ?? findNearestFileUp(cwd, ["node_modules", "typescript", "bin", "tsc"]);
+    if (tsconfig === undefined || tscScript === undefined || signal.aborted) return [];
+
+    const { output, timedOut } = await runTsc(tscScript, tsconfig, signal);
+    if (timedOut || signal.aborted) return [];
+
+    const targetRel = displayPath(cwd, resolvedFile);
+    const targetNorm = process.platform === "win32" ? targetRel.toLowerCase() : targetRel;
+    return parseTscDiagnostics(output, dirname(tsconfig), cwd).filter((entry) => {
+      if (entry.severity !== "error") return false;
+      const entryNorm = process.platform === "win32" ? entry.file.toLowerCase() : entry.file;
+      return entryNorm === targetNorm;
+    });
+  } catch {
+    return [];
+  }
+}

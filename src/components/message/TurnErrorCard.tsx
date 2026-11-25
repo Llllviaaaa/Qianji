@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, ChevronRight, Copy, Settings } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, RotateCcw, Settings } from "lucide-react";
 import {
   describeLlmErrorHint,
   describeLlmErrorTitle,
@@ -8,17 +8,26 @@ import {
   shouldSuggestModelSettings,
 } from "../../lib/llmError";
 import { requestOpenSettings } from "../../lib/shellBridge";
+import { useAppStore } from "../../store";
 import type { UiMessage } from "../../types";
+
+export const DEFAULT_TURN_RETRY_PROMPT = "请重试并继续完成上一轮未完成的回复。";
+export const DEFAULT_TURN_CONTINUE_PROMPT = "请从上次截断处直接继续输出剩余内容。";
 
 export function TurnErrorCard({
   message,
   fallbackContent,
+  isLast,
+  onRetry,
 }: {
   message: UiMessage;
   fallbackContent?: string;
+  isLast?: boolean;
+  onRetry?: () => void;
 }) {
   const [rawOpen, setRawOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const isStreaming = useAppStore((state) => state.isStreaming);
 
   const error = inferLlmErrorFromMessage({
     content: fallbackContent ?? message.content,
@@ -30,10 +39,21 @@ export function TurnErrorCard({
   const title = describeLlmErrorTitle(error);
   const hint = describeLlmErrorHint(error);
   const suggestSettings = shouldSuggestModelSettings(error);
+  const showRetry = error.retryable !== false && (onRetry !== undefined || (isLast === true && !isStreaming));
   const sourceLabel = [error.provider, message.model].filter(Boolean).join(" / ");
   const codeBadge = error.code ?? error.errorType;
   const secondaryType = error.code && error.errorType && error.errorType !== error.code ? error.errorType : undefined;
   const hasRaw = Boolean(error.rawBody && error.rawBody.trim() !== "" && error.rawBody.trim() !== error.message.trim());
+
+  const handleRetry = () => {
+    if (onRetry !== undefined) {
+      onRetry();
+      return;
+    }
+    const store = useAppStore.getState();
+    if (store.isStreaming) return;
+    void store.sendMessage(DEFAULT_TURN_RETRY_PROMPT);
+  };
 
   const handleCopy = () => {
     const text = formatErrorCopyText(error, message.model);
@@ -63,6 +83,17 @@ export function TurnErrorCard({
           )}
         </div>
         <div className="dshc-turn-error-tools">
+          {showRetry && (
+            <button
+              type="button"
+              className="dshc-turn-error-btn"
+              onClick={handleRetry}
+              title="重试本轮请求"
+            >
+              <RotateCcw size={12} strokeWidth={1.75} />
+              <span>重试</span>
+            </button>
+          )}
           {suggestSettings && (
             <button
               type="button"
@@ -115,6 +146,47 @@ export function TurnErrorCard({
 
       {hasRaw && rawOpen && (
         <pre className="dshc-turn-error-raw"><code>{error.rawBody}</code></pre>
+      )}
+    </div>
+  );
+}
+
+export function TurnIncompleteBanner({
+  isLast,
+  onContinue,
+}: {
+  isLast?: boolean;
+  onContinue?: () => void;
+}) {
+  const isStreaming = useAppStore((state) => state.isStreaming);
+  const showContinue = onContinue !== undefined || (isLast === true && !isStreaming);
+
+  const handleContinue = () => {
+    if (onContinue !== undefined) {
+      onContinue();
+      return;
+    }
+    const store = useAppStore.getState();
+    if (store.isStreaming) return;
+    void store.sendMessage(DEFAULT_TURN_CONTINUE_PROMPT);
+  };
+
+  return (
+    <div className="dshc-turn-incomplete" role="status">
+      <div className="dshc-turn-incomplete-copy">
+        <span className="dshc-state-dot" data-state="warn" aria-hidden="true" />
+        <span>回答因达到输出长度上限而未完成</span>
+      </div>
+      {showContinue && (
+        <button
+          type="button"
+          className="dshc-turn-incomplete-btn"
+          onClick={handleContinue}
+          title="让模型从上次截断处继续输出"
+        >
+          <RotateCcw size={12} strokeWidth={1.75} />
+          <span>继续生成</span>
+        </button>
       )}
     </div>
   );

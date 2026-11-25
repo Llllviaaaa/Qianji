@@ -71,7 +71,7 @@ export interface MemoryToolOptions {
 }
 
 export type MemoryToolArgs = {
-  action: "read" | "search" | MemoryWriteAction;
+  action: "read" | "list" | "search" | MemoryWriteAction;
   scope?: MemoryScope;
   content?: string;
   query?: string;
@@ -86,16 +86,17 @@ export function memoryTool(
   const options: MemoryToolOptions = typeof fileOrOptions === "string" ? { file: fileOrOptions } : fileOrOptions;
   return {
     name: "desktop_memory",
+    isConcurrencySafe: ({ action }) => action === "read" || action === "list" || action === "search",
     description: [
       "Read, search, or update the user's explicit local Qianji memory Markdown file (`scope: 'user'` for global preferences, or `scope: 'project'` for `<workspace>/.qianji/memory.md` project conventions).",
-      "For large memories shown in indexed mode, use `search` (`query`) or targeted `read` (`section`, or `offset`/`limit`) instead of rewriting the whole file.",
+      "For large memories shown in indexed mode, use `search` (`query`), `list`, or targeted `read` (`section`, or `offset`/`limit`) instead of rewriting the whole file.",
       "Use `upsert_section` (with `section` and `content`), `append`, or `replace` only when the user explicitly asks you to remember something or states a stable preference/convention.",
       "Do not store secrets, credentials, transient task details, guesses, or sensitive personal data.",
     ].join(" "),
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["read", "search", "append", "upsert_section", "replace", "clear"] },
+        action: { type: "string", enum: ["read", "list", "search", "append", "upsert_section", "replace", "clear"] },
         scope: {
           type: "string",
           enum: ["user", "project"],
@@ -125,6 +126,12 @@ export function memoryTool(
           return textOutput(scope === "project" ? "Project memory is empty." : "Local memory is empty.");
         }
         return textOutput(searchMemory(current, query, limit));
+      }
+      if (action === "list") {
+        if (current.trim() === "") {
+          return textOutput(scope === "project" ? "Project memory is empty." : "Local memory is empty.");
+        }
+        return textOutput(formatMemoryDirectory(current, scope));
       }
       if (action === "read") {
         if (current === "") {

@@ -1,0 +1,51 @@
+{
+  "name": "question",
+  "version": "0.1.0",
+  "description": "结构化交互追问插件：提供 question 工具（支持单选、多选、推荐项、自由补充输入与多题分步审阅）、/question 指令以及专属问卷弹窗与对话内联问答摘要卡。",
+  "qianji": {
+    "id": "question",
+    "name": "结构化追问问卷",
+    "description": "对标主流 Harness 的交互追问能力：提供 question 工具（单选 / 多选 / 推荐项标注 / 自由输入 / 多题分步审阅）、/question 指令、专属审批区问卷卡片与对话流内联问答摘要卡。",
+    "inject": ["tools", "ui", "sessions", "commands", "rpc", "systemPrompt"],
+    "host": "./host.ts",
+    "client": "./client.tsx",
+    "contributes": {
+      "tools": ["question"],
+      "commands": ["question"],
+      "slots": ["conversation.approvalDialog", "conversation.toolCall"]
+    },
+    "defaultConfig": {
+      "maxQuestions": 6,
+      "allowCustomAnswerByDefault": true,
+      "enableReviewStep": true,
+      "injectPromptGuidance": true
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "maxQuestions": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 12,
+          "default": 6,
+          "description": "单次 question 调用最多允许合并提问的问题数量（默认 6）"
+        },
+        "allowCustomAnswerByDefault": {
+          "type": "boolean",
+          "default": true,
+          "description": "选择题未显式指定 allowOther 时，默认允许用户点击「其他 / 自由补充」输入自定义回答"
+        },
+        "enableReviewStep": {
+          "type": "boolean",
+          "default": true,
+          "description": "多题问卷（2 题及以上）提交前默认展示答案汇总审阅页"
+        },
+        "injectPromptGuidance": {
+          "type": "boolean",
+          "default": true,
+          "description": "向系统提示词注入结构化追问规范（遇到关键需求歧义时优先调用 question 而非盲目假设）"
+        }
+      }
+    }
+  }
+}

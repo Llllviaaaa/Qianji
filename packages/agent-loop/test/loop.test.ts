@@ -15,6 +15,7 @@ import {
   COMPACTION_REQUEST,
   DEFAULT_MAX_TURNS,
   EMPTY_TURN_CONTINUATION_PROMPT,
+  FORKED_COMPACTION_REQUEST,
   LENGTH_CONTINUATION_PROMPT,
   buildCompactionWorkingSetAddendum,
   prepareSummaryMessages,
@@ -251,7 +252,7 @@ describe("agent loop", () => {
     await run(harness, "First");
     await run(harness, "Second");
     const [, summaryCall, answer] = harness.provider.requests;
-    expect(summaryCall?.messages.at(-1)).toEqual({ role: "user", content: text(COMPACTION_REQUEST) });
+    expect(summaryCall?.messages.at(-1)).toEqual({ role: "user", content: text(FORKED_COMPACTION_REQUEST) });
     expect(summaryCall?.messages.some((message) => JSON.stringify(message).includes("Second"))).toBe(false);
     expect(answer?.messages).toEqual([
       { role: "user", content: text(`${COMPACTION_PREFIX}Summary of one.`) },
@@ -560,11 +561,12 @@ describe("agent loop", () => {
     expect(results[1]?.data.content[0]).toEqual({ type: "text", text: "read_boom failed: unexpected execute rejection" });
     expect(harness.ctx.agents.status(harness.session.id)).toMatchObject({ running: false, runningTools: [] });
     const toolEnds = harness.deltas.filter((delta) => delta.type === "tool-end");
-    expect(toolEnds).toEqual([
+    expect(toolEnds).toHaveLength(3);
+    expect(toolEnds.slice(0, 2)).toEqual(expect.arrayContaining([
       { type: "tool-end", callId: "c1", isError: false },
       { type: "tool-end", callId: "c2", isError: true },
-      { type: "tool-end", callId: "c3", isError: false },
-    ]);
+    ]));
+    expect(toolEnds[2]).toEqual({ type: "tool-end", callId: "c3", isError: false });
   });
 
   it("rehydrates touched file paths and latest update_plan items after compaction while leaving echo-only compactions unchanged", async () => {
@@ -690,7 +692,7 @@ describe("agent loop", () => {
     expect(JSON.stringify(serialized)).not.toContain('"type":"tool-result"');
     expect(JSON.stringify(serialized)).not.toContain('"type":"image"');
 
-    // End-to-end 2nd compaction keeps wire messages pure text + COMPACTION_REQUEST without tools
+    // End-to-end 2nd compaction keeps wire messages pure text + COMPACTION_REQUEST without tools when samePrefixCompaction is disabled
     const harness = await setup([
       toolReply([{ id: "call-1", name: "echo", args: { text: "one" } }]),
       textReply("First answer."),
@@ -699,7 +701,7 @@ describe("agent loop", () => {
       textReply("Third answer."),
       textReply("Fourth answer."),
       textReply("Compaction #2."),
-    ]);
+    ], { loop: { samePrefixCompaction: false } });
     await run(harness, "Prompt 1");
     await run(harness, "Prompt 2");
     await harness.ctx.agents.compact(harness.session);

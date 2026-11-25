@@ -1,45 +1,42 @@
 /**
- * The agent loop (ADR 0008), the one place that drives a run:
+ * The agent loop (ADR 0008, ADR 0024), the one place that drives a run:
  *
  *   before-start → [turn-start → model call → tools → turn-end]* → settled
  *
  * Each turn derives the context from the session log, streams one model call
  * (chunks go out as `session/delta`), appends the assistant message, then runs
- * the tools it asked for in parallel and appends their results in call order.
- * Steering messages are delivered after a turn's tools (preempting remaining
- * batches when queued mid-turn); follow-ups once the model would otherwise
- * stop. A context-length error with no output compacts the whole log once and
- * retries.
+ * the tools it asked for in bounded batches and appends their results in call
+ * order. Steering messages abort `steeringSignal` for cooperative tools and
+ * preempt unstarted batches; `before-stop` aggregates nudges across all
+ * registered listeners; `length` truncations below `maxOutputTokens` replay
+ * silently once at the model's ceiling before falling back to continuation.
  */
 import { Context, Service } from "@deepseek-ai/cordis";
 import {
-  AgentBusyError,
-  NoModelError,
-  type AgentDelta,
-  type AgentStatus,
-  type Agents,
-  type RunOutcome,
+  AgentBusyError, NoModelError, type AgentDelta, type AgentStatus,
+  type Agents, type BeforeStopContext, type RunOutcome,
 } from "@qianji/agent";
-import { BlockAssembler, toLlmError, type LlmRequest, type StreamChunk, type ToolCallBlock, type UserContent } from "@qianji/llm";
+import {
+  BlockAssembler, toLlmError, type AssistantContent, type LlmRequest,
+  type StreamChunk, type ToolCallBlock, type UserContent,
+} from "@qianji/llm";
 import { CONTINUATION_NAMESPACE, hasVisibleProse, type EventOf, type ModelRef, type Session } from "@qianji/session";
 import "@qianji/system-prompt";
-import { ACTIVATE_TOOLS_NAME, textOutput, type ToolEnv, type ToolOutput } from "@qianji/tools";
+import "@qianji/tools";
 import {
-  compactIfLarge,
-  summarizeSession,
-  type AgentLoopConfig,
-  type CompactionHost,
-  type WindowCache,
+  compactIfLarge, maxOutputCeiling, summarizeSession,
+  type AgentLoopConfig, type CompactionHost, type WindowCache,
 } from "./compaction.ts";
+import { DEFAULT_MAX_PARALLEL_TOOLS, runToolBatches } from "./tool-runner.ts";
 
 export { buildCompactionWorkingSetAddendum } from "./rehydrate.ts";
 export {
-  SUMMARY_CLIP_LEVELS,
-  prepareSummaryMessages,
-  serializeConversation,
-  shrinkForSummary,
-} from "./summary-input.ts";
-export { COMPACTION_REQUEST, COMPACTION_SYSTEM, type AgentLoopConfig } from "./compaction.ts";
+  PRUNE_HEAD_CHARS, PRUNE_HYSTERESIS_RATIO, PRUNE_IDLE_RATIO, PRUNE_IDLE_TTL_MS,
+  PRUNE_MIN_CHARS, PRUNE_TAIL_CHARS, estimateBranchContextTokens, formatPrunedToolResult, pruneOldToolResults,
+} from "./pruner.ts";
+export { SUMMARY_CLIP_LEVELS, prepareSummaryMessages, serializeConversation, shrinkForSummary } from "./summary-input.ts";
+export { COMPACTION_REQUEST, COMPACTION_SYSTEM, FORKED_COMPACTION_REQUEST, type AgentLoopConfig } from "./compaction.ts";
+export { DEFAULT_MAX_PARALLEL_TOOLS, STEER_SKIPPED_MESSAGE, partitionToolBatches } from "./tool-runner.ts";
 
 export const LENGTH_CONTINUATION_PROMPT =
   "Your previous response hit the output token limit and was cut off mid-generation. Continue directly from where you stopped; if you were about to call a tool, invoke it now.";
@@ -52,10 +49,11 @@ export const MAX_LENGTH_CONTINUATIONS = 3;
 export const MAX_EMPTY_CONTINUATIONS = 2;
 export const MAX_PLUGIN_CONTINUATIONS = 2;
 
-const STEER_SKIPPED_MESSAGE = "Skipped due to queued user steering message.";
+const EMPTY_RESPONSE_EXHAUSTED_MESSAGE = "模型未返回可见正文（连续仅输出思考或空响应）。";
 
 interface Run {
   controller: AbortController;
+  steeringController: AbortController;
   done: Promise<void>;
   steer: UserContent[][];
   followUp: UserContent[][];
@@ -63,35 +61,11 @@ interface Run {
   runningTools: Map<string, string>;
 }
 
-interface IndexedCall {
-  call: ToolCallBlock;
-  index: number;
-}
-
 const IDLE_QUEUE = { steer: 0, followUp: 0 };
+const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
-/** Group consecutive read-only calls into concurrent batches separated by serial barriers. */
-function partitionToolBatches(
-  calls: readonly ToolCallBlock[],
-  isConcurrencySafe: (name: string) => boolean,
-): IndexedCall[][] {
-  const batches: IndexedCall[][] = [];
-  let currentConcurrent: IndexedCall[] | undefined;
-  for (const [index, call] of calls.entries()) {
-    const item: IndexedCall = { call, index };
-    if (isConcurrencySafe(call.name)) {
-      if (currentConcurrent === undefined) {
-        currentConcurrent = [item];
-        batches.push(currentConcurrent);
-      } else {
-        currentConcurrent.push(item);
-      }
-    } else {
-      currentConcurrent = undefined;
-      batches.push([item]);
-    }
-  }
-  return batches;
+function isTruncatedToolCall(block: AssistantContent): boolean {
+  return block.type === "tool-call" && (block.name.trim() === "" || "__invalidJson" in block.arguments);
 }
 
 export class AgentLoop extends Service implements Agents {
@@ -99,13 +73,18 @@ export class AgentLoop extends Service implements Agents {
 
   private readonly runs = new Map<string, Run>();
   private readonly maxTurns: number;
+  private readonly maxParallelTools: number;
   private readonly windows: WindowCache = new Map();
 
   constructor(ctx: Context, private readonly config: AgentLoopConfig = {}) {
     super(ctx, "agents");
     this.maxTurns = Math.max(1, config.maxTurns ?? DEFAULT_MAX_TURNS);
+    this.maxParallelTools = Math.max(1, config.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS);
     ctx.effect(() => () => {
-      for (const run of this.runs.values()) run.controller.abort();
+      for (const run of this.runs.values()) {
+        run.steeringController.abort();
+        run.controller.abort();
+      }
     }, "agent-loop: abort runs");
   }
 
@@ -121,6 +100,7 @@ export class AgentLoop extends Service implements Agents {
     const run = this.runs.get(session.id);
     if (run === undefined) return this.prompt(session, content);
     run.steer.push(content);
+    run.steeringController.abort();
     this.queueDelta(session, run);
     return undefined;
   }
@@ -143,6 +123,7 @@ export class AgentLoop extends Service implements Agents {
       const session = this.ctx.sessions.peek(sessionId);
       if (session !== undefined) this.queueDelta(session, run);
     }
+    run.steeringController.abort();
     run.controller.abort();
     await run.done;
   }
@@ -191,6 +172,7 @@ export class AgentLoop extends Service implements Agents {
   private start(session: Session): void {
     const run: Run = {
       controller: new AbortController(),
+      steeringController: new AbortController(),
       done: Promise.resolve(),
       steer: [],
       followUp: [],
@@ -198,36 +180,69 @@ export class AgentLoop extends Service implements Agents {
       runningTools: new Map(),
     };
     this.runs.set(session.id, run);
-    // The run keeps its Session object, so the session stays loaded until it ends.
     const release = this.ctx.sessions.hold(session.id);
     run.done = this.drive(session, run).finally(release);
   }
 
   private async drive(session: Session, run: Run): Promise<void> {
-    let outcome: RunOutcome = "error";
+    let outcome: RunOutcome;
     this.delta(session, { type: "agent-start" });
-    try {
-      outcome = await this.loop(session, run);
-    } catch (error) {
-      this.ctx.logger("agent").error("run of %s failed: %s", session.id, error);
-      const errorInfo = toLlmError(error, run.controller.signal).toInfo();
-      const model = session.state().model ?? { provider: "unknown", model: "unknown" };
-      session.append("assistant", {
-        content: [],
-        model,
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-        stop: "error",
-        error: errorInfo,
-      });
+    for (;;) {
+      outcome = "error";
+      try {
+        outcome = await this.loop(session, run);
+      } catch (error) {
+        this.ctx.logger("agent").error("run of %s failed: %s", session.id, error);
+        const errorInfo = toLlmError(error, run.controller.signal).toInfo();
+        const model = session.state().model ?? { provider: "unknown", model: "unknown" };
+        session.append("assistant", {
+          content: [],
+          model,
+          usage: { ...ZERO_USAGE },
+          stop: "error",
+          error: errorInfo,
+        });
+      }
+      try {
+        await session.flush();
+      } catch (error) {
+        this.ctx.logger("agent").error("flushing %s failed: %s", session.id, error);
+      }
+      if (
+        outcome === "done"
+        && !run.controller.signal.aborted
+        && (this.deliverSteer(session, run) || this.deliverOneFollowUp(session, run))
+      ) {
+        continue;
+      }
+      break;
     }
-    try {
-      await session.flush();
-    } catch (error) {
-      this.ctx.logger("agent").error("flushing %s failed: %s", session.id, error);
+    if (run.steer.length > 0 || run.followUp.length > 0) {
+      run.steer.length = 0;
+      run.followUp.length = 0;
+      this.queueDelta(session, run);
     }
     this.runs.delete(session.id);
     this.delta(session, { type: "agent-end", outcome });
     await this.ctx.parallel("agent/settled", session, outcome);
+  }
+
+  private async collectBeforeStopNudges(
+    session: Session,
+    info: BeforeStopContext,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    const dispatchArgs: unknown[] = ["agent/before-stop", session, info];
+    const listeners = this.ctx.events.dispatch("serial", dispatchArgs) as Array<
+      (s: Session, c: BeforeStopContext) => Promise<string | undefined> | string | undefined
+    >;
+    const nudges: string[] = [];
+    for (const listener of listeners) {
+      if (signal.aborted) return undefined;
+      const result = await listener(session, info);
+      if (typeof result === "string" && result.trim() !== "") nudges.push(result.trim());
+    }
+    return nudges.length > 0 ? nudges.join("\n\n") : undefined;
   }
 
   private async loop(session: Session, run: Run): Promise<RunOutcome> {
@@ -241,8 +256,9 @@ export class AgentLoop extends Service implements Agents {
     for (let turn = 1; ; turn += 1) {
       if (signal.aborted) return "aborted";
       if (turn > this.maxTurns) return "max-turns";
-      // Before the first call the latest turn is only the new prompt, so it stays verbatim;
-      // later in the run it holds the tool results that grew the context (ADR 0008).
+      if (run.steer.length === 0 && run.steeringController.signal.aborted) {
+        run.steeringController = new AbortController();
+      }
       await compactIfLarge(this.compactionHost(), session, signal, turn === 1);
       if (signal.aborted) return "aborted";
 
@@ -253,11 +269,19 @@ export class AgentLoop extends Service implements Agents {
       const state = session.state();
       const model = state.model;
       if (model === undefined) throw new NoModelError(session.id);
-      const response = await this.call(session, run, model, signal);
+      const initialMaxTokens = this.config.defaultMaxTokens;
+      let response = await this.call(session, run, model, signal, initialMaxTokens);
+
+      if (response.reason === "length" && !signal.aborted) {
+        const ceiling = await maxOutputCeiling(this.compactionHost(), model, signal);
+        const usedCap = initialMaxTokens ?? response.usage.outputTokens;
+        if (!signal.aborted && ceiling !== undefined && ceiling > usedCap && (initialMaxTokens === undefined || initialMaxTokens < ceiling)) {
+          response = await this.call(session, run, model, signal, ceiling);
+        }
+      }
 
       if (response.reason === "error" && response.error?.kind === "context-length"
         && response.message.content.length === 0 && !compactedForLength) {
-        // Nothing was said yet: shrink the context and try the same turn again.
         compactedForLength = true;
         const compacted = await summarizeSession(this.compactionHost(), session, signal, "full");
         if (signal.aborted) {
@@ -276,15 +300,21 @@ export class AgentLoop extends Service implements Agents {
         return "aborted";
       }
 
+      const persistedContent = response.reason === "error"
+        ? response.message.content.filter((block) => block.type !== "tool-call")
+        : response.reason === "length"
+          ? response.message.content.filter((block) => !isTruncatedToolCall(block))
+          : response.message.content;
+
       session.append("assistant", {
-        content: response.message.content,
+        content: persistedContent,
         model,
         usage: response.usage,
         stop: response.reason,
         ...(response.error === undefined ? {} : { error: response.error }),
       });
 
-      const calls = response.message.content.filter((block): block is ToolCallBlock => block.type === "tool-call");
+      const calls = persistedContent.filter((block): block is ToolCallBlock => block.type === "tool-call");
       if (response.reason === "aborted" || signal.aborted) {
         for (const call of calls) {
           session.append("tool-result", { callId: call.id, name: call.name, content: [{ type: "text", text: "Aborted before the tool ran." }], isError: true });
@@ -297,18 +327,30 @@ export class AgentLoop extends Service implements Agents {
         return "error";
       }
 
-      if (calls.length > 0) await this.runTools(session, run, calls, signal);
+      if (calls.length > 0) {
+        await runToolBatches({
+          session,
+          tools: this.ctx.tools,
+          calls,
+          signal,
+          steeringSignal: run.steeringController.signal,
+          maxParallelTools: this.maxParallelTools,
+          runningTools: run.runningTools,
+          hasSteer: () => run.steer.length > 0,
+          delta: (delta) => this.delta(session, delta),
+        });
+      }
       await this.ctx.serial("agent/turn-end", session, turn);
       if (signal.aborted) return "aborted";
 
-      if (this.deliver(session, run, run.steer) || calls.length > 0 || this.deliver(session, run, run.followUp)) {
+      if (this.deliverSteer(session, run) || calls.length > 0 || this.deliverOneFollowUp(session, run)) {
         lengthContinuations = 0;
         emptyContinuations = 0;
         pluginContinuations = 0;
         continue;
       }
 
-      const hasText = response.message.content.some((block) => block.type === "text" && hasVisibleProse(block.text));
+      const hasText = persistedContent.some((block) => block.type === "text" && hasVisibleProse(block.text));
       if (response.reason === "length" && lengthContinuations < MAX_LENGTH_CONTINUATIONS) {
         lengthContinuations += 1;
         session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "length", text: LENGTH_CONTINUATION_PROMPT } });
@@ -320,33 +362,68 @@ export class AgentLoop extends Service implements Agents {
         continue;
       }
       if (pluginContinuations < MAX_PLUGIN_CONTINUATIONS) {
-        const nudge = await this.ctx.serial("agent/before-stop", session, { turn, stop: response.reason, hasText });
+        const nudge = await this.collectBeforeStopNudges(session, { turn, stop: response.reason, hasText }, signal);
         if (signal.aborted) return "aborted";
-        if (typeof nudge === "string" && nudge.trim() !== "") {
-          pluginContinuations += 1;
-          session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "before-stop", text: nudge.trim() } });
+        if (this.deliverSteer(session, run)) {
+          lengthContinuations = 0;
+          emptyContinuations = 0;
+          pluginContinuations = 0;
           continue;
         }
+        if (nudge !== undefined) {
+          pluginContinuations += 1;
+          session.append("custom", { ns: CONTINUATION_NAMESPACE, data: { reason: "before-stop", text: nudge } });
+          continue;
+        }
+      }
+      if (!signal.aborted && (this.deliverSteer(session, run) || this.deliverOneFollowUp(session, run))) {
+        lengthContinuations = 0;
+        emptyContinuations = 0;
+        pluginContinuations = 0;
+        continue;
+      }
+      if (!hasText && response.reason !== "length") {
+        session.append("assistant", {
+          content: [],
+          model,
+          usage: { ...ZERO_USAGE },
+          stop: "error",
+          error: {
+            kind: "unknown",
+            code: "empty_response_exhausted",
+            message: EMPTY_RESPONSE_EXHAUSTED_MESSAGE,
+            retryable: true,
+          },
+        });
+        return "error";
       }
       return "done";
     }
   }
 
-  /** Append every queued message as a user event; whether there were any. */
-  private deliver(session: Session, run: Run, queue: UserContent[][]): boolean {
-    if (queue.length === 0) return false;
-    for (const content of queue.splice(0)) session.append("user", { content });
+  private deliverSteer(session: Session, run: Run): boolean {
+    if (run.steer.length === 0) return false;
+    for (const content of run.steer.splice(0)) session.append("user", { content });
+    run.steeringController = new AbortController();
     this.queueDelta(session, run);
     return true;
   }
 
-  private async call(session: Session, run: Run, model: ModelRef, signal: AbortSignal) {
+  private deliverOneFollowUp(session: Session, run: Run): boolean {
+    const next = run.followUp.shift();
+    if (next === undefined) return false;
+    session.append("user", { content: next });
+    this.queueDelta(session, run);
+    return true;
+  }
+
+  private async call(session: Session, run: Run, model: ModelRef, signal: AbortSignal, maxTokens?: number) {
     const tools = this.ctx.tools.schemas(session.id);
     const system = await this.ctx.systemPrompt.build({ sessionId: session.id, cwd: session.header.cwd, model, tools });
     if (signal.aborted) {
       return {
         message: { role: "assistant" as const, content: [] },
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        usage: { ...ZERO_USAGE },
         reason: "aborted" as const,
       };
     }
@@ -359,6 +436,7 @@ export class AgentLoop extends Service implements Agents {
       messages: state.messages,
       ...(tools.length === 0 ? {} : { tools }),
       ...(state.effort === undefined ? {} : { effort: state.effort }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
     };
     run.streaming = [];
     this.delta(session, { type: "llm-start", provider: model.provider, model: model.model });
@@ -371,63 +449,5 @@ export class AgentLoop extends Service implements Agents {
     }
     run.streaming = [];
     return assembler.result();
-  }
-
-  private isConcurrencySafeTool(name: string): boolean {
-    return name === ACTIVATE_TOOLS_NAME || this.ctx.tools.get(name)?.readOnly === true;
-  }
-
-  private async runTools(session: Session, run: Run, calls: ToolCallBlock[], signal: AbortSignal): Promise<void> {
-    for (const call of calls) {
-      session.append("tool-call", { callId: call.id, name: call.name, args: call.arguments });
-    }
-
-    const batches = partitionToolBatches(calls, (name) => this.isConcurrencySafeTool(name));
-    const outputs: Array<ToolOutput | undefined> = new Array(calls.length);
-    try {
-      for (const [batchIndex, batch] of batches.entries()) {
-        if (signal.aborted) break;
-        if (batchIndex > 0 && !signal.aborted && run.steer.length > 0) {
-          for (const remaining of batches.slice(batchIndex)) {
-            for (const { index } of remaining) {
-              outputs[index] = textOutput(STEER_SKIPPED_MESSAGE, true);
-            }
-          }
-          break;
-        }
-        await Promise.all(batch.map(async ({ call, index }) => {
-          run.runningTools.set(call.id, call.name);
-          this.delta(session, { type: "tool-start", callId: call.id, name: call.name });
-          let settled = false;
-          const env: ToolEnv = {
-            sessionId: session.id,
-            cwd: session.header.cwd,
-            signal,
-            onProgress: (text) => {
-              if (!settled && !signal.aborted) {
-                this.delta(session, { type: "tool-progress", callId: call.id, name: call.name, text });
-              }
-            },
-          };
-          try {
-            outputs[index] = await this.ctx.tools.execute({ id: call.id, name: call.name, args: { ...call.arguments } }, env);
-          } catch (error) {
-            const msg = signal.aborted ? "Aborted." : `${call.name} failed: ${error instanceof Error ? error.message : String(error)}`;
-            outputs[index] = textOutput(msg, true);
-          } finally {
-            settled = true;
-            run.runningTools.delete(call.id);
-          }
-        }));
-      }
-    } finally {
-      // Deterministic log order: every tool-call gets a matching tool-result even on failure/interruption.
-      for (const [index, call] of calls.entries()) {
-        const output = outputs[index] ?? textOutput(signal.aborted ? "Aborted." : "Tool execution interrupted.", true);
-        session.append("tool-result", { callId: call.id, name: call.name, content: output.content, isError: output.isError === true });
-        run.runningTools.delete(call.id);
-        this.delta(session, { type: "tool-end", callId: call.id, isError: output.isError === true });
-      }
-    }
   }
 }

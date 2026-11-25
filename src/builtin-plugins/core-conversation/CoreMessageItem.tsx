@@ -2,7 +2,7 @@
  * Built-in default `conversation.message` slot component (ADR 0023 `core-conversation`).
  */
 import type { ReactNode } from "react";
-import { Check, Info, LoaderCircle, Terminal } from "lucide-react";
+import { Check, Info, LoaderCircle, RotateCcw, Terminal } from "lucide-react";
 import { useFrontendService, useThemeState, type UiToolCall } from "@qianji/client";
 import { Markdown } from "@qianji/client-primitives";
 import type {
@@ -15,6 +15,9 @@ import {
   formatRunDuration,
 } from "./conversationHelpers";
 import { CopyActionButton, CoreUserMessageRow } from "./CoreUserMessageRow";
+
+const CORE_RETRY_PROMPT = "请重试并继续完成上一轮未完成的回复。";
+const CORE_CONTINUE_PROMPT = "请从上次截断处直接继续输出剩余内容。";
 
 export function CoreMessageItem({
   cwd: ownerCwd,
@@ -33,6 +36,8 @@ export function CoreMessageItem({
   renderFactory,
 }: SlotComponentProps<ConversationMessageSlotProps, "session">): ReactNode {
   const workbenchService = useFrontendService("workbenchService");
+  const sessionService = useFrontendService("sessionService");
+  const composerService = useFrontendService("composerService");
   const themeState = useThemeState();
   const resolvedCwd = ownerCwd ?? "";
   const resolvedSessionFile = ownerSessionFile ?? null;
@@ -213,6 +218,40 @@ export function CoreMessageItem({
           .join("\n\n")
       : "";
   const actionContent = hasContent ? assistantContent : fallbackNoteText;
+  const isLengthIncomplete =
+    !working && !message.isError && !message.isAborted && message.stopReason === "length";
+
+  const sendFollowUpPrompt = (promptText: string) => {
+    if (working) return;
+    if (sessionService !== undefined) {
+      const snap = sessionService.getSnapshot();
+      const isMain =
+        sessionId === undefined ||
+        sessionId === "" ||
+        sessionId === "active" ||
+        sessionId === snap.sessionId ||
+        sessionId === snap.sessionFile;
+      if (isMain) {
+        if (snap.isStreaming) return;
+        void sessionService.sendMessage(promptText);
+        return;
+      }
+      if (sessionService.getRetainCount(sessionId) > 0) {
+        const retained = sessionService.retain(sessionId);
+        if (retained.getSnapshot().isStreaming) {
+          retained.release();
+          return;
+        }
+        void retained.sendMessage(promptText).finally(() => {
+          retained.release();
+        });
+        return;
+      }
+      void sessionService.sendMessage(promptText);
+      return;
+    }
+    composerService?.prefill(promptText, sessionId);
+  };
 
   const fallbackAssistantArticle = (
     <article
@@ -224,19 +263,29 @@ export function CoreMessageItem({
       data-message-id={message.id}
       id={`message-${message.id}`}
     >
-      {!working && (message.durationMs !== undefined || message.isError || message.isAborted) && (
-        <div className="dshc-turn-process">
-          <span className="dshc-turn-process-label">
-            {message.isError
-              ? "处理失败"
-              : message.isAborted
-                ? "已停止"
-                : message.durationMs !== undefined && message.durationMs > 0
-                  ? `已完成，用时 ${formatRunDuration(message.durationMs)}`
-                  : "已完成"}
-          </span>
-        </div>
-      )}
+      {!working &&
+        (message.durationMs !== undefined ||
+          message.isError ||
+          message.isAborted ||
+          isLengthIncomplete) && (
+          <div className="dshc-turn-process">
+            <span className="dshc-turn-process-label">
+              {message.isError
+                ? "处理失败"
+                : message.isAborted
+                  ? message.durationMs !== undefined && message.durationMs > 0
+                    ? `已停止，用时 ${formatRunDuration(message.durationMs)}`
+                    : "已停止"
+                  : isLengthIncomplete
+                    ? message.durationMs !== undefined && message.durationMs > 0
+                      ? `未完成（输出受限），用时 ${formatRunDuration(message.durationMs)}`
+                      : "未完成（输出受限）"
+                    : message.durationMs !== undefined && message.durationMs > 0
+                      ? `已完成，用时 ${formatRunDuration(message.durationMs)}`
+                      : "已完成"}
+            </span>
+          </div>
+        )}
 
       {workSteps !== undefined && workSteps.length > 0 ? (
         workSteps.map((step, index) => {
@@ -281,23 +330,81 @@ export function CoreMessageItem({
         </>
       )}
 
-      {hasContent && (
-        <div className="dshc-answer" data-streaming={working || undefined}>
-          <div className="dshc-md dshc-md-prose">
-            <Markdown
-              content={assistantContent}
-              cwd={resolvedCwd}
-              onOpenFile={openFileFromMarkdown}
-              allowRichContent={!working}
-              isStreaming={working}
-            />
+      {hasContent &&
+        (!message.isError ||
+          (message.error !== undefined &&
+            assistantContent.trim() !== message.error.message.trim())) && (
+          <div className="dshc-answer" data-streaming={working || undefined}>
+            <div className="dshc-md dshc-md-prose">
+              <Markdown
+                content={assistantContent}
+                cwd={resolvedCwd}
+                onOpenFile={openFileFromMarkdown}
+                allowRichContent={!working}
+                isStreaming={working}
+              />
+            </div>
           </div>
+        )}
+
+      {isLengthIncomplete && (
+        <div className="dshc-turn-incomplete" role="status">
+          <div className="dshc-turn-incomplete-copy">
+            <span className="dshc-state-dot" data-state="warn" aria-hidden="true" />
+            <span>回答因达到输出长度上限而未完成</span>
+          </div>
+          {isLast && (
+            <button
+              type="button"
+              className="dshc-turn-incomplete-btn"
+              onClick={() => sendFollowUpPrompt(CORE_CONTINUE_PROMPT)}
+              title="让模型从上次截断处继续输出"
+            >
+              <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
+              <span>继续生成</span>
+            </button>
+          )}
         </div>
       )}
 
-      {message.isError && message.error !== undefined && (
+      {message.isError && (
         <div className="dshc-turn-error" role="status">
-          <div className="dshc-turn-error-message">{message.error.message}</div>
+          <div className="dshc-turn-error-header">
+            <div className="dshc-turn-error-heading">
+              <span className="dshc-state-dot" data-state="error" aria-hidden="true" />
+              <span className="dshc-turn-error-title">
+                {message.error?.code === "empty_response_exhausted"
+                  ? "模型未返回可见正文"
+                  : "提供商接口异常"}
+              </span>
+              {message.error?.code !== undefined && (
+                <span className="dshc-turn-error-badge is-code">{message.error.code}</span>
+              )}
+            </div>
+            {isLast && !working && message.error?.retryable !== false && (
+              <div className="dshc-turn-error-tools">
+                <button
+                  type="button"
+                  className="dshc-turn-error-btn"
+                  onClick={() => sendFollowUpPrompt(CORE_RETRY_PROMPT)}
+                  title="重试本轮请求"
+                >
+                  <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
+                  <span>重试</span>
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="dshc-turn-error-copy">
+            <div className="dshc-turn-error-message">
+              {message.error?.message || assistantContent || "本轮执行失败"}
+            </div>
+            {message.error?.code === "empty_response_exhausted" && (
+              <div className="dshc-turn-error-hint">
+                模型连续仅输出了内部思考或空响应。可点击重试，或调低推理强度后再试。
+              </div>
+            )}
+          </div>
         </div>
       )}
 

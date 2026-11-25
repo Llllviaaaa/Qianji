@@ -7,7 +7,7 @@ import { Sessions } from "@qianji/session";
 import { Tools, textOutput } from "@qianji/tools";
 import { Ui } from "@qianji/ui";
 import * as hooks from "../src/index.ts";
-import { hookEnvironment, type DesktopHookConfig } from "../src/index.ts";
+import { executeHook, hookEnvironment, type DesktopHookConfig } from "../src/index.ts";
 
 let dir = "";
 afterEach(() => {
@@ -69,5 +69,67 @@ describe("hooks", () => {
     await ctx.plugin(hooks, { hooks: [hook({ command: "" })] });
     ctx.tools.register({ name: "bash", description: "", parameters: { type: "object" }, execute: () => textOutput("ran") });
     expect(await ctx.tools.execute({ id: "1", name: "bash", args: {} }, { sessionId: "s", cwd: ".", signal: new AbortController().signal })).toEqual(textOutput("ran"));
+  });
+
+  it("supports stop hooks blocking via exit code 2 or JSON decision, and tool_result additionalContext injection", async () => {
+    dir = mkdtempSync(join(tmpdir(), "pid-hooks-stop-"));
+    const exit2Hook = join(dir, "stop-exit2.cjs");
+    writeFileSync(exit2Hook, "process.stderr.write('Run unit tests before finishing.');process.exit(2);");
+
+    const jsonBlockHook = join(dir, "stop-json.cjs");
+    writeFileSync(
+      jsonBlockHook,
+      "process.stdout.write(JSON.stringify({ decision: 'block', reason: 'Verify lint cleanly.' }));",
+    );
+
+    const postToolHook = join(dir, "post-tool.cjs");
+    writeFileSync(
+      postToolHook,
+      "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s).payload;if(p.toolName==='edit'){process.stdout.write(JSON.stringify({additionalContext:'Remember to update snapshots if intentional.'}))}});",
+    );
+
+    // Direct executeHook check for exitCode, stdout, stderr
+    const rawExec = await executeHook(
+      hook({ id: "raw", event: "stop", command: `${node} ${JSON.stringify(exit2Hook)}` }),
+      "stop",
+      { turn: 1 },
+      dir,
+      false,
+    );
+    expect(rawExec.ok).toBe(false);
+    expect(rawExec.exitCode).toBe(2);
+    expect(rawExec.stderr).toBe("Run unit tests before finishing.");
+
+    const ctx = new Context();
+    await ctx.plugin(Sessions);
+    await ctx.plugin(Ui);
+    await ctx.plugin(Tools);
+    await ctx.plugin(hooks, {
+      hooks: [
+        hook({ id: "s1", event: "stop", command: `${node} ${JSON.stringify(exit2Hook)}` }),
+        hook({ id: "s2", event: "stop", command: `${node} ${JSON.stringify(jsonBlockHook)}` }),
+        hook({ id: "tr1", event: "tool_result", command: `${node} ${JSON.stringify(postToolHook)}` }),
+      ],
+    });
+    ctx.tools.register({ name: "edit", description: "", parameters: { type: "object" }, execute: () => textOutput("edited file") });
+    ctx.tools.register({ name: "read", description: "", parameters: { type: "object" }, execute: () => textOutput("read file") });
+
+    const session = ctx.sessions.create({ cwd: dir });
+    const stopNudge = await ctx.serial("agent/before-stop", session, { turn: 1, stop: "stop", hasText: true });
+    expect(stopNudge).toBe("Run unit tests before finishing.\n\nVerify lint cleanly.");
+
+    const env = { sessionId: session.id, cwd: dir, signal: new AbortController().signal };
+    const edited = await ctx.tools.execute({ id: "c-edit", name: "edit", args: {} }, env);
+    expect(edited).toEqual({
+      content: [
+        { type: "text", text: "edited file" },
+        { type: "text", text: "\n\nRemember to update snapshots if intentional." },
+      ],
+    });
+
+    const readOut = await ctx.tools.execute({ id: "c-read", name: "read", args: {} }, env);
+    expect(readOut).toEqual(textOutput("read file"));
+
+    await ctx.fiber.dispose();
   });
 });

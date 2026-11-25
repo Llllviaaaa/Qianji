@@ -12,6 +12,8 @@
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
+import "@qianji/agent";
+import "@qianji/session";
 import type { ToolOutput } from "@qianji/tools";
 import "@qianji/tools";
 
@@ -19,6 +21,8 @@ export const name = "qianji-tool-output";
 export const inject = ["tools"];
 
 export const DEFAULT_MAX_CHARS = 50_000;
+export const DEFAULT_MAX_TURN_CHARS = 200_000;
+export const MIN_TURN_FLOOR_CHARS = 4_000;
 const DEFAULT_RETENTION_DAYS = 7;
 
 export interface Config {
@@ -26,6 +30,8 @@ export interface Config {
   spillDir?: string;
   /** Longest text result passed on whole, in characters. */
   maxChars?: number;
+  /** Per-turn aggregate inline text budget across tool calls in a session, in characters. */
+  maxTurnChars?: number;
   /** Session folders under `spillDir` older than this are deleted at start. */
   retentionDays?: number;
 }
@@ -75,15 +81,30 @@ export function pruneSpill(dir: string, cutoff: number): string[] {
 
 export function apply(ctx: Context, config: Config = {}): void {
   const maxChars = Math.max(1_000, config.maxChars ?? DEFAULT_MAX_CHARS);
+  const turnFloor = Math.min(maxChars, MIN_TURN_FLOOR_CHARS);
+  const maxTurnChars = Math.max(turnFloor, config.maxTurnChars ?? DEFAULT_MAX_TURN_CHARS);
   const { spillDir } = config;
   const logger = ctx.logger("tool-output");
   if (spillDir !== undefined) {
     pruneSpill(spillDir, Date.now() - (config.retentionDays ?? DEFAULT_RETENTION_DAYS) * 86_400_000);
   }
 
+  const turnUsed = new Map<string, number>();
+  ctx.on("agent/turn-start", (session) => {
+    turnUsed.delete(session.id);
+  });
+  ctx.on("agent/settled", async (session) => {
+    turnUsed.delete(session.id);
+  });
+  ctx.on("session/deleted", (sessionId) => {
+    turnUsed.delete(sessionId);
+  });
+
   ctx.on("tools/execute", async (call, env, next) => {
     const output = await next();
-    return limitOutput(output, maxChars, spillDir === undefined ? undefined : (text) => {
+    const used = turnUsed.get(env.sessionId) ?? 0;
+    const allowed = Math.min(maxChars, Math.max(turnFloor, maxTurnChars - used));
+    const saveFn = spillDir === undefined ? undefined : (text: string) => {
       const dir = join(spillDir, safeName(env.sessionId));
       const file = join(dir, `${safeName(env.callId ?? call.id)}.txt`);
       try {
@@ -94,6 +115,13 @@ export function apply(ctx: Context, config: Config = {}): void {
         logger.warn("keeping the full output of %s failed: %s", call.name, error);
         return undefined;
       }
-    });
+    };
+    const limited = limitOutput(output, allowed, saveFn);
+    let keptChars = 0;
+    for (const block of limited.content) {
+      if (block.type === "text") keptChars += block.text.length;
+    }
+    turnUsed.set(env.sessionId, used + keptChars);
+    return limited;
   });
 }

@@ -35,7 +35,7 @@ import {
   type McpResource,
   type ServerStatus,
 } from "./client.ts";
-import { buildAllMcpToolDefinitions, resolveMcpServer, type McpServerConfig } from "./tool-defs.ts";
+import { registerAllMcpTools, resolveMcpServer, type McpServerConfig } from "./tool-defs.ts";
 
 export {
   createClient,
@@ -381,17 +381,15 @@ export class Mcp extends Service {
   private rebuildToolRegistrations(): void {
     if (this.closed) return;
     for (const dispose of this.disposers.splice(0)) dispose();
-    const defs = buildAllMcpToolDefinitions({
-      ctx: this.ctx,
-      connected: [...this.connected.values()],
-      subscriptions: this.subscriptions,
-      ...(this.config.confirmTools === undefined ? {} : { confirmTools: this.config.confirmTools }),
-      ...(this.config.deferTools === undefined ? {} : { defaultDeferTools: this.config.deferTools }),
-    });
-    for (const definition of defs) {
-      if (this.closed) return;
-      this.disposers.push(this.ctx.tools.register(definition));
-    }
+    this.disposers.push(
+      ...registerAllMcpTools({
+        ctx: this.ctx,
+        connected: [...this.connected.values()],
+        subscriptions: this.subscriptions,
+        ...(this.config.confirmTools === undefined ? {} : { confirmTools: this.config.confirmTools }),
+        ...(this.config.deferTools === undefined ? {} : { defaultDeferTools: this.config.deferTools }),
+      }),
+    );
   }
 
   private registerSlashCommands(ctx: Context): void {

@@ -34,7 +34,7 @@ import {
   type ProcessSegment,
 } from "./message/messageHelpers";
 import { ProcessGroup, ReasoningRow, RunningRow } from "./message/MessageProcessBlocks";
-import { TurnErrorCard } from "./message/TurnErrorCard";
+import { TurnErrorCard, TurnIncompleteBanner } from "./message/TurnErrorCard";
 import { UserMessageRow } from "./message/UserMessageRow";
 import { ToolCall } from "./ToolCall";
 
@@ -166,8 +166,9 @@ export const Message = memo(function Message({
     stopReason: message.stopReason,
   });
   const effectiveProcessOpen = processOpen ?? emptyTurn.autoOpenProcess;
+  const isLengthIncomplete = !working && !message.isError && !message.isAborted && message.stopReason === "length";
 
-  if (!hasContent && !working && !hasProcess && !reasoningUnavailable && !emptyTurn.hint && !message.isError && !message.isAborted) return null;
+  if (!hasContent && !working && !hasProcess && !reasoningUnavailable && !emptyTurn.hint && !isLengthIncomplete && !message.isError && !message.isAborted) return null;
 
   const usage = message.usage;
   const copyTitle = usage
@@ -234,6 +235,7 @@ export const Message = memo(function Message({
     || (showThinking && durationMs !== null)
     || reasoningUnavailable
     || Boolean(emptyTurn.hint)
+    || isLengthIncomplete
     || message.isAborted === true
     || message.isError === true
   );
@@ -241,7 +243,9 @@ export const Message = memo(function Message({
     ? "处理失败"
     : message.isAborted
       ? (durationMs !== null ? "已停止，用时 " : "已停止")
-      : (durationMs !== null ? "已完成，用时 " : "已完成");
+      : isLengthIncomplete
+        ? (durationMs !== null ? "未完成（输出受限），用时 " : "未完成（输出受限）")
+        : (durationMs !== null ? "已完成，用时 " : "已完成");
   const durationParts = !message.isError && durationMs !== null ? formatRunDuration(Math.max(1000, durationMs)) : [];
   const liveProcessVisible = working && hasProcess;
   const liveLabel = liveActivityLabel(workingLabel, hasRunningTool, reasoningLive, working && hasContent);
@@ -299,7 +303,8 @@ export const Message = memo(function Message({
           </div>
         </div>
       )}
-      {message.isError && <TurnErrorCard message={message} fallbackContent={assistantContent} />}
+      {isLengthIncomplete && <TurnIncompleteBanner isLast={isLastAssistant} />}
+      {message.isError && <TurnErrorCard message={message} fallbackContent={assistantContent} isLast={isLastAssistant} />}
       {working && (
         <RunningRow
           label={liveLabel}

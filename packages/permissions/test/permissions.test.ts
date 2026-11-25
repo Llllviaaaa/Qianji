@@ -315,4 +315,27 @@ describe("ADR 0022 tool permissions", () => {
       expect(withBoth.message).toContain("验证 Shell");
     }
   });
+
+  it("classifies persistent collab subagent tools (spawn_agent, send_input, wait_agent, close_agent) across modes and quickChat", () => {
+    // spawn_agent matches delegate_task 1:1 across read-only, ask, workspace-write, and quickChat
+    expect(check("spawn_agent", { task: "audit", permission: "read-only" }, "read-only").action).toBe("allow");
+    expect(check("spawn_agent", { task: "audit" }, "ask").action).toBe("allow");
+    expect(check("spawn_agent", { task: "edit", permission: "workspace-write" }, "read-only")).toMatchObject({
+      action: "block",
+      reason: "Qianji read-only mode only permits read-only subagents",
+    });
+    expect(check("spawn_agent", { task: "edit", permission: "workspace-write", allowShell: true }, "workspace-write")).toMatchObject({
+      action: "confirm",
+      title: "允许子代理修改这个工作区？",
+    });
+
+    // Control tools do not trigger unclassified-tool blocks or confirms
+    for (const controlTool of ["send_input", "wait_agent", "close_agent"] as const) {
+      expect(check(controlTool, { agentId: "c1" }, "read-only").action).toBe("allow");
+      expect(check(controlTool, { agentId: "c1" }, "ask").action).toBe("allow");
+      expect(check(controlTool, { agentId: "c1" }, "workspace-write").action).toBe("allow");
+      expect(check(controlTool, { agentId: "c1" }, "workspace-write", true)).toMatchObject({ action: "block" });
+    }
+    expect(check("spawn_agent", { task: "audit" }, "workspace-write", true)).toMatchObject({ action: "block" });
+  });
 });

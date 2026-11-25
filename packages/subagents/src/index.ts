@@ -1,17 +1,18 @@
 /**
- * The `delegate_task` tool (ADR 0010, extended by ADR 0022): run up to eight
- * independent tasks as isolated child sessions with per-role model routing,
- * opt-in verification shell access, and optional Git worktree isolation.
+ * The `delegate_task` tool and persistent background collaboration tools
+ * (ADR 0010, ADR 0022, ADR 0024): run isolated child sessions with per-role
+ * model routing, `forkContext` prefix sharing, trusted verification shell
+ * access, and dirty-aware Git worktree isolation.
  */
 import type { Context } from "@deepseek-ai/cordis";
 import "@qianji/agent";
-import type { Effort } from "@qianji/llm";
 import type { Session } from "@qianji/session";
 import { textOutput, type ToolDefinition, type ToolEnv } from "@qianji/tools";
 import type {} from "@qianji/ui";
+import { spawnConfiguredChild, type Config } from "./child-session.ts";
+import { registerCollabTools } from "./collab.ts";
 import {
   normalizeSubagentTasks,
-  SHELL_VERIFICATION_TOOLS,
   subagentPrompt,
   type SubagentPermission,
   type SubagentRole,
@@ -22,39 +23,19 @@ import {
   applyOrSaveWorktreePatch,
   cleanupWorktree,
   collectWorktreePatch,
-  prepareIsolatedWorktree,
   type CollectedWorktreePatch,
-  type PreparedWorktree,
   type WorktreePatchResult,
 } from "./worktree.ts";
 
+export * from "./child-session.ts";
+export * from "./collab.ts";
 export * from "./core.ts";
+export * from "./fork-context.ts";
 export * from "./structured.ts";
 export * from "./worktree.ts";
 
 export const name = "qianji-subagents";
 export const inject = ["sessions", "tools", "agents"];
-
-export interface RoleModelConfig {
-  provider: string;
-  model: string;
-  effort?: Effort;
-}
-
-export interface Config {
-  /** Default model for subagents; falls back to the parent session's model. */
-  model?: { provider: string; model: string };
-  effort?: Effort;
-  /** Optional per-role model & effort overrides (`explorer`, `planner`, `reviewer`, `worker`). */
-  roleModels?: Partial<Record<SubagentRole, RoleModelConfig>>;
-  /** Subagents running at once, 1..4. Default 3. */
-  concurrency?: number;
-  /** Master switch allowing `allowShell: true` on `workspace-write` subagents (default `true`). */
-  allowShell?: boolean;
-}
-
-export const READ_TOOLS = ["read", "grep", "find", "ls"] as const;
-export const WRITE_TOOLS = ["edit", "write"] as const;
 
 export interface SubagentResult extends SubagentTask {
   sessionId: string;
@@ -71,12 +52,13 @@ export interface RunSubagentOptions {
   schema?: JsonSchema;
   allowShell?: boolean;
   isolateWorktree?: boolean;
+  forkContext?: boolean;
 }
 
 type Status = "queued" | "running" | "completed" | "failed";
 
-function finalText(session: Session): string {
-  const last = session.events.findLast((event) => event.type === "assistant");
+function finalText(session: Session, afterSeq = 0): string {
+  const last = session.events.findLast((event) => event.seq > afterSeq && event.type === "assistant");
   if (last?.type !== "assistant") return "";
   return last.data.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n").trim();
 }
@@ -101,7 +83,7 @@ interface InternalRunOutcome {
 
 function isJsonSchemaArg(value: JsonSchema | RunSubagentOptions | undefined): value is JsonSchema {
   if (value === undefined) return false;
-  return !("schema" in value) && !("allowShell" in value) && !("isolateWorktree" in value);
+  return !("schema" in value) && !("allowShell" in value) && !("isolateWorktree" in value) && !("forkContext" in value);
 }
 
 async function runSubagentInternal(
@@ -113,49 +95,23 @@ async function runSubagentInternal(
   config: Config,
   opts: RunSubagentOptions,
 ): Promise<InternalRunOutcome> {
-  const roleOverride = config.roleModels?.[task.role];
-  const model = roleOverride !== undefined
-    ? { provider: roleOverride.provider, model: roleOverride.model }
-    : (config.model ?? parent.state().model);
-  const effort = roleOverride?.effort ?? config.effort;
-
-  const useWorktree = permission === "workspace-write" && opts.isolateWorktree === true;
-  let prepared: PreparedWorktree | undefined;
-  if (useWorktree) {
-    const prep = await prepareIsolatedWorktree(parent.header.cwd, `${task.label}-${Date.now()}`, env.signal);
-    if (!prep.ok) {
-      return { result: { ...task, sessionId: "", ok: false, output: "", error: prep.error } };
-    }
-    prepared = prep.worktree;
-  }
-  if (env.signal.aborted) {
-    if (prepared !== undefined) await cleanupWorktree(prepared.repoRoot, prepared.wtRoot);
-    return { result: { ...task, sessionId: "", ok: false, output: "", error: "Aborted" } };
+  const spawned = await spawnConfiguredChild(ctx, parent, {
+    label: task.label,
+    task: task.task,
+    role: task.role,
+    permission,
+    allowShell: opts.allowShell,
+    isolateWorktree: opts.isolateWorktree,
+    forkContext: opts.forkContext,
+    callId: env.callId,
+    signal: env.signal,
+  }, config);
+  if (!spawned.ok) {
+    return { result: { ...task, sessionId: "", ok: false, output: "", error: spawned.error } };
   }
 
-  const sessionCwd = prepared !== undefined ? prepared.sessionCwd : parent.header.cwd;
-  const child = ctx.sessions.create({ cwd: sessionCwd, parent: { sessionId: parent.id, callId: env.callId ?? "" } });
+  const { child, prepared, allowShell, disposeRestrictions } = spawned;
   const base = { ...task, sessionId: child.id };
-  if (model === undefined) {
-    if (prepared !== undefined) await cleanupWorktree(prepared.repoRoot, prepared.wtRoot);
-    return { result: { ...base, ok: false, output: "", error: "The parent session has no model" } };
-  }
-  child.append("model", model);
-  if (effort !== undefined) child.append("effort", { effort });
-  child.append("label", { title: `${task.label} (${task.role})` });
-
-  const permissions = ctx.get("permissions") as { set(session: Session, change: { permission: string; agentMode: string }): number } | undefined;
-  permissions?.set(child, { permission, agentMode: "agent" });
-
-  const allowShell = permission === "workspace-write" && opts.allowShell === true && config.allowShell !== false;
-  const allowedTools: readonly string[] = permission === "workspace-write"
-    ? (allowShell ? [...READ_TOOLS, ...WRITE_TOOLS, ...SHELL_VERIFICATION_TOOLS] : [...READ_TOOLS, ...WRITE_TOOLS])
-    : READ_TOOLS;
-  const unrestrict = ctx.tools.restrict(child.id, allowedTools);
-
-  const ui = ctx.get("ui") as { canAsk(sessionId?: string): boolean; markUnattended(sessionId: string): () => void } | undefined;
-  const disposeUnattended = ui !== undefined && !ui.canAsk(parent.id) ? ui.markUnattended(child.id) : undefined;
-
   const abort = () => void ctx.agents.abort(child.id);
   env.signal.addEventListener("abort", abort, { once: true });
   let outcome = "error";
@@ -165,14 +121,15 @@ async function runSubagentInternal(
       if (session === child) outcome = status;
     });
     const ask = async (text: string): Promise<string> => {
+      const baselineSeq = child.lastSeq;
       ctx.agents.prompt(child, [{ type: "text", text }]);
       await ctx.agents.idle(child.id);
-      return finalText(child);
+      return finalText(child, baselineSeq);
     };
     let output: string;
     let structured: ReturnType<typeof readStructuredAnswer> | undefined;
     try {
-      const promptText = subagentPrompt(task, { allowShell, isolatedWorktree: useWorktree });
+      const promptText = subagentPrompt(task, { allowShell, isolatedWorktree: prepared !== undefined });
       output = await ask(opts.schema === undefined ? promptText : `${promptText}\n\n${structuredInstruction(opts.schema)}`);
       if (opts.schema !== undefined && outcome === "done") {
         structured = readStructuredAnswer(output, opts.schema);
@@ -200,17 +157,13 @@ async function runSubagentInternal(
     return { result: { ...base, ok: false, output, error }, collectedPatch };
   } finally {
     env.signal.removeEventListener("abort", abort);
-    unrestrict();
-    disposeUnattended?.();
+    disposeRestrictions();
     if (prepared !== undefined) {
       await cleanupWorktree(prepared.repoRoot, prepared.wtRoot);
     }
   }
 }
 
-/**
- * Run one task in a child session of `parent` and wait for it to settle.
- */
 export async function runSubagent(
   ctx: Context,
   parent: Session,
@@ -234,16 +187,17 @@ export function delegateTool(ctx: Context, config: Config): ToolDefinition<{
   permission?: SubagentPermission;
   allowShell?: boolean;
   isolateWorktree?: boolean;
+  forkContext?: boolean;
   applyChanges?: boolean;
   outputSchema?: JsonSchema;
 }> {
   const concurrency = Math.max(1, Math.min(4, config.concurrency ?? 3));
   return {
     name: "delegate_task",
-    // Subagent runs are bounded by their own turn limit and the parent's abort (ADR 0020).
     timeoutMs: 0,
+    isConcurrencySafe: (args) => args.permission !== "workspace-write",
     description: [
-      "Run one isolated subagent or up to eight independent subagents in parallel; each gets a fresh context and returns its final answer.",
+      "Run one isolated subagent or up to eight independent subagents in parallel; each gets a fresh context (or settled parent prefix when `forkContext: true`) and returns its final answer.",
       "Use it only when an isolated context or independent parallel investigation materially helps.",
       "Default to read-only. Request workspace-write for workers that must edit files; pass `allowShell: true` only when verification commands/diagnostics are needed, and `isolateWorktree: true` when parallel workers should edit in separate Git worktrees before applying patches sequentially.",
       "Pass outputSchema (a JSON Schema) when you need structured JSON answers.",
@@ -269,12 +223,13 @@ export function delegateTool(ctx: Context, config: Config): ToolDefinition<{
         },
         permission: { type: "string", enum: ["read-only", "workspace-write"] },
         allowShell: { type: "boolean", description: "When permission is workspace-write, grant verification shell and diagnostics tools" },
-        isolateWorktree: { type: "boolean", description: "When permission is workspace-write, run each subagent in a temporary Git worktree from HEAD and collect patches" },
+        isolateWorktree: { type: "boolean", description: "When permission is workspace-write, run each subagent in a temporary Git worktree and collect patches" },
+        forkContext: { type: "boolean", description: "Clone the parent session's settled conversation prefix into each subagent" },
         applyChanges: { type: "boolean", description: "When isolateWorktree is true, automatically apply clean patches sequentially back to the repo (default true)" },
         outputSchema: { type: "object", description: "JSON Schema every subagent's final answer must match; the answers then come back as JSON" },
       },
     },
-    async execute({ task, role, tasks: many, permission: requested, allowShell, isolateWorktree, applyChanges, outputSchema }, env) {
+    async execute({ task, role, tasks: many, permission: requested, allowShell, isolateWorktree, forkContext, applyChanges, outputSchema }, env) {
       if (outputSchema !== undefined && (typeof outputSchema !== "object" || outputSchema === null || Array.isArray(outputSchema))) {
         return textOutput("outputSchema must be a JSON Schema object.", true);
       }
@@ -306,6 +261,7 @@ export function delegateTool(ctx: Context, config: Config): ToolDefinition<{
           ...(outputSchema === undefined ? {} : { schema: outputSchema }),
           allowShell,
           isolateWorktree,
+          forkContext,
         });
         sessions[index] = itemOutcome.result.sessionId;
         statuses[index] = itemOutcome.result.ok ? "completed" : "failed";
@@ -355,4 +311,13 @@ export function delegateTool(ctx: Context, config: Config): ToolDefinition<{
 
 export function apply(ctx: Context, config: Config = {}): void {
   ctx.effect(() => ctx.tools.register(delegateTool(ctx, config)), `${name}: delegate_task`);
+  ctx.effect(
+    () =>
+      registerCollabTools(ctx, {
+        maxActiveAgents: config.maxActiveAgents,
+        maxDepth: config.maxDepth,
+        spawnChild: (parent, input) => spawnConfiguredChild(ctx, parent, input, config),
+      }),
+    `${name}: collab_tools`,
+  );
 }

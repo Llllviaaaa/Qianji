@@ -1,11 +1,12 @@
 /**
- * Taken from the Pi engine's pidesktop-hooks-core.ts, which went with Pi in P6c (ADR 0009).
+ * Taken from the Pi engine's pidesktop-hooks-core.ts, which went with Pi in P6c (ADR 0009, ADR 0024).
  */
 export type DesktopHookEvent =
   | "session_start"
   | "before_agent_start"
   | "agent_end"
   | "agent_settled"
+  | "stop"
   | "tool_call"
   | "tool_result";
 
@@ -24,6 +25,7 @@ const EVENTS = new Set<DesktopHookEvent>([
   "before_agent_start",
   "agent_end",
   "agent_settled",
+  "stop",
   "tool_call",
   "tool_result",
 ]);
@@ -52,7 +54,7 @@ export function validateDesktopHooks(input: DesktopHookConfig[]): DesktopHookCon
       event: hook.event,
       command,
       timeoutSeconds,
-      blocking: hook.event === "tool_call" && Boolean(hook.blocking),
+      blocking: (hook.event === "tool_call" || hook.event === "stop") && Boolean(hook.blocking),
     };
   });
 }
