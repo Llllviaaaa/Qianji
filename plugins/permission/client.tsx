@@ -110,7 +110,7 @@ export function PermissionApprovalCard({ request, onAnswer, selected }: Approval
         <div className="qj-perm-head-left">
           <span className="qj-perm-kind-badge">
             <RiskIcon size={13.5} />
-            <span>{isAgentRequest ? "智能体申请权限" : "需要权限确认"}</span>
+            <span>{isAgentRequest ? "智能体申请权限" : "需要确认"}</span>
           </span>
           {envelope.showRiskBadge && (
             <span className={`qj-perm-risk-pill is-${envelope.riskLevel}`}>{envelope.riskLabel}</span>
