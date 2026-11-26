@@ -7,7 +7,10 @@ import {
   CONTINUATION_NAMESPACE,
   INTERRUPTED_TOOL_RESULT,
   MemoryStorage,
+  PRUNE_NAMESPACE,
   Sessions,
+  UNKNOWN_OUTCOME_TOOL_RESULT,
+  UNSTARTED_TOOL_RESULT,
   charTokens,
   compactionPoint,
   currentBranch,
@@ -807,5 +810,87 @@ describe("inline <think> visibility and intra-turn tool-result continuations", (
     ]);
     // Critical for OpenAI-compat reasoning_content preservation: lastUserIndex remains 0!
     expect(messages.findLastIndex((m) => m.role === "user")).toBe(0);
+  });
+});
+
+describe("PRUNE_NAMESPACE shadow pruning and crash-tail risk split", () => {
+  it("replaces pruned tool-result text in deriveState while preserving images and raw session events", () => {
+    const img = { type: "image" as const, mimeType: "image/png", data: "IMGDATA" };
+    const events = log(() => [
+      ev("user", { content: text("inspect") }),
+      assistant([
+        { type: "tool-call", id: "c1", name: "read", arguments: {} },
+        { type: "tool-call", id: "c2", name: "read", arguments: {} },
+      ]),
+      ev("tool-result", { callId: "c1", name: "read", content: [{ type: "text", text: "ORIGINAL_HUGE_TEXT_1" }, img], isError: false }),
+      ev("tool-result", { callId: "c2", name: "read", content: text("ORIGINAL_TEXT_2"), isError: false }),
+      ev("custom", { ns: PRUNE_NAMESPACE, data: { replacements: { c1: "PRUNED_V1" } } }),
+      ev("custom", { ns: PRUNE_NAMESPACE, data: { replacements: { c1: "PRUNED_V2" } } }),
+    ]);
+
+    const derived = deriveState(events);
+    expect(derived.messages).toEqual([
+      { role: "user", content: text("inspect") },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool-call", id: "c1", name: "read", arguments: {} },
+          { type: "tool-call", id: "c2", name: "read", arguments: {} },
+        ],
+      },
+      { role: "tool-result", callId: "c1", content: [{ type: "text", text: "PRUNED_V2" }, img], isError: false },
+      { role: "tool-result", callId: "c2", content: text("ORIGINAL_TEXT_2"), isError: false },
+    ]);
+    // Raw session events stay completely untouched for UI transcripts
+    const rawTr1 = events.find((e) => e.type === "tool-result" && e.data.callId === "c1");
+    expect(rawTr1?.type === "tool-result" ? rawTr1.data.content[0] : undefined).toEqual({
+      type: "text",
+      text: "ORIGINAL_HUGE_TEXT_1",
+    });
+
+    // Compaction supersedes earlier prune events at or before throughSeq
+    const postCompaction = [
+      ...events,
+      ev("compaction", { throughSeq: events.at(-1)?.seq ?? 0, summary: "Compacted." }),
+      ev("user", { content: text("again") }),
+      assistant([{ type: "tool-call", id: "c1", name: "read", arguments: {} }]),
+      ev("tool-result", { callId: "c1", name: "read", content: text("FRESH_AFTER_COMPACTION"), isError: false }),
+    ];
+    expect(deriveState(postCompaction).messages.at(-1)).toEqual({
+      role: "tool-result",
+      callId: "c1",
+      content: text("FRESH_AFTER_COMPACTION"),
+      isError: false,
+    });
+  });
+
+  it("distinguishes TOOL_NOT_STARTED from TOOL_OUTCOME_UNKNOWN on dangling tool calls", () => {
+    expect(UNSTARTED_TOOL_RESULT).toContain("[TOOL_NOT_STARTED]");
+    expect(UNKNOWN_OUTCOME_TOOL_RESULT).toContain("[TOOL_OUTCOME_UNKNOWN]");
+    expect(INTERRUPTED_TOOL_RESULT).toBe(UNKNOWN_OUTCOME_TOOL_RESULT);
+
+    const events = log(() => [
+      ev("user", { content: text("run two tools") }),
+      assistant([
+        { type: "tool-call", id: "started-call", name: "write", arguments: { path: "a.ts" } },
+        { type: "tool-call", id: "unstarted-call", name: "write", arguments: { path: "b.ts" } },
+      ]),
+      ev("tool-call", { callId: "started-call", name: "write", args: { path: "a.ts" } }),
+      ev("user", { content: text("recover after crash") }),
+    ]);
+
+    expect(deriveState(events).messages).toEqual([
+      { role: "user", content: text("run two tools") },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool-call", id: "started-call", name: "write", arguments: { path: "a.ts" } },
+          { type: "tool-call", id: "unstarted-call", name: "write", arguments: { path: "b.ts" } },
+        ],
+      },
+      { role: "tool-result", callId: "started-call", content: text(UNKNOWN_OUTCOME_TOOL_RESULT), isError: true },
+      { role: "tool-result", callId: "unstarted-call", content: text(UNSTARTED_TOOL_RESULT), isError: true },
+      { role: "user", content: text("recover after crash") },
+    ]);
   });
 });

@@ -3,6 +3,10 @@
 
 export const BATCH_ASK_ENVELOPE_KEY = "__piDeckBatchAsk";
 export const BATCH_ASK_PLACEHOLDER = "__piDeckBatchAsk__";
+export const QIANJI_QUESTION_ENVELOPE_KEY = "__qianjiQuestion";
+export const QIANJI_QUESTION_PLACEHOLDER = "__qianjiQuestion__";
+export const QIANJI_PERMISSION_ENVELOPE_KEY = "__qianjiPermission";
+export const QIANJI_PERMISSION_PLACEHOLDER = "__qianjiPermission__";
 
 export type BatchAskType = "select" | "confirm" | "input" | "editor";
 
@@ -78,8 +82,11 @@ function normalizeQuestion(raw: unknown, index: number): BatchAskQuestion | null
 }
 
 export function parseBatchAskEnvelope(title: string, placeholder?: string): BatchAskEnvelope | null {
-  const looksLikeEnvelope = title.includes(BATCH_ASK_ENVELOPE_KEY)
-    || placeholder === BATCH_ASK_PLACEHOLDER;
+  const looksLikeEnvelope =
+    title.includes(BATCH_ASK_ENVELOPE_KEY) ||
+    title.includes(QIANJI_QUESTION_ENVELOPE_KEY) ||
+    placeholder === BATCH_ASK_PLACEHOLDER ||
+    placeholder === QIANJI_QUESTION_PLACEHOLDER;
   if (!looksLikeEnvelope) return null;
   let parsed: unknown;
   try {
@@ -87,13 +94,38 @@ export function parseBatchAskEnvelope(title: string, placeholder?: string): Batc
   } catch {
     return null;
   }
-  if (!isRecord(parsed) || parsed[BATCH_ASK_ENVELOPE_KEY] !== 1) return null;
+  if (
+    !isRecord(parsed) ||
+    (parsed[BATCH_ASK_ENVELOPE_KEY] !== 1 && parsed[QIANJI_QUESTION_ENVELOPE_KEY] !== 1)
+  ) {
+    return null;
+  }
   if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) return null;
   const questions = parsed.questions
     .map((question, index) => normalizeQuestion(question, index))
     .filter((question): question is BatchAskQuestion => Boolean(question));
   if (questions.length === 0) return null;
   return { questions, review: parsed.review === true };
+}
+
+export function isPermissionEnvelopeRequest(method: string, title?: string, placeholder?: string): boolean {
+  if (method !== "input") return false;
+  if (placeholder === QIANJI_PERMISSION_PLACEHOLDER) return true;
+  return typeof title === "string" && title.includes(QIANJI_PERMISSION_ENVELOPE_KEY);
+}
+
+export function parsePermissionEnvelopeHeadline(title: string, placeholder?: string): string | null {
+  if (placeholder !== QIANJI_PERMISSION_PLACEHOLDER && !title.includes(QIANJI_PERMISSION_ENVELOPE_KEY)) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(title);
+    if (!isRecord(parsed) || parsed[QIANJI_PERMISSION_ENVELOPE_KEY] !== 1) return null;
+    const rawTitle = typeof parsed.title === "string" ? parsed.title.trim() : "";
+    return rawTitle || "需要权限确认";
+  } catch {
+    return null;
+  }
 }
 
 export function serializeBatchAskResponse(answers: BatchAskAnswer[], cancelled = false): string {
@@ -107,6 +139,8 @@ export function batchAskHeadline(envelope: BatchAskEnvelope): string {
 
 export function headlineForUiRequest(method: string, title?: string, placeholder?: string): string | undefined {
   if (method === "input" && title) {
+    const permHeadline = parsePermissionEnvelopeHeadline(title, placeholder);
+    if (permHeadline !== null) return permHeadline;
     const batch = parseBatchAskEnvelope(title, placeholder);
     if (batch) return batchAskHeadline(batch);
   }

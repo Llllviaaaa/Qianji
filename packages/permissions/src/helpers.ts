@@ -1,6 +1,11 @@
 /**
  * Path, shell-prefix, and custom-rule matching helpers for `@qianji/permissions`.
  */
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
+import { dirname, resolve as resolveNodePath } from "node:path";
+
+const realpathNative = typeof realpathSync.native === "function" ? realpathSync.native : realpathSync;
+const MAX_SYMLINK_HOPS = 16;
 
 export interface PermissionRules {
   alwaysConfirmShell: boolean;
@@ -69,10 +74,86 @@ export function resolveAgainstWorkspace(path: string, workspace: string): string
   return normalizePath(stack.join("/"));
 }
 
+function parentOfSlashPath(slashPath: string): { parent: string; base: string } | undefined {
+  const clean = slashPath.replace(/\/+$/, "");
+  if (clean === "" || /^[a-zA-Z]:$/i.test(clean) || /^\/\/[^/]+\/[^/]+$/.test(clean)) return undefined;
+  const idx = clean.lastIndexOf("/");
+  if (idx < 0) return undefined;
+  if (idx === 0) return clean === "/" ? undefined : { parent: "/", base: clean.slice(1) };
+  const head = clean.slice(0, idx);
+  const parent = /^[a-zA-Z]:$/i.test(head) ? `${head}/` : head;
+  return { parent, base: clean.slice(idx + 1) };
+}
+
+function resolveRealWithMissingTail(rawInput: string, hops = 0): string | undefined {
+  if (hops > MAX_SYMLINK_HOPS) return undefined;
+  const slashInput = rawInput.replace(/\\/g, "/");
+  try {
+    return normalizePath(realpathNative(slashInput));
+  } catch {
+    // Walk up to the nearest existing ancestor while preserving missing trailing segments.
+  }
+
+  const tailSegments: string[] = [];
+  let cursor = slashInput;
+  while (true) {
+    // Detect dangling symlinks before stepping past them: existsSync/realpathSync fail with ENOENT,
+    // but writing through a dangling symlink inside workspace would create a file outside workspace.
+    try {
+      const lstat = lstatSync(cursor);
+      if (lstat.isSymbolicLink()) {
+        const linkTarget = readlinkSync(cursor);
+        const resolvedLink = resolveNodePath(dirname(cursor), linkTarget).replace(/\\/g, "/");
+        const combined = tailSegments.length > 0 ? `${resolvedLink}/${tailSegments.join("/")}` : resolvedLink;
+        return resolveRealWithMissingTail(combined, hops + 1);
+      }
+    } catch {
+      // Missing path segment; keep climbing.
+    }
+
+    const split = parentOfSlashPath(cursor);
+    if (split === undefined) return undefined;
+    tailSegments.unshift(split.base);
+    cursor = split.parent;
+    try {
+      const realAncestor = realpathNative(cursor);
+      return resolveAgainstWorkspace(tailSegments.join("/"), realAncestor);
+    } catch {
+      // Continue climbing until an existing ancestor or root is reached.
+    }
+  }
+}
+
 export function insideWorkspace(path: string, workspace: string): boolean {
-  const candidate = resolveAgainstWorkspace(path, workspace);
-  const root = normalizePath(workspace);
-  if (!root) return false;
+  const lexicalRoot = normalizePath(workspace);
+  if (!lexicalRoot || !path.trim()) return false;
+
+  const rawJoined = isAbsolutePath(path.trim())
+    ? path.trim()
+    : `${workspace.replace(/[\\/]+$/, "")}/${path.trim()}`;
+
+  const realRoot = isAbsolutePath(workspace) ? resolveRealWithMissingTail(workspace) : undefined;
+  const realCandidate = isAbsolutePath(rawJoined) ? resolveRealWithMissingTail(rawJoined) : undefined;
+  if (realCandidate === undefined && isAbsolutePath(rawJoined)) {
+    // Only return lexical fallback if no ancestor existed on disk (synthetic test drive),
+    // whereas exceeding MAX_SYMLINK_HOPS fails closed.
+    try {
+      let probe = rawJoined.replace(/\\/g, "/");
+      let depth = 0;
+      while (depth <= MAX_SYMLINK_HOPS + 1) {
+        const lstat = lstatSync(probe);
+        if (!lstat.isSymbolicLink()) break;
+        probe = resolveNodePath(dirname(probe), readlinkSync(probe)).replace(/\\/g, "/");
+        depth += 1;
+      }
+      if (depth > MAX_SYMLINK_HOPS) return false;
+    } catch {
+      // Synthetic path not on disk.
+    }
+  }
+
+  const root = realRoot ?? lexicalRoot;
+  const candidate = realCandidate ?? resolveAgainstWorkspace(path, workspace);
   return candidate === root || candidate.startsWith(`${root}/`);
 }
 

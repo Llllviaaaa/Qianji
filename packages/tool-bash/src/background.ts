@@ -430,16 +430,13 @@ export function bgProcessTool(manager: BackgroundProcessManager): ToolDefinition
     deferred: true,
     group: "process",
     groupDescription: "Inspect, wait on, and stop background shell processes started in this session",
+    isConcurrencySafe: ({ action }) => action === "list" || action === "logs" || action === "wait",
     description:
       "Manage background processes started in this session via `bash`/`powershell` (`background: true`). Supports `list`, `logs` (with `incremental` cursor or `tailLines`), `wait` (wait for exit without killing on timeout), and `stop`.",
     parameters: {
       type: "object",
       properties: {
-        action: {
-          type: "string",
-          enum: ["list", "logs", "wait", "stop"],
-          description: "Action to perform on session background processes",
-        },
+        action: { type: "string", enum: ["list", "logs", "wait", "stop"], description: "Action to perform on session background processes" },
         id: { type: "string", description: "Background process id (required for logs, wait, stop)" },
         incremental: { type: "boolean", description: "For logs: return only unread output since previous incremental read" },
         tailLines: { type: "number", description: "Maximum trailing lines to include (default 200)" },
@@ -450,12 +447,9 @@ export function bgProcessTool(manager: BackgroundProcessManager): ToolDefinition
     async execute({ action, id, incremental, tailLines, timeoutMs }, env: ToolEnv) {
       if (action === "list") {
         const items = manager.list(env.sessionId);
-        if (items.length === 0) return textOutput("No background processes in this session.");
-        return textOutput(items.map((item) => formatSnapshotHeader(item, true)).join("\n"));
+        return textOutput(items.length === 0 ? "No background processes in this session." : items.map((item) => formatSnapshotHeader(item, true)).join("\n"));
       }
-      if (id === undefined || id.trim() === "") {
-        return textOutput(`bg_process(${action}) requires 'id'.`, true);
-      }
+      if (id === undefined || id.trim() === "") return textOutput(`bg_process(${action}) requires 'id'.`, true);
       const cleanId = id.trim();
       if (action === "logs") {
         const res = manager.logs(env.sessionId, cleanId, { incremental, tailLines });
@@ -467,27 +461,26 @@ export function bgProcessTool(manager: BackgroundProcessManager): ToolDefinition
         return textOutput(parts.join("\n"));
       }
       if (action === "wait") {
-        const res = await manager.wait(env.sessionId, cleanId, timeoutMs, env.signal, { tailLines });
+        const waitSignal = env.steeringSignal !== undefined ? AbortSignal.any([env.signal, env.steeringSignal]) : env.signal;
+        const res = await manager.wait(env.sessionId, cleanId, timeoutMs, waitSignal, { tailLines });
         if (res === undefined) return textOutput(`Background process '${cleanId}' not found in this session.`, true);
+        const steered = res.aborted && env.steeringSignal?.aborted === true && !env.signal.aborted;
         const notes: string[] = [];
         if (res.timedOut) notes.push("[Wait timed out; process is still running.]");
-        if (res.aborted) notes.push("[Wait aborted; process was left running.]");
+        if (steered) notes.push("[Wait yielded early for user steering; process is still running.]");
+        else if (res.aborted) notes.push("[Wait aborted; process was left running.]");
         if (res.truncated) notes.push("[Output truncated; showing the end.]");
         const body = [formatSnapshotHeader(res.snapshot), ...notes, res.output === "" ? "(no output)" : res.output].join("\n");
         return {
           content: [{ type: "text", text: body }],
           isError: false,
-          details: { snapshot: res.snapshot, timedOut: res.timedOut, aborted: res.aborted },
+          details: { snapshot: res.snapshot, timedOut: res.timedOut, aborted: res.aborted, ...(steered ? { steered: true } : {}) },
         };
       }
       if (action === "stop") {
         const stopped = await manager.stop(env.sessionId, cleanId);
         if (stopped === undefined) return textOutput(`Background process '${cleanId}' not found in this session.`, true);
-        return {
-          content: [{ type: "text", text: `${formatSnapshotHeader(stopped)}\nBackground process stopped.` }],
-          isError: false,
-          details: { snapshot: stopped },
-        };
+        return { content: [{ type: "text", text: `${formatSnapshotHeader(stopped)}\nBackground process stopped.` }], isError: false, details: { snapshot: stopped } };
       }
       return textOutput(`Unknown bg_process action '${String(action)}'.`, true);
     },

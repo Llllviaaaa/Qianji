@@ -20,12 +20,18 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentLoopConfig } from "@qianji/agent-loop";
 import type { Config as BrowserConfig } from "@qianji/browser";
 import type { Config as ComputerConfig } from "@qianji/computer";
 import type { Config as HooksConfig } from "@qianji/hooks";
 import type { Config as McpConfig } from "@qianji/mcp";
 import type { Config as PermissionsConfig } from "@qianji/permissions";
 import type { Config as SubagentsConfig } from "@qianji/subagents";
+
+export interface HarnessLlmConfig {
+  fallbackModels?: string[];
+  fallbackCooldownMs?: number;
+}
 
 export interface HarnessConfig {
   permissions: PermissionsConfig;
@@ -64,6 +70,10 @@ export interface HarnessConfig {
   };
   /** The user's personality and custom instructions, as one system prompt section. */
   prompt: { instructions: string };
+  /** Optional execution loop parameters (`maxTurns`, `maxParallelTools`, compaction watermarks). */
+  agentLoop?: AgentLoopConfig;
+  /** Optional LLM failover routing (`fallbackModels`, `fallbackCooldownMs`). */
+  llm?: HarnessLlmConfig;
 }
 
 export function defaultHarnessConfig(): HarnessConfig {
@@ -199,6 +209,29 @@ function applyHarnessLayer(config: HarnessConfig, file: string): string[] {
       ...(typeof bot.remotePort === "number" ? { remotePort: bot.remotePort } : {}),
       ...(typeof bot.remoteUser === "string" ? { remoteUser: bot.remoteUser } : {}),
       ...(typeof bot.remoteWorkDir === "string" ? { remoteWorkDir: bot.remoteWorkDir } : {}),
+    };
+  }
+  const agentLoop = section("agentLoop");
+  if (agentLoop !== undefined) {
+    const merged: Record<string, unknown> = { ...(config.agentLoop ?? {}) };
+    for (const [key, value] of Object.entries(agentLoop)) {
+      if ((typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean" || typeof value === "string") {
+        merged[key] = value;
+      }
+    }
+    config.agentLoop = merged as AgentLoopConfig;
+  }
+  const llm = section("llm");
+  if (llm !== undefined) {
+    const fallbackModels = Array.isArray(llm.fallbackModels)
+      ? llm.fallbackModels.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim())
+      : config.llm?.fallbackModels;
+    const fallbackCooldownMs = typeof llm.fallbackCooldownMs === "number" && Number.isFinite(llm.fallbackCooldownMs) && llm.fallbackCooldownMs >= 0
+      ? llm.fallbackCooldownMs
+      : config.llm?.fallbackCooldownMs;
+    config.llm = {
+      ...(fallbackModels === undefined ? {} : { fallbackModels }),
+      ...(fallbackCooldownMs === undefined ? {} : { fallbackCooldownMs }),
     };
   }
   return problems;

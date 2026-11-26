@@ -18,7 +18,7 @@ import { Commands } from "@qianji/commands";
 import * as computer from "@qianji/computer";
 import * as hooks from "@qianji/hooks";
 import * as intelligentUi from "@qianji/intelligent-ui";
-import { Credentials, LlmService } from "@qianji/llm";
+import { Credentials, LlmService, type LlmServiceConfig } from "@qianji/llm";
 import * as llmAnthropic from "@qianji/llm-anthropic";
 import * as llmGemini from "@qianji/llm-gemini";
 import * as llmOpenaiCompat from "@qianji/llm-openai-compat";
@@ -58,14 +58,14 @@ import { WebServer } from "./web-server.ts";
 export interface CoreOptions {
   /** DPAPI, when the host runs in Bun on Windows; `{ secret }` refs then resolve against secrets.dat. */
   codec?: SecretCodec;
+  /** Optional `LlmService` configuration (retry budgets, `fallbackModels`, `fallbackCooldownMs`). */
+  llm?: LlmServiceConfig;
 }
 
-/**
- * Minimal 7-bus pure in-memory Core spine. Contains zero orchestration loop,
- * zero vendor/disk/tool logic, and zero network gateways.
- */
-export function corePlugins(_dataDir?: string, _options?: CoreOptions): PluginEntry[] {
-  return [[Credentials], [LlmService], [Sessions], [Ui], [Tools], [Commands], [SystemPrompt]];
+/** Minimal 7-bus pure in-memory Core spine. */
+export function corePlugins(_dataDir?: string, options?: CoreOptions): PluginEntry[] {
+  const llmEntry: PluginEntry = options?.llm === undefined ? [LlmService] : [LlmService, options.llm];
+  return [[Credentials], llmEntry, [Sessions], [Ui], [Tools], [Commands], [SystemPrompt]];
 }
 
 export interface GatewayOptions {
@@ -154,9 +154,8 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
       config: {
         file: providersFile,
         revision: fileRevision(providersFile),
-        ...(options.autoRegisterBuiltinProtocols === undefined
-          ? {}
-          : { autoRegisterBuiltinProtocols: options.autoRegisterBuiltinProtocols }),
+        ...(options.autoRegisterBuiltinProtocols === undefined ? {} : { autoRegisterBuiltinProtocols: options.autoRegisterBuiltinProtocols }),
+        ...(config.llm === undefined ? {} : { llm: config.llm }),
       },
     },
     {
@@ -380,9 +379,7 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
 }
 
 /**
- * Complete isomorphic catalog of ALL built-in plugins managed by `PluginManager`
- * (resource protocols, pricing, storage, async FTS search, tools, checkpoints,
- * capability/security features, and optional HTTP/WebSocket RPC gateway).
+ * Complete isomorphic catalog of ALL built-in plugins managed by `PluginManager`.
  */
 export function builtinPluginDefinitions(
   dataDir: string,
@@ -439,6 +436,7 @@ export function builtinPluginDefinitions(
       plugin: AgentLoop,
       inject: ["llm", "sessions", "tools", "systemPrompt"],
       provides: ["agents"],
+      ...(config.agentLoop === undefined ? {} : { config: config.agentLoop }),
     },
     {
       id: "llm-openai-compat",
@@ -563,8 +561,9 @@ export function featureEntries(dataDir: string, config: HarnessConfig, options: 
 
 /** Core spine and full built-in plugin set at once, for direct programmatic hosts/tests. */
 export function agentPlugins(dataDir: string, options: CoreOptions & FeatureOptions & { config: HarnessConfig }): PluginEntry[] {
+  const llm = options.llm ?? options.config.llm;
   return [
-    ...corePlugins(),
+    ...corePlugins(dataDir, llm === undefined ? options : { ...options, llm }),
     ...builtinPluginDefinitions(dataDir, options.config, options)
       .filter((entry) => entry.enabled)
       .map((entry): PluginEntry => [entry.plugin, entry.config]),

@@ -34,6 +34,8 @@ export interface Config {
    * mount `providers` directly without `PluginManager`.
    */
   autoRegisterBuiltinProtocols?: boolean;
+  /** Optional model failover targets and cooldown from `harness.json`. */
+  llm?: { fallbackModels?: readonly string[]; fallbackCooldownMs?: number };
 }
 
 export const APIS = ["openai-compat", "openai-responses", "anthropic", "gemini"] as const;
@@ -227,6 +229,7 @@ export function apply(ctx: Context, config: Config): void {
   };
 
   ctx.effect(() => {
+    if (config.llm !== undefined) ctx.llm.configureFailover(config.llm);
     rebindProviders();
     const off = ctx.on("llm/protocols-changed", () => rebindProviders());
     return () => {

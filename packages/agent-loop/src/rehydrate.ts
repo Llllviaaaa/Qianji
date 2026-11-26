@@ -1,14 +1,23 @@
 /**
  * Post-compaction working-set rehydration: captures recently touched workspace
- * files and the latest plan from compacted events (carrying forward prior
- * compaction addenda across 2nd+ compactions) so long-running tasks retain
- * concrete anchors without altering pure-text/non-file compactions.
+ * files, optional compact on-disk excerpts for up to 4 active text files, and
+ * the latest plan from compacted events (carrying forward prior compaction
+ * addenda across 2nd+ compactions) so long-running tasks retain concrete anchors
+ * without altering pure-text/non-file compactions.
  */
+import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import { currentBranch, type SessionEvent } from "@qianji/session";
 
 const MAX_REHYDRATED_FILES = 8;
 const MAX_REHYDRATED_PLAN_ITEMS = 8;
+const MAX_EXCERPT_FILES = 4;
+const MAX_EXCERPT_CHARS_PER_FILE = 3_500;
+const MAX_EXCERPT_CHARS_TOTAL = 14_000;
+const MAX_FILE_READ_BYTES = 64 * 1024;
 const WORKING_SET_HEADER = "[Working-set context]";
+const EXCERPTS_HEADER = "### Active File Excerpts";
+const ENV_SECRET_FILE_RE = /^\.env(\..+)?$/i;
 
 type FileAction = "modified" | "read";
 
@@ -69,6 +78,7 @@ function parseWorkingSetFromSummary(summary: string): { files: Array<[string, Fi
   for (const rawLine of section.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line === "") continue;
+    if (line === EXCERPTS_HEADER) break;
     if (/^Recent files(?: touched)?:$/.test(line)) {
       mode = "files";
       continue;
@@ -93,12 +103,73 @@ function parseWorkingSetFromSummary(summary: string): { files: Array<[string, Fi
   return { files, planItems };
 }
 
+function readCompactTextExcerpt(realCwd: string, rawPath: string, maxChars: number): string | undefined {
+  if (maxChars <= 0) return undefined;
+  try {
+    const candidate = isAbsolute(rawPath) ? resolve(rawPath) : resolve(realCwd, rawPath);
+    const realFile = realpathSync(candidate);
+    const rel = relative(realCwd, realFile);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return undefined;
+    if (ENV_SECRET_FILE_RE.test(basename(realFile))) return undefined;
+    const stat = statSync(realFile);
+    if (!stat.isFile() || stat.size === 0) return undefined;
+
+    const fd = openSync(realFile, "r");
+    try {
+      const toRead = Math.min(stat.size, MAX_FILE_READ_BYTES);
+      const buffer = Buffer.allocUnsafe(toRead);
+      const bytesRead = readSync(fd, buffer, 0, toRead, 0);
+      if (bytesRead <= 0) return undefined;
+      const slice = buffer.subarray(0, bytesRead);
+      if (slice.includes(0)) return undefined;
+      const text = slice.toString("utf8").replace(/\r\n/g, "\n").trim();
+      if (text === "") return undefined;
+      if (text.length <= maxChars && stat.size <= bytesRead) return text;
+      const marker = "\n// ... [excerpt truncated] ...\n";
+      if (maxChars <= marker.length + 64) return text.slice(0, maxChars);
+      const bodyBudget = maxChars - marker.length;
+      const headBudget = Math.ceil(bodyBudget * 0.7);
+      const tailBudget = bodyBudget - headBudget;
+      return `${text.slice(0, headBudget)}${marker}${text.slice(text.length - tailBudget)}`;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function collectActiveFileExcerpts(filePaths: Iterable<string>, cwd: string | undefined): string[] {
+  if (cwd === undefined || cwd.trim() === "") return [];
+  let realCwd: string;
+  try {
+    if (!statSync(cwd).isDirectory()) return [];
+    realCwd = realpathSync(cwd);
+  } catch {
+    return [];
+  }
+  const sections: string[] = [];
+  let totalChars = 0;
+  for (const filePath of filePaths) {
+    if (sections.length >= MAX_EXCERPT_FILES || totalChars >= MAX_EXCERPT_CHARS_TOTAL) break;
+    const budget = Math.min(MAX_EXCERPT_CHARS_PER_FILE, MAX_EXCERPT_CHARS_TOTAL - totalChars);
+    const excerpt = readCompactTextExcerpt(realCwd, filePath, budget);
+    if (excerpt === undefined) continue;
+    totalChars += excerpt.length;
+    sections.push(`#### ${filePath}\n\`\`\`\n${excerpt}\n\`\`\``);
+  }
+  return sections;
+}
+
 /**
  * Build a concise working-set addendum from compacted branch events up to `throughSeq`.
- * Returns `""` when no `write`/`edit`/`read` file paths, prior working-set summaries,
- * or `update_plan` calls exist.
+ * When `cwd` exists on disk, appends compact excerpts for up to 4 active text files.
  */
-export function buildCompactionWorkingSetAddendum(events: readonly SessionEvent[], throughSeq: number): string {
+export function buildCompactionWorkingSetAddendum(
+  events: readonly SessionEvent[],
+  throughSeq: number,
+  cwd?: string,
+): string {
   const compactedBranch = currentBranch(events.filter((event) => event.seq <= throughSeq));
   const files = new Map<string, FileAction>();
   let latestPlanItems: string[] | undefined;
@@ -156,6 +227,10 @@ export function buildCompactionWorkingSetAddendum(events: readonly SessionEvent[
     if (planLines.length > MAX_REHYDRATED_PLAN_ITEMS) {
       lines.push(`- … (${planLines.length - MAX_REHYDRATED_PLAN_ITEMS} more items)`);
     }
+  }
+  const excerpts = collectActiveFileExcerpts(files.keys(), cwd);
+  if (excerpts.length > 0) {
+    lines.push(EXCERPTS_HEADER, ...excerpts);
   }
   return lines.join("\n");
 }

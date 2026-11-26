@@ -39,6 +39,7 @@ import {
   inspectSelfKillCommand,
 } from "./sandbox.ts";
 import { createProgressReporter, spillTruncatedOutput } from "./spill.ts";
+import { isReadOnlyShellCommand } from "./readonly-shell.ts";
 
 export {
   BackgroundProcessManager,
@@ -52,6 +53,7 @@ export {
 } from "./background.ts";
 export * from "./sandbox.ts";
 export * from "./spill.ts";
+export { isReadOnlyShellCommand } from "./readonly-shell.ts";
 
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -330,6 +332,9 @@ export function shellTool(
     name: kind,
     // Bounded by its own `timeout` argument (ADR 0020).
     timeoutMs: 0,
+    ...(kind === "bash"
+      ? { isConcurrencySafe: ({ command, background }) => background !== true && typeof command === "string" && isReadOnlyShellCommand(command) }
+      : {}),
     description,
     parameters: {
       type: "object",

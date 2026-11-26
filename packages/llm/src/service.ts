@@ -1,6 +1,7 @@
 import { Context, Service } from "@deepseek-ai/cordis";
 import type { SecretRef } from "./credentials.ts";
 import { LlmError, toLlmError } from "./errors.ts";
+import { FailoverRouter, formatModelTarget, isFailoverEligibleError } from "./failover.ts";
 import { markFreshConnectionSignal } from "./http.ts";
 import type { Effort, FinishReason, LlmErrorInfo, LlmRequest, ModelInfo, ProviderInfo, StreamChunk, Usage } from "./types.ts";
 
@@ -72,6 +73,12 @@ export interface LlmServiceConfig {
   maxRetryableAttemptMs?: number;
   /** Step down reasoning `effort` on retry when an active stream ran at least this long before dropping (default 60_000 ms). */
   longStreamStepDownMs?: number;
+  /** Ordered `"provider/model"` targets tried when the active model fails with overload, rate-limit, or quota exhaustion. */
+  fallbackModels?: string[];
+  /** Cooldown duration in ms for a failed target before automatically reverting to primary (default `120_000`). */
+  fallbackCooldownMs?: number;
+  /** Clock source in ms (default `Date.now`). */
+  now?: () => number;
 }
 
 const DEFAULT_BASE_DELAY_MS = 1_000;
@@ -123,8 +130,10 @@ export class LlmService extends Service {
   private readonly baseDelayMs: number;
   private readonly jitterRatio: number;
   private readonly random: () => number;
+  private readonly now: () => number;
   private readonly maxRetryableAttemptMs: number;
   private readonly longStreamStepDownMs: number;
+  readonly failover: FailoverRouter;
 
   constructor(ctx: Context, config: LlmServiceConfig = {}) {
     super(ctx, "llm");
@@ -134,8 +143,19 @@ export class LlmService extends Service {
     const rawJitter = config.jitterRatio ?? DEFAULT_JITTER_RATIO;
     this.jitterRatio = Number.isFinite(rawJitter) ? Math.min(1, Math.max(0, rawJitter)) : DEFAULT_JITTER_RATIO;
     this.random = config.random ?? Math.random;
+    this.now = config.now ?? (() => Date.now());
     this.maxRetryableAttemptMs = Math.max(1_000, config.maxRetryableAttemptMs ?? DEFAULT_MAX_RETRYABLE_ATTEMPT_MS);
     this.longStreamStepDownMs = Math.max(1_000, config.longStreamStepDownMs ?? DEFAULT_LONG_STREAM_STEP_DOWN_MS);
+    this.failover = new FailoverRouter({
+      fallbackModels: config.fallbackModels,
+      fallbackCooldownMs: config.fallbackCooldownMs,
+      now: this.now,
+    });
+  }
+
+  /** Update `fallbackModels` and `fallbackCooldownMs` dynamically (e.g. on `harness.json` reload). */
+  configureFailover(options: { fallbackModels?: readonly string[]; fallbackCooldownMs?: number }): void {
+    this.failover.configure(options);
   }
 
   /** Compute the next retry delay in ms, honoring explicit `retryAfterMs` and applying bounded symmetric jitter otherwise. */
@@ -245,15 +265,21 @@ export class LlmService extends Service {
    * always ends with exactly one `finish` chunk and never throws.
    */
   async *stream(request: LlmRequest, signal: AbortSignal = new AbortController().signal): AsyncGenerator<StreamChunk> {
-    const started = Date.now();
+    const started = this.now();
     const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     let attempts = 0;
+    let targetAttempts = 0;
     let currentEffort: Effort | undefined = request.effort;
     let finish: Extract<StreamChunk, { type: "finish" }> | undefined;
 
-    const entry = this.adapters.get(request.provider);
+    const primary = { provider: request.provider, model: request.model };
+    const hasProvider = (providerId: string): boolean => this.adapters.has(providerId);
+    let activeTarget = this.failover.selectInitialTarget(primary, hasProvider);
+    const triedTargets = new Set<string>([formatModelTarget(primary), formatModelTarget(activeTarget)]);
+
+    let entry = this.adapters.get(activeTarget.provider);
     if (entry === undefined) {
-      finish = { type: "finish", reason: "error", error: { kind: "invalid-request", message: `Unknown LLM provider ${request.provider}`, retryable: false } };
+      finish = { type: "finish", reason: "error", error: { kind: "invalid-request", message: `Unknown LLM provider ${activeTarget.provider}`, retryable: false } };
     }
     if (finish === undefined && signal.aborted) {
       finish = { type: "finish", reason: "aborted" };
@@ -263,9 +289,12 @@ export class LlmService extends Service {
 
     while (finish === undefined && entry !== undefined) {
       attempts += 1;
-      const attemptStarted = Date.now();
+      targetAttempts += 1;
+      const attemptStarted = this.now();
       const attemptRequest: LlmRequest = {
         ...request,
+        provider: activeTarget.provider,
+        model: activeTarget.model,
         messages: [...request.messages],
         ...(currentEffort === undefined ? {} : { effort: currentEffort }),
       };
@@ -281,7 +310,8 @@ export class LlmService extends Service {
       let producedContent = false;
       let failure: LlmError | undefined;
       try {
-        const source = this.ctx.waterfall("llm/request", attemptRequest, () => entry.adapter.stream(attemptRequest, attemptSignal));
+        const currentEntry = entry;
+        const source = this.ctx.waterfall("llm/request", attemptRequest, () => currentEntry.adapter.stream(attemptRequest, attemptSignal));
         for await (const chunk of source) {
           if (chunk.type === "finish") {
             finish = chunk;
@@ -300,7 +330,7 @@ export class LlmService extends Service {
         if (finish === undefined && !signal.aborted) {
           failure = new LlmError({
             kind: "network",
-            message: `${request.provider} ended the stream before completion`,
+            message: `${activeTarget.provider} ended the stream before completion`,
             retryable: true,
           });
         }
@@ -318,13 +348,45 @@ export class LlmService extends Service {
       }
       const errorInfo = failure?.toInfo() ?? (finish?.reason === "error" ? finish.error : undefined);
       if (errorInfo === undefined) break;
-      const attemptElapsedMs = Date.now() - attemptStarted;
+      const attemptElapsedMs = this.now() - attemptStarted;
       if (
         !errorInfo.retryable
-        || attempts >= this.maxAttempts
+        || targetAttempts >= this.maxAttempts
         || (!producedContent && attemptElapsedMs >= this.maxRetryableAttemptMs)
-        || (producedContent && attemptElapsedMs >= this.longStreamStepDownMs && attempts >= 3)
+        || (producedContent && attemptElapsedMs >= this.longStreamStepDownMs && targetAttempts >= 3)
       ) {
+        if (isFailoverEligibleError(errorInfo)) {
+          this.failover.markCooldown(activeTarget);
+          const nextTarget = this.failover.nextFallback(triedTargets, hasProvider);
+          const nextEntry = nextTarget === undefined ? undefined : this.adapters.get(nextTarget.provider);
+          if (nextTarget !== undefined && nextEntry !== undefined) {
+            triedTargets.add(formatModelTarget(nextTarget));
+            this.ctx.logger("llm").warn(
+              "%s/%s failed (%s); failing over to %s/%s (cooldown %dms)",
+              activeTarget.provider,
+              activeTarget.model,
+              errorInfo.message,
+              nextTarget.provider,
+              nextTarget.model,
+              this.failover.cooldownDurationMs,
+            );
+            activeTarget = nextTarget;
+            entry = nextEntry;
+            targetAttempts = 0;
+            currentEffort = request.effort;
+            forceFreshConnection = false;
+            finish = undefined;
+            resetUsage(usage);
+            yield {
+              type: "retry",
+              attempt: 1,
+              maxAttempts: this.maxAttempts,
+              delayMs: 0,
+              error: errorInfo,
+            };
+            continue;
+          }
+        }
         finish = { type: "finish", reason: "error", error: errorInfo };
         break;
       }
@@ -340,12 +402,12 @@ export class LlmService extends Service {
       resetUsage(usage);
       const retryAfter = failure?.retryAfter;
       const retryAfterMs = retryAfter === undefined ? undefined : retryAfter * 1000;
-      const delay = this.retryDelay(attempts, retryAfterMs);
+      const delay = this.retryDelay(targetAttempts, retryAfterMs);
       this.ctx.logger("llm").warn(
         "%s/%s attempt %d failed after %dms (%s); retrying in %d ms%s",
-        request.provider,
-        request.model,
-        attempts,
+        activeTarget.provider,
+        activeTarget.model,
+        targetAttempts,
         attemptElapsedMs,
         errorInfo.message,
         delay,
@@ -354,7 +416,7 @@ export class LlmService extends Service {
       finish = undefined;
       yield {
         type: "retry",
-        attempt: attempts,
+        attempt: targetAttempts,
         maxAttempts: this.maxAttempts,
         delayMs: delay,
         error: errorInfo,
@@ -368,13 +430,13 @@ export class LlmService extends Service {
     yield final;
     try {
       this.ctx.emit("llm/response", {
-        provider: request.provider,
-        model: request.model,
+        provider: activeTarget.provider,
+        model: activeTarget.model,
         usage,
         reason: final.reason,
         ...(final.error === undefined ? {} : { error: final.error }),
         attempts,
-        durationMs: Date.now() - started,
+        durationMs: this.now() - started,
       });
     } catch (emitError) {
       this.ctx.logger("llm").warn(
@@ -384,8 +446,8 @@ export class LlmService extends Service {
     }
     this.ctx.logger("llm").info(
       "%s/%s %s in %d out %d cache %d/%d %dms%s%s",
-      request.provider, request.model, final.reason, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens,
-      Date.now() - started, attempts > 1 ? ` after ${attempts} attempts` : "",
+      activeTarget.provider, activeTarget.model, final.reason, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens,
+      this.now() - started, attempts > 1 ? ` after ${attempts} attempts` : "",
       final.error !== undefined ? ` (${final.error.message})` : "",
     );
   }

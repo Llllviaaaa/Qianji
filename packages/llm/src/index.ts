@@ -4,5 +4,6 @@ export * from "./sse.ts";
 export * from "./http.ts";
 export * from "./assembler.ts";
 export * from "./credentials.ts";
+export * from "./failover.ts";
 export * from "./service.ts";
 export * from "./transform.ts";

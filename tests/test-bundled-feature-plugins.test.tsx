@@ -42,6 +42,8 @@ const REPO_ROOT = resolve(__dirname, "..");
 const PLUGINS_ROOT = resolve(REPO_ROOT, "plugins");
 
 const EXPECTED_BUNDLED_PLUGIN_IDS = [
+  "question",
+  "permission",
   "smart-rewind",
   "session-usage",
   "observability",
@@ -279,6 +281,10 @@ describe("Official bundled feature plugins suite", () => {
     }
 
     const rpcMethods = new Set(host.ctx.rpc.methods());
+    expect(rpcMethods.has("question.history")).toBe(true);
+    expect(rpcMethods.has("permissionPlugin.inspect")).toBe(true);
+    expect(rpcMethods.has("permissionPlugin.revokeSessionGrant")).toBe(true);
+    expect(rpcMethods.has("permissionPlugin.removeAlwaysRule")).toBe(true);
     expect(rpcMethods.has("goalTracker.get")).toBe(true);
     expect(rpcMethods.has("codeReview.summary")).toBe(true);
     expect(rpcMethods.has("webPreview.detectProject")).toBe(true);
@@ -296,6 +302,8 @@ describe("Official bundled feature plugins suite", () => {
     expect(detected?.scripts).toEqual([{ name: "dev", command: "vite --port 5173" }]);
 
     // Verify Host tools & commands registered by new bundled plugins
+    expect(host.ctx.tools.get("question")).toBeDefined();
+    expect(host.ctx.tools.get("request_permission")).toBeDefined();
     expect(host.ctx.tools.get("create_goal")).toBeDefined();
     expect(host.ctx.tools.get("get_goal")).toBeDefined();
     expect(host.ctx.tools.get("update_goal")).toBeDefined();
@@ -303,6 +311,9 @@ describe("Official bundled feature plugins suite", () => {
 
     const commands = await host.ctx.commands.list(workspaceDir);
     const cmdNames = new Set(commands.map((c) => c.name));
+    expect(cmdNames.has("question")).toBe(true);
+    expect(cmdNames.has("permission")).toBe(true);
+    expect(cmdNames.has("permissions")).toBe(true);
     expect(cmdNames.has("goal")).toBe(true);
     expect(cmdNames.has("review")).toBe(true);
     expect(cmdNames.has("preview")).toBe(true);

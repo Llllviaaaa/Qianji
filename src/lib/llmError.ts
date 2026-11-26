@@ -89,6 +89,7 @@ export function inferLlmErrorFromMessage(message: {
 }
 
 export function describeLlmErrorTitle(error: UiLlmError): string {
+  if (error.code === "empty_response_exhausted") return "模型未返回可见正文";
   if (isQuotaOrBillingError(error)) return "余额或配额不足";
   switch (error.kind) {
     case "auth":
@@ -116,6 +117,9 @@ export function describeLlmErrorTitle(error: UiLlmError): string {
 }
 
 export function describeLlmErrorHint(error: UiLlmError): string | null {
+  if (error.code === "empty_response_exhausted") {
+    return "模型连续仅输出了内部思考或空响应。可点击重试，或调低推理强度后再试。";
+  }
   if (isQuotaOrBillingError(error)) {
     return "账户余额或调用配额可能已耗尽，请前往提供商控制台确认后重试。";
   }
@@ -140,6 +144,7 @@ export function describeLlmErrorHint(error: UiLlmError): string | null {
 }
 
 export function shouldSuggestModelSettings(error: UiLlmError): boolean {
+  if (error.code === "empty_response_exhausted") return false;
   return (
     error.kind === "auth"
     || error.kind === "invalid-request"

@@ -85,20 +85,28 @@ export class BlockAssembler {
   }
 
   result(): AssembledResponse {
-    const content: AssistantContent[] = [...this.blocks.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([, block]): AssistantContent => {
-        if (block.type === "tool-call") return { type: "tool-call", id: block.id, name: block.name, arguments: parseArguments(block.json) };
-        if (block.type === "thinking") {
-          const thinking: AssistantContent = { type: "thinking", text: block.text };
-          if (block.signature !== undefined) thinking.signature = block.signature;
-          if (block.signatureProvider !== undefined) thinking.signatureProvider = block.signatureProvider;
-          if (block.redacted !== undefined) thinking.redacted = block.redacted;
-          return thinking;
-        }
-        return { type: "text", text: block.text };
-      });
     const finish = this.finish ?? { reason: "error" as const, error: { kind: "unknown" as const, message: "Stream ended without finishing", retryable: true } };
+    const stripTruncatedTools = finish.reason === "length";
+    const content: AssistantContent[] = [];
+    for (const [, block] of [...this.blocks.entries()].sort(([a], [b]) => a - b)) {
+      if (block.type === "tool-call") {
+        const args = parseArguments(block.json);
+        if (stripTruncatedTools && (block.name.trim() === "" || "__invalidJson" in args)) {
+          continue;
+        }
+        content.push({ type: "tool-call", id: block.id, name: block.name, arguments: args });
+        continue;
+      }
+      if (block.type === "thinking") {
+        const thinking: AssistantContent = { type: "thinking", text: block.text };
+        if (block.signature !== undefined) thinking.signature = block.signature;
+        if (block.signatureProvider !== undefined) thinking.signatureProvider = block.signatureProvider;
+        if (block.redacted !== undefined) thinking.redacted = block.redacted;
+        content.push(thinking);
+        continue;
+      }
+      content.push({ type: "text", text: block.text });
+    }
     return { message: { role: "assistant", content }, usage: { ...this.usage }, ...finish };
   }
 
