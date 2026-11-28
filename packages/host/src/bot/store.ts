@@ -26,9 +26,9 @@ import { BotLiveViewController } from "./live-view.ts";
 import { SshRemoteRuntime } from "./ssh-runtime.ts";
 import { resolveBotStorageDir, resolveBotWorkspaceDir, syncBotRuntimePaths } from "./storage-paths.ts";
 import {
-  appendActivityRecord, buildBotSnapshotResult, createSideChatRecord, createSpaceRecord,
-  deleteSideChatRecord, deleteSpaceRecord, ensureBotFullAccessPermission, ensureMainBotSession,
-  loadOrCreatePersistedBotState, resolveBotApprovalRecord,
+  appendActivityRecord, buildBotSnapshotResult, completeBotHandoffRecord, createSideChatRecord,
+  createSpaceRecord, deleteSideChatRecord, deleteSpaceRecord, ensureBotFullAccessPermission,
+  ensureMainBotSession, loadOrCreatePersistedBotState, resolveBotApprovalRecord, syncBotSessionsModel,
 } from "./store-actions.ts";
 import {
   createRichFeedRecord, createRichGoalRecord, deleteFeedRecord, saveFeedInstructionsRecord,
@@ -52,8 +52,6 @@ import { WslContainerRuntime } from "./wsl-runtime.ts";
 
 export type { BotStoreConfig };
 
-const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-const SYNTHETIC_BOT_MODEL = { provider: "qianji", model: "bot-companion" };
 const REMOTE_SECRET_ID = "bot/remote-ssh-password";
 const AUTO_SLEEP_IDLE_MS = 15 * 60_000;
 
@@ -251,19 +249,7 @@ export class BotStateStore {
     }
     applyBotProactivePatch(st, patch);
     await this.syncRuntimePaths(st, prevWs, prevStorage);
-    const effectivePrimary = st.modelConfig?.primary ?? this.config.defaultModel?.();
-    if (effectivePrimary?.provider && effectivePrimary?.model) {
-      const targetModel = { provider: effectivePrimary.provider, model: effectivePrimary.model };
-      const mainSess = await this.sessions.get(st.mainSessionId).catch(() => undefined);
-      mainSess?.setModel(targetModel);
-      if (patch.modelConfig !== undefined) {
-        for (const side of st.sideThreads) {
-          if (side.status === "running") continue;
-          const sideSess = await this.sessions.get(side.sessionId).catch(() => undefined);
-          sideSess?.setModel(targetModel);
-        }
-      }
-    }
+    await syncBotSessionsModel(this.sessions, st, this.resolvePrimaryModel(st), patch.modelConfig !== undefined);
     this.persistState();
     return this.snapshot();
   }
@@ -500,10 +486,7 @@ export class BotStateStore {
     return this.snapshot();
   }
   async completeHandoff(params: BotHandoffCompleteParams): Promise<BotActivityEntry> {
-    const st = await this.ensureLoaded();
-    const mainSession = await this.sessions.get(st.mainSessionId);
-    mainSession?.append("assistant", { content: [{ type: "text", text: `Agent 工作台已完成接力回传：${params.summary}` }], model: SYNTHETIC_BOT_MODEL, usage: ZERO_USAGE, stop: "stop" });
-    const activity = appendActivityRecord(st, { title: params.title?.trim() || "完成 Agent 工作台接力回传", description: params.summary });
+    const activity = await completeBotHandoffRecord(this.sessions, await this.ensureLoaded(), params);
     this.persistState();
     return activity;
   }

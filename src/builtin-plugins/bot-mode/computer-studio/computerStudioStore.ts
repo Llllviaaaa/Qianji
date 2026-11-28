@@ -159,10 +159,16 @@ export function patchComputerStudioUi(patch: Partial<ComputerStudioUiState>): vo
   }));
 }
 
+export function defaultFilesCwdForEngine(engine: BotComputerEngineId): string {
+  return engine === "local-linux" || engine === "local-win-pip" ? "/workspace" : "";
+}
+
 export function openComputerStudio(options?: {
   readonly engine?: BotComputerEngineId;
   readonly tab?: BotComputerViewTab;
 }): void {
+  const prevEngine = computerStudioSnapshotStore.get().activeEngine;
+  const engineChanged = options?.engine !== undefined && options.engine !== prevEngine;
   if (options?.engine !== undefined || options?.tab !== undefined) {
     computerStudioSnapshotStore.set((prev) => ({
       ...prev,
@@ -170,7 +176,17 @@ export function openComputerStudio(options?: {
       ...(options.tab !== undefined ? { activeTab: options.tab } : {}),
     }));
   }
-  patchComputerStudioUi({ studioOpen: true });
+  patchComputerStudioUi({
+    studioOpen: true,
+    ...(engineChanged && options?.engine !== undefined
+      ? {
+          filesCwd: defaultFilesCwdForEngine(options.engine),
+          filesEntries: [],
+          selectedFilePath: null,
+          selectedFileRead: null,
+        }
+      : {}),
+  });
 }
 
 export function closeComputerStudio(): void {

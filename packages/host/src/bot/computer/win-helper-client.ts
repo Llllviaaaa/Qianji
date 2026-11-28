@@ -92,10 +92,20 @@ export function isUrlLike(value: string | undefined): boolean {
 
 export function resolveWinInputAction(event: BotComputerInputEvent): string {
   if (event.kind === "wheel") return "wheel";
-  if (event.kind === "key") return "key";
   if (event.kind === "text" || event.kind === "paste") return "text";
-  if (event.button === "right") return "right_click";
-  if (event.mouseAction === "double-click") return "double_click";
+  if (event.kind === "key") {
+    const hasShortcutMod =
+      event.modifiers?.some((m) => m === "ctrl" || m === "alt" || m === "meta") === true;
+    if (!hasShortcutMod && typeof event.text === "string" && event.text.length > 0) {
+      return "text";
+    }
+    return "key";
+  }
   if (event.mouseAction === "move") return "move";
+  if (event.mouseAction === "down") return "down";
+  if (event.mouseAction === "up") return "up";
+  if (event.mouseAction === "double-click") return "double_click";
+  if (event.button === "right") return "right_click";
+  if (event.button === "middle") return "middle_click";
   return "click";
 }

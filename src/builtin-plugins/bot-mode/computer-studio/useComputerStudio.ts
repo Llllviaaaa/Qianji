@@ -27,6 +27,7 @@ import {
   applyComputerStudioSnapshot,
   computerStudioSnapshotStore,
   computerStudioUiStore,
+  defaultFilesCwdForEngine,
   patchComputerStudioUi,
   setComputerScrubIndex,
   syncComputerStudioFromBotSnapshot,
@@ -107,6 +108,8 @@ export function useComputerStudio(ctx?: Context) {
 
   const selectStudio = useCallback(
     async (params: BotComputerSelectParams) => {
+      const prevEngine = computerStudioSnapshotStore.get().activeEngine;
+      const engineChanged = params.engine !== undefined && params.engine !== prevEngine;
       computerStudioSnapshotStore.set((prev) => ({
         ...prev,
         ...(params.engine !== undefined ? { activeEngine: params.engine } : {}),
@@ -114,6 +117,14 @@ export function useComputerStudio(ctx?: Context) {
         ...(params.autoFollow !== undefined ? { autoFollow: params.autoFollow } : {}),
         ...(params.activeRemoteNodeId !== undefined ? { activeRemoteNodeId: params.activeRemoteNodeId } : {}),
       }));
+      if (engineChanged && params.engine !== undefined) {
+        patchComputerStudioUi({
+          filesCwd: defaultFilesCwdForEngine(params.engine),
+          filesEntries: [],
+          selectedFilePath: null,
+          selectedFileRead: null,
+        });
+      }
       if (params.autoFollow === true) setComputerScrubIndex(null);
       if (rpcService === undefined) return;
       try {
@@ -317,15 +328,17 @@ export function useComputerStudio(ctx?: Context) {
   const listFiles = useCallback(
     async (path?: string) => {
       const engine = computerStudioSnapshotStore.get().activeEngine;
-      const targetPath = path ?? computerStudioUiStore.get().filesCwd ?? "/workspace";
+      const storedCwd = computerStudioUiStore.get().filesCwd;
+      const fallbackPath = defaultFilesCwdForEngine(engine);
+      const targetPath = path ?? (storedCwd !== "" ? storedCwd : (fallbackPath !== "" ? fallbackPath : undefined));
       if (rpcService === undefined) return;
       patchComputerStudioUi({ busyAction: "files.list" });
       try {
         const res = await rpcService.call<BotComputerFilesListResult>("bot.computer.files.list", {
           engine,
-          path: targetPath,
+          ...(targetPath !== undefined ? { path: targetPath } : {}),
         });
-        if (res) patchComputerStudioUi({ filesCwd: res.cwd || targetPath, filesEntries: res.entries });
+        if (res) patchComputerStudioUi({ filesCwd: res.cwd || targetPath || "/workspace", filesEntries: res.entries });
       } catch (err) {
         patchComputerStudioUi({ feedbackMessage: err instanceof Error ? err.message : "读取目录失败" });
       } finally {

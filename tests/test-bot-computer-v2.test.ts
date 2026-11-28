@@ -34,8 +34,11 @@ import { textOutput, Tools } from "@qianji/tools";
 import { Ui } from "@qianji/ui";
 import * as botPlugin from "../packages/host/src/bot/index";
 import { syncIsolatedCopyWithWorktree } from "../packages/host/src/bot/computer/local-linux-engine";
+import { resolveWinInputAction } from "../packages/host/src/bot/computer/win-helper-client";
 import { BOT_NATIVE_TOOL_SCHEMAS, executeBotNativeTool } from "../packages/host/src/bot/harness/bot-tools";
 import { createBotHarnessHost } from "../packages/host/src/bot/harness/bot-tools-host";
+import { builtinFeatureDefinitions } from "../packages/host/src/builtin-feature-defs";
+import { harnessFromDesktop } from "../packages/host/src/desktop-settings";
 import { createHost, type Host } from "../packages/host/src/host";
 
 const FAKE_PNG =
@@ -401,6 +404,23 @@ describe("Virtual Computer 2.0 Host Engine (2x2 Matrix, PTY, Sentinel Fence, Lea
     expect(inputCall?.inputAction).toBe("double_click");
     expect(inputCall?.x).toBe(410);
     expect(inputCall?.y).toBe(295);
+
+    // Direct canvas pointer down/up & printable vs shortcut key translation
+    expect(resolveWinInputAction({ kind: "mouse", mouseAction: "down", button: "left", x: 10, y: 20 })).toBe("down");
+    expect(resolveWinInputAction({ kind: "mouse", mouseAction: "up", button: "right", x: 10, y: 20 })).toBe("up");
+    expect(resolveWinInputAction({ kind: "key", key: "@", text: "@", modifiers: ["shift"] })).toBe("text");
+    expect(resolveWinInputAction({ kind: "key", key: "a", text: "a", modifiers: ["ctrl"] })).toBe("key");
+
+    // Desktop executable automatically wires into bot-mode computerHelperPath without manual env setup
+    const { config: desktopHarnessCfg } = harnessFromDesktop({
+      settings: {},
+      configDir: dataDir,
+      executable: "C:\\Program Files\\Qianji\\qianji.exe",
+    });
+    const botDef = builtinFeatureDefinitions(dataDir, desktopHarnessCfg).find((d) => d.id === "bot-mode");
+    expect((botDef?.config as { computerHelperPath?: string } | undefined)?.computerHelperPath).toBe(
+      "C:\\Program Files\\Qianji\\qianji.exe",
+    );
 
     const afterClose = await rpc.invoke<{ snapshot: BotComputerStudioSnapshot }>("bot.computer.action", {
       engine: "local-win-pip",

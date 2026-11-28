@@ -229,6 +229,9 @@ fn start(app: &AppHandle) -> Result<Running, AppError> {
         .arg(&data_dir)
         .args(["--port", "0", "--exit-with-stdin"])
         .env(TOKEN_ENV, &token);
+    if let Ok(desktop_exe) = std::env::current_exe() {
+        command.env("QIANJI_COMPUTER_HELPER", desktop_exe);
+    }
     for origin in PAGE_ORIGINS {
         command.args(["--page-origin", origin]);
     }

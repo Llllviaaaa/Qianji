@@ -15,6 +15,23 @@ import type { SshEndpointConfig, SshExecResult, SshRemoteRuntime } from "../ssh-
 
 export const MAX_LEASE_RING_BUFFER = 64;
 
+const REMOTE_MIME_BY_EXT: Record<string, string> = {
+  ".md": "text/markdown",
+  ".json": "application/json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+function inferRemoteMime(filePath: string): string | undefined {
+  const dot = filePath.lastIndexOf(".");
+  if (dot < 0) return undefined;
+  return REMOTE_MIME_BY_EXT[filePath.slice(dot).toLowerCase()];
+}
+
 export interface QueuedAutonomyEvent {
   seq: number;
   ts: number;
@@ -151,12 +168,14 @@ export async function listRemoteNodeFiles(
   const entries: BotComputerFileEntry[] = lines.slice(1).flatMap((ln) => {
     const [kind, szRaw, name] = ln.split("\t");
     if (!name || name === "." || name === "..") return [];
+    const mimeType = kind === "D" ? undefined : inferRemoteMime(name);
     return [{
       name,
       path: posix.join(resolvedCwd, name),
       isDir: kind === "D",
       sizeBytes: Math.max(0, Number.parseInt(szRaw ?? "0", 10) || 0),
       updatedAt: Date.now(),
+      ...(mimeType ? { mimeType } : {}),
     }];
   });
   entries.sort((a, b) => (a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name)));
@@ -179,9 +198,22 @@ export async function readRemoteNodeFile(
     throw new Error(res.stderr.trim() || `Remote file not found: ${rawPath}`);
   }
   const buf = Buffer.from(res.stdout.trim(), "base64");
+  const mimeType = inferRemoteMime(rawPath);
   const isBinary = buf.includes(0) || /\.(?:png|jpe?g|gif|webp)$/i.test(rawPath);
   if (isBinary) {
-    return { path: rawPath, dataBase64: buf.toString("base64"), sizeBytes: buf.byteLength, isBinary: true };
+    return {
+      path: rawPath,
+      dataBase64: buf.toString("base64"),
+      ...(mimeType ? { mimeType } : {}),
+      sizeBytes: buf.byteLength,
+      isBinary: true,
+    };
   }
-  return { path: rawPath, content: buf.toString("utf8"), mimeType: "text/plain", sizeBytes: buf.byteLength, isBinary: false };
+  return {
+    path: rawPath,
+    content: buf.toString("utf8"),
+    mimeType: mimeType ?? "text/plain",
+    sizeBytes: buf.byteLength,
+    isBinary: false,
+  };
 }

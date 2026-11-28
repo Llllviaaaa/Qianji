@@ -34,11 +34,19 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function resolveParentDir(cwd: string): string {
+function resolveParentDir(cwd: string, localFenced: boolean): string {
   const normalized = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (localFenced) {
+    if (normalized === "" || normalized === "/" || normalized === "/workspace") {
+      return "/workspace";
+    }
+    if (/^\/shared\/[^/]+$/.test(normalized)) {
+      return "/workspace";
+    }
+  }
   if (normalized === "" || normalized === "/") return "/";
   const idx = normalized.lastIndexOf("/");
-  if (idx <= 0) return "/";
+  if (idx <= 0) return localFenced ? "/workspace" : "/";
   return normalized.slice(0, idx);
 }
 
@@ -74,9 +82,10 @@ export function BotComputerTerminalAndFiles({
 
   useEffect(() => {
     if (mode === "files" && ui.filesEntries.length === 0) {
-      void listFiles(ui.filesCwd || snap.filesCwd || "/workspace");
+      const preferred = ui.filesCwd !== "" ? ui.filesCwd : undefined;
+      void listFiles(preferred);
     }
-  }, [activeEngine, listFiles, mode, snap.filesCwd, ui.filesCwd, ui.filesEntries.length]);
+  }, [activeEngine, listFiles, mode, ui.filesCwd, ui.filesEntries.length]);
 
   if (mode === "terminal") {
     const engineMeta = getEngineCardMeta(activeEngine);
@@ -195,7 +204,8 @@ export function BotComputerTerminalAndFiles({
     );
   }
 
-  const cwd = ui.filesCwd || snap.filesCwd || "/workspace";
+  const isLocalFenced = activeEngine === "local-linux" || activeEngine === "local-win-pip";
+  const cwd = ui.filesCwd || snap.filesCwd || (isLocalFenced ? "/workspace" : "~/.qianji-vm/workspace");
   const entries = sortFileEntries(
     ui.filesEntries.length > 0 ? ui.filesEntries : (snap.files ?? []),
   );
@@ -212,7 +222,7 @@ export function BotComputerTerminalAndFiles({
             className="qj-cs-icon-btn sm"
             title="返回上级目录"
             aria-label="返回上级目录"
-            onClick={() => void studio.listFiles(resolveParentDir(cwd))}
+            onClick={() => void studio.listFiles(resolveParentDir(cwd, isLocalFenced))}
           >
             <ArrowUp size={13.5} />
           </button>
