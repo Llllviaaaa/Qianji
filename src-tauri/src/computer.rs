@@ -213,6 +213,7 @@ enum Response {
         ok: bool,
         completed: usize,
     },
+    Json(serde_json::Value),
     Ok {
         ok: bool,
     },
@@ -228,7 +229,7 @@ pub fn run() -> i32 {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
-    let result = read_request().and_then(handle);
+    let result = read_request_value().and_then(handle_json);
     match result {
         Ok(response) => {
             println!(
@@ -251,12 +252,25 @@ pub fn run() -> i32 {
     }
 }
 
-fn read_request() -> Result<Request, String> {
+fn read_request_value() -> Result<serde_json::Value, String> {
     let mut input = String::new();
     io::stdin()
         .read_to_string(&mut input)
         .map_err(|err| format!("Could not read helper request: {err}"))?;
     serde_json::from_str(&input).map_err(|err| format!("Invalid helper request: {err}"))
+}
+
+fn handle_json(value: serde_json::Value) -> Result<Response, String> {
+    if let Some(action) = value.get("action").and_then(serde_json::Value::as_str) {
+        if crate::win_virtual_desktop::is_win_desktop_action(action) {
+            let action_owned = action.to_string();
+            return crate::win_virtual_desktop::dispatch_helper_action(&action_owned, value)
+                .map(Response::Json);
+        }
+    }
+    let request = serde_json::from_value::<Request>(value)
+        .map_err(|err| format!("Invalid helper request: {err}"))?;
+    handle(request)
 }
 
 fn handle(request: Request) -> Result<Response, String> {
@@ -1617,5 +1631,21 @@ mod tests {
         assert!(!is_in_self_titlebar_danger_zone(650, 218, rect, 96));
         // Inside main stage below titlebar -> allowed
         assert!(!is_in_self_titlebar_danger_zone(1285, 320, rect, 96));
+    }
+
+    #[test]
+    fn dispatches_win_desktop_actions_via_json_router() {
+        let status_resp = handle_json(serde_json::json!({
+            "action": "win_desktop_status"
+        }))
+        .expect("win_desktop_status should succeed");
+        match status_resp {
+            Response::Json(val) => {
+                assert_eq!(val["ok"], true);
+                assert_eq!(val["accountMode"], "current-user");
+                assert_eq!(val["desktopName"], "QianjiBotDesktop");
+            }
+            _ => panic!("expected Response::Json for win_desktop_status"),
+        }
     }
 }
