@@ -287,12 +287,14 @@ export function registerBotComputerRpc(
     });
   });
 
-  rpcCtx.rpc.method("bot.computer.pty.close", (raw) => {
+  rpcCtx.rpc.method("bot.computer.pty.close", async (raw) => {
     const p = asObject(raw);
-    return store.computer.ptyClose({
-      ...(typeof p.sessionId === "string" ? { sessionId: p.sessionId } : {}),
-      engine: optEngine(p.engine),
-    });
+    return store.computer
+      .ptyClose({
+        ...(typeof p.sessionId === "string" ? { sessionId: p.sessionId } : {}),
+        engine: optEngine(p.engine),
+      })
+      .catch(rethrowComputerError);
   });
 
   rpcCtx.rpc.method("bot.computer.files.list", async (raw) => {

@@ -477,7 +477,7 @@ export class BotStateStore {
   }
   async resetAllBotData(): Promise<BotSnapshotResult> {
     const prev = await this.ensureLoaded();
-    this.computer.dispose();
+    await this.computer.dispose();
     await this.sessions.delete(prev.mainSessionId).catch(() => false);
     for (const side of prev.sideThreads) await this.sessions.delete(side.sessionId).catch(() => false);
     this.botSessionIds.clear();

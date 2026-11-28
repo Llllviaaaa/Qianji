@@ -6,6 +6,9 @@ use core::ffi::c_void;
 use std::mem::zeroed;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
 use windows_sys::Win32::System::Threading::{
@@ -90,8 +93,6 @@ unsafe extern "system" {
         dw_desired_access: u32,
     ) -> HDESK;
 
-    pub fn CloseDesktop(h_desktop: HDESK) -> i32;
-
     pub fn EnumDesktopWindows(
         h_desktop: HDESK,
         lpfn: Option<unsafe extern "system" fn(HWND, LPARAM) -> i32>,
@@ -153,6 +154,10 @@ pub fn to_wide_null(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Process-cached handle to `WinSta0\QianjiBotDesktop` (never closed during process
+/// lifetime so concurrent in-process threads never put an empty desktop into `DELETE_PENDING`).
+static PROCESS_BOT_DESKTOP: Mutex<usize> = Mutex::new(0);
+
 pub struct ScopedDesktop(HDESK);
 
 impl ScopedDesktop {
@@ -161,41 +166,39 @@ impl ScopedDesktop {
     }
 }
 
-impl Drop for ScopedDesktop {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                let _ = CloseDesktop(self.0);
-            }
-        }
-    }
-}
-
 /// Opens or creates `WinSta0\QianjiBotDesktop` under the current logged-in user
 /// without ever switching the physical interactive desktop.
 pub fn ensure_bot_desktop() -> Result<ScopedDesktop, String> {
+    let mut guard = PROCESS_BOT_DESKTOP
+        .lock()
+        .map_err(|_| "QianjiBotDesktop handle mutex poisoned".to_string())?;
+    if *guard != 0 {
+        return Ok(ScopedDesktop(*guard as HDESK));
+    }
     let wide_name = to_wide_null(BOT_DESKTOP_NAME);
-    let existing = unsafe { OpenDesktopW(wide_name.as_ptr(), 0, 0, BOT_DESKTOP_ACCESS) };
-    if !existing.is_null() {
-        return Ok(ScopedDesktop(existing));
+    let mut last_code: u32 = 0;
+    for attempt in 0..15 {
+        let existing = unsafe { OpenDesktopW(wide_name.as_ptr(), 0, 0, BOT_DESKTOP_ACCESS) };
+        if !existing.is_null() {
+            *guard = existing as usize;
+            return Ok(ScopedDesktop(existing));
+        }
+        let created = unsafe {
+            CreateDesktopW(wide_name.as_ptr(), null(), null(), 0, BOT_DESKTOP_ACCESS, null())
+        };
+        if !created.is_null() {
+            *guard = created as usize;
+            return Ok(ScopedDesktop(created));
+        }
+        last_code = unsafe { GetLastError() };
+        if last_code != 5 || attempt == 14 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(15));
     }
-    let created = unsafe {
-        CreateDesktopW(
-            wide_name.as_ptr(),
-            null(),
-            null(),
-            0,
-            BOT_DESKTOP_ACCESS,
-            null(),
-        )
-    };
-    if created.is_null() {
-        let code = unsafe { GetLastError() };
-        return Err(format!(
-            "Could not create or open secondary desktop '{BOT_DESKTOP_NAME}' (Win32 error {code})"
-        ));
-    }
-    Ok(ScopedDesktop(created))
+    Err(format!(
+        "Could not create or open secondary desktop '{BOT_DESKTOP_NAME}' (Win32 error {last_code})"
+    ))
 }
 
 pub fn format_hwnd(hwnd: HWND) -> String {

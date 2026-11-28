@@ -34,6 +34,7 @@ import { textOutput, Tools } from "@qianji/tools";
 import { Ui } from "@qianji/ui";
 import * as botPlugin from "../packages/host/src/bot/index";
 import { syncIsolatedCopyWithWorktree } from "../packages/host/src/bot/computer/local-linux-engine";
+import { quotePosixPath } from "../packages/host/src/bot/computer/remote-lease";
 import { resolveWinInputAction } from "../packages/host/src/bot/computer/win-helper-client";
 import { BOT_NATIVE_TOOL_SCHEMAS, executeBotNativeTool } from "../packages/host/src/bot/harness/bot-tools";
 import { createBotHarnessHost } from "../packages/host/src/bot/harness/bot-tools-host";
@@ -142,7 +143,7 @@ describe("Virtual Computer 2.0 Host Engine (2x2 Matrix, PTY, Sentinel Fence, Lea
     }
     while (tempDirs.length > 0) {
       const dir = tempDirs.pop();
-      if (dir) rmSync(dir, { recursive: true, force: true });
+      if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -566,6 +567,9 @@ describe("Virtual Computer 2.0 Host Engine (2x2 Matrix, PTY, Sentinel Fence, Lea
     await rpc.invoke("bot.computer.remoteNode.delete", { id: pcUpsert.node.id });
     const afterDel = await rpc.invoke<BotComputerStudioSnapshot>("bot.computer.getSnapshot", {});
     expect(afterDel.remoteNodes.some((n) => n.id === pcUpsert.node.id)).toBe(false);
+    expect(quotePosixPath("~")).toBe('"$HOME"');
+    expect(quotePosixPath("~/My Documents/a'b $(id)")).toBe(`"$HOME"'/My Documents/a'\\''b $(id)'`);
+    expect(quotePosixPath("/srv/space dir/$(whoami)")).toBe("'/srv/space dir/$(whoami)'");
     void host;
   });
 
@@ -697,6 +701,6 @@ describe("Virtual Computer 2.0 Host Engine (2x2 Matrix, PTY, Sentinel Fence, Lea
     expect((await rpc.invoke<BotSnapshotResult>("bot.getSnapshot", {})).virtualServer.takeoverRequired).toBe(false);
     expect(idleRpc.snapshot.timeline.some((s) => s.title.includes("交还千机"))).toBe(true);
 
-    store.computer.dispose();
+    await store.computer.dispose();
   });
 });

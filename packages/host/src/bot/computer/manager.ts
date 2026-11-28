@@ -334,8 +334,8 @@ export class VirtualComputerManager {
     return { ok: true };
   }
 
-  ptyClose(params: { sessionId?: string; engine?: BotComputerEngineId }): { ok: true } {
-    this.pty.close(params);
+  async ptyClose(params: { sessionId?: string; engine?: BotComputerEngineId }): Promise<{ ok: true }> {
+    await this.pty.close(params);
     return { ok: true };
   }
 
@@ -372,11 +372,11 @@ export class VirtualComputerManager {
     });
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.streamTimer !== null) {
       clearInterval(this.streamTimer);
       this.streamTimer = null;
     }
-    this.pty.closeAll();
+    await this.pty.closeAll();
   }
 }

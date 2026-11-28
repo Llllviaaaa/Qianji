@@ -13,6 +13,7 @@ import type {
   BotSharedFolderRule,
 } from "@qianji/protocol";
 import type { WslContainerRuntime } from "../wsl-runtime.ts";
+import { quotePosixPath, quotePosixSingle } from "./remote-lease.ts";
 import type { RemoteNodesEngine } from "./remote-nodes-engine.ts";
 import { computeFencedRoots, resolveFencedPath } from "./sentinel-fence.ts";
 
@@ -68,6 +69,28 @@ function psQuote(val: string): string {
   return `'${val.replace(/'/g, "''")}'`;
 }
 
+async function terminateChildProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const waitClose = (ms: number) =>
+    new Promise<boolean>((res) => {
+      if (child.exitCode !== null || child.signalCode !== null) { res(true); return; }
+      const onExit = () => { clearTimeout(t); res(true); };
+      const t = setTimeout(() => { child.removeListener("close", onExit); res(false); }, ms);
+      child.once("close", onExit);
+    });
+  try { child.stdin.end(); } catch { /* Ignore */ }
+  try { child.kill(); } catch { /* Ignore */ }
+  if (await waitClose(1_200)) return;
+  if (process.platform === "win32" && child.pid !== undefined) {
+    await new Promise<void>((res) => {
+      const tk = spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
+      tk.once("error", () => res());
+      tk.once("close", () => res());
+    });
+    await waitClose(800);
+  }
+}
+
 export class PtySessionManager {
   private readonly sessions = new Map<string, PtyEntry>();
   private readonly engineActiveId = new Map<BotComputerEngineId, string>();
@@ -106,7 +129,7 @@ export class PtySessionManager {
       existing.rows = rows;
       return toInfo(existing);
     }
-    if (existing && existing.alive) this.close({ sessionId: existing.sessionId });
+    if (existing && existing.alive) await this.close({ sessionId: existing.sessionId });
 
     const sessionId = `pty-${engine}-${randomUUID().slice(0, 8)}`;
     if (engine === "remote-vm" || engine === "remote-pc") {
@@ -258,12 +281,14 @@ export class PtySessionManager {
       const m = /^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(.+)$/.exec(seg.trim());
       if (m && m[1] !== undefined && m[2] !== undefined) entry.envVars.set(m[1], m[2].trim().replace(/^['"]|['"]$/g, ""));
     }
-    const envExports = [...entry.envVars.entries()].map(([k, v]) => `export ${k}=${JSON.stringify(v)}`).join("; ");
+    const envExports = [...entry.envVars.entries()].map(([k, v]) => `export ${k}=${quotePosixSingle(v)}`).join("; ");
     const envFile = `/tmp/.qj_pty_${entry.sessionId.replace(/[^a-zA-Z0-9_-]/g, "_")}.env`;
+    const qEnv = quotePosixPath(envFile);
+    const qCwd = quotePosixPath(entry.cwd);
     const wrapped = [
-      `[ -f ${envFile} ] && . ${envFile} 2>/dev/null || true`, envExports,
-      `mkdir -p ${entry.cwd} 2>/dev/null || true`, `cd ${entry.cwd} 2>/dev/null || true`, cmd,
-      `__rc=$?`, `export -p > ${envFile} 2>/dev/null || true`, `printf '\\n__QJ_REMOTE_PWD__:%s\\n' "$(pwd)"`, `exit $__rc`,
+      `[ -f ${qEnv} ] && . ${qEnv} 2>/dev/null || true`, envExports,
+      `mkdir -p ${qCwd} 2>/dev/null || true`, `cd ${qCwd} 2>/dev/null || true`, cmd,
+      `__rc=$?`, `export -p > ${qEnv} 2>/dev/null || true`, `printf '\\n__QJ_REMOTE_PWD__:%s\\n' "$(pwd)"`, `exit $__rc`,
     ].filter(Boolean).join("\n");
 
     const res = await this.deps.remoteEngine.execOnNode(node, wrapped, entry.cwd, 30_000);
@@ -291,21 +316,21 @@ export class PtySessionManager {
     entry.updatedAt = Date.now();
   }
 
-  close(params: { sessionId?: string; engine?: BotComputerEngineId }): void {
+  async close(params: { sessionId?: string; engine?: BotComputerEngineId }): Promise<void> {
     const entry = this.resolveEntry(params.sessionId, params.engine);
     if (!entry) return;
     entry.alive = false;
     entry.updatedAt = Date.now();
-    if (entry.kind === "subprocess") {
-      try { entry.child.kill(); } catch { /* Ignore */ }
-      for (const fn of entry.waiters.values()) fn();
-      entry.waiters.clear();
-    }
     this.sessions.delete(entry.sessionId);
     if (this.engineActiveId.get(entry.engine) === entry.sessionId) this.engineActiveId.delete(entry.engine);
+    if (entry.kind === "subprocess") {
+      for (const fn of entry.waiters.values()) fn();
+      entry.waiters.clear();
+      await terminateChildProcess(entry.child);
+    }
   }
 
-  closeAll(): void {
-    for (const id of [...this.sessions.keys()]) this.close({ sessionId: id });
+  async closeAll(): Promise<void> {
+    await Promise.all([...this.sessions.keys()].map((id) => this.close({ sessionId: id })));
   }
 }

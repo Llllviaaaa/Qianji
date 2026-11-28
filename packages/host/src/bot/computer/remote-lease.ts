@@ -32,6 +32,16 @@ function inferRemoteMime(filePath: string): string | undefined {
   return REMOTE_MIME_BY_EXT[filePath.slice(dot).toLowerCase()];
 }
 
+export function quotePosixSingle(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function quotePosixPath(rawPath: string): string {
+  if (rawPath === "~") return '"$HOME"';
+  if (rawPath.startsWith("~/")) return `"$HOME"${quotePosixSingle(rawPath.slice(1))}`;
+  return quotePosixSingle(rawPath);
+}
+
 export interface QueuedAutonomyEvent {
   seq: number;
   ts: number;
@@ -80,11 +90,12 @@ export async function syncNodeAutonomyLease(params: {
 }): Promise<{ ok: boolean; message: string; replayedSteps: BotComputerTimelineStep[] }> {
   const { offlineRings, ssh, endpoint, password, node, engine, vs } = params;
   if (node.connected && node.host.trim() !== "") {
-    const baseDir = node.workDir?.trim() || "~/.qianji-vm";
+    const baseDir = (node.workDir?.trim() || "~/.qianji-vm").replace(/\/+$/, "");
+    const qLeaseFile = quotePosixPath(`${baseDir}/autonomy-lease.jsonl`);
     const drainRes = await ssh
       .exec(
         endpoint,
-        `if [ -f ${baseDir}/autonomy-lease.jsonl ]; then cat ${baseDir}/autonomy-lease.jsonl; rm -f ${baseDir}/autonomy-lease.jsonl; fi`,
+        `if [ -f ${qLeaseFile} ]; then cat ${qLeaseFile}; rm -f ${qLeaseFile}; fi`,
         { cwd: "~", password, timeoutMs: 10_000 },
       )
       .catch(() => null);
@@ -147,13 +158,13 @@ export async function listRemoteNodeFiles(
   rawPath: string | undefined,
   execFn: (command: string) => Promise<SshExecResult>,
 ): Promise<BotComputerFilesListResult> {
-  const defaultRoot = `${node?.workDir?.trim() || "~/.qianji-vm"}/workspace`;
+  const defaultRoot = `${(node?.workDir?.trim() || "~/.qianji-vm").replace(/\/+$/, "")}/workspace`;
   const target = rawPath?.trim() ? rawPath.trim() : defaultRoot;
   if (!node || node.host.trim() === "") {
     return { engine, cwd: target, entries: [] };
   }
   const script = [
-    `DIR=${JSON.stringify(target)}; eval DIR=$DIR`,
+    `DIR=${quotePosixPath(target)}`,
     `mkdir -p "$DIR" 2>/dev/null || true`,
     `cd "$DIR" || exit 2`,
     `pwd`,
@@ -192,7 +203,7 @@ export async function readRemoteNodeFile(
     throw new Error("Remote node is not configured");
   }
   const cap = Math.min(2 * 1024 * 1024, Math.max(256, maxBytes ?? 256 * 1024));
-  const script = `FILE=${JSON.stringify(rawPath)}; eval FILE=$FILE; [ -f "$FILE" ] || exit 2; head -c ${cap} "$FILE" | (base64 -w 0 2>/dev/null || base64 | tr -d '\\r\\n')`;
+  const script = `FILE=${quotePosixPath(rawPath)}; [ -f "$FILE" ] || exit 2; head -c ${cap} "$FILE" | (base64 -w 0 2>/dev/null || base64 | tr -d '\\r\\n')`;
   const res = await execFn(script);
   if (res.exitCode !== 0) {
     throw new Error(res.stderr.trim() || `Remote file not found: ${rawPath}`);

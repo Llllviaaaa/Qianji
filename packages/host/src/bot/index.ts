@@ -134,13 +134,13 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
   }, 60_000);
   idleTimer.unref?.();
 
-  ctx.effect(() => () => {
+  ctx.effect(() => async () => {
     offConnectors?.();
     clearInterval(idleTimer);
     pulseEngine.stop();
     ctx.tools.setSessionFilter(undefined);
-    store.computer.dispose();
-    void store.liveView.close();
+    await store.computer.dispose();
+    await store.liveView.close();
   });
 
   // Queue external side-effect shell commands and enforce connected MCP & Plugin Connector policies in Bot sessions.
