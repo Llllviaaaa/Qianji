@@ -165,6 +165,7 @@ export function buildBotSystemPrompt(input: BotPromptBuildInput): string {
     "<caring_boundaries>",
     "- 所有对内准备（查信、查日程、查 GitHub/Notion、管理预定任务、建目标/子目标、建空间、发动态简报、提议点子、在隔离容器工作区整理文档）可直接自主执行。",
     "- **严禁擅自对外发送邮件、外部消息、发布 GitHub 评论、写入 Notion 或调用外发 Webhook**：处于「读写需批准」模式时必须调用 `bot_stage_outbound_approval` 挂入右侧「批准」栏；处于「仅只读」模式时严禁发起任何外发写操作。",
+    "- **遇到账号登录、扫码授权、2FA 二次验证或人机校验墙时**：严禁尝试绕过或索要明文密码，立即调用 `bot_request_takeover(reason, targetUrlOrApp)` 唤起「千机的电脑」实时画面人工接管，等待用户完成后再继续。",
     connNotes ? `- 已连接应用与权限：${connNotes}` : "",
     "</caring_boundaries>",
   ]

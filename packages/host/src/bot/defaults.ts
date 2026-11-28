@@ -28,6 +28,7 @@ import type {
   PendingBotApproval,
   ResolvedBotApproval,
 } from "@qianji/protocol";
+import { buildDefaultComputerStudioState, type PersistedComputerStudioState } from "./computer/timeline-and-takeover.ts";
 
 export const MAX_SOUL_BYTES = 128 * 1024;
 
@@ -74,6 +75,7 @@ export interface PersistedBotState {
   connectorConfigs?: BotConnectorsConfig;
   awareness?: BotLiveAwarenessSummary;
   virtualServer: BotVirtualServerStatus;
+  computerStudio?: PersistedComputerStudioState;
   embeddedTasks: BotTaskHandoffPayload[];
 }
 
@@ -433,6 +435,7 @@ export function buildDefaultBotState(options: {
       liveViewTaskTitle: "独立云桌面与受控浏览器待命中",
       takeoverRequired: false,
     },
+    computerStudio: buildDefaultComputerStudioState("local"),
     embeddedTasks: [],
   };
 }

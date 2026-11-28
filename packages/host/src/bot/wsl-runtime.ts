@@ -2,9 +2,10 @@
  * Dedicated WSL2 Linux container runtime (`qianji-bot-vm`) for Qianji Local Virtual Server.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BotLocalEngineKind, BotLocalEngineState, BotSharedFolderRule } from "@qianji/protocol";
+import { syncIsolatedCopyWithWorktree } from "./computer/local-linux-engine.ts";
 import { migrateStorageSubdirs } from "./storage-paths.ts";
 import {
   buildMountedExecScript,
@@ -15,7 +16,7 @@ import {
   type WslExecResult,
 } from "./wsl-exec-helpers.ts";
 
-export { sharedFolderSlug, stripWslStderrNoise, winPathToWslMount, type WslExecResult };
+export { runWslSubprocess, sharedFolderSlug, stripWslStderrNoise, winPathToWslMount, type WslExecResult };
 
 const ALPINE_VERSION = "3.21.3";
 const CACHE_TTL_MS = 3_000;
@@ -37,6 +38,7 @@ export interface WslRuntimeOptions {
   botDir: string;
   botWorkspaceDir: string;
   distroName?: string;
+  wslSupported?: boolean;
 }
 
 export class WslContainerRuntime {
@@ -54,6 +56,7 @@ export class WslContainerRuntime {
     this.distroName = opts.distroName ?? "qianji-bot-vm";
     this.storageDir = resolve(opts.botDir);
     this.botWorkspaceDir = resolve(opts.botWorkspaceDir);
+    this.supportedCache = opts.wslSupported;
   }
 
   get instanceDir(): string {
@@ -377,16 +380,7 @@ export class WslContainerRuntime {
   }
 
   syncIsolatedSharedCopy(rule: BotSharedFolderRule, slug: string): string {
-    const copyDir = join(this.sharedCopiesDir, slug);
-    if (rule.access !== "isolated-copy" || !existsSync(rule.path)) return copyDir;
-    if (!existsSync(copyDir)) {
-      mkdirSync(copyDir, { recursive: true });
-      cpSync(rule.path, copyDir, {
-        recursive: true,
-        filter: (src) => !src.includes(`${join("node_modules")}`) && !src.includes("target"),
-      });
-    }
-    return copyDir;
+    return syncIsolatedCopyWithWorktree(rule, join(this.sharedCopiesDir, slug));
   }
 
   async exec(

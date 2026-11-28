@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  BotComputerStudioSnapshot,
   BotConnectorItem,
   BotConnectorsConfig,
   BotFeedItem,
@@ -239,11 +240,13 @@ export function buildBotSnapshotResult(params: {
   memoryFile: string;
   soulContent: string;
   memoryUpdatedAt: string;
+  computerStudio?: BotComputerStudioSnapshot;
 }): BotSnapshotResult {
-  const { st, botWorkspaceDir, memoryFile, soulContent, memoryUpdatedAt } = params;
+  const { st, botWorkspaceDir, memoryFile, soulContent, memoryUpdatedAt, computerStudio } = params;
   const scanned = scanBotWorkspaceArtifacts(botWorkspaceDir);
   const memPrefs = extractLearnedPreferencesFromMemory(memoryFile);
   const normalizedCfg = ensureBotWorkspaceDefaults(st.connectorConfigs ?? buildDefaultConnectorsConfig());
+  const virtualServer = computerStudio ? { ...st.virtualServer, computerStudio } : st.virtualServer;
   return {
     mainSessionId: st.mainSessionId,
     mainSessionFile: `harness:${st.mainSessionId}`,
@@ -277,7 +280,8 @@ export function buildBotSnapshotResult(params: {
     pacing: st.pacing ?? buildDefaultPacingConfig(),
     connectorConfigs: normalizedCfg,
     awareness: st.awareness ?? buildDefaultAwareness(),
-    virtualServer: st.virtualServer,
+    virtualServer,
+    ...(computerStudio ? { computerStudio } : {}),
     embeddedTasks: st.embeddedTasks,
   };
 }

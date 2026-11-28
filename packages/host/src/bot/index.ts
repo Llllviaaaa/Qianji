@@ -15,13 +15,15 @@ import "@qianji/session";
 import "@qianji/tools";
 import { HostConnectorsService } from "../plugin-connectors.ts";
 import { registerBotRpcMethods } from "./bot-rpc.ts";
+import { VirtualComputerManager } from "./computer/manager.ts";
+import { SentinelFenceError } from "./computer/sentinel-fence.ts";
 import { BotCompanionHarness } from "./harness/bot-harness.ts";
 import { ProactivePulseEngine } from "./harness/bot-proactive-pulse.ts";
 import { createBotHarnessHost } from "./harness/bot-tools-host.ts";
 import { listConnectorsForPlugin, resolvePluginConnectorIdForTool } from "./plugin-connector-rpc.ts";
 import { BotStateStore, type BotStoreConfig } from "./store.ts";
 
-export { BotCompanionHarness, BotStateStore, ProactivePulseEngine, type BotStoreConfig };
+export { BotCompanionHarness, BotStateStore, ProactivePulseEngine, SentinelFenceError, VirtualComputerManager, type BotStoreConfig };
 export * from "./defaults.ts";
 
 declare module "@deepseek-ai/cordis" {
@@ -43,6 +45,9 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
   }
   const credentials = ctx.get("credentials") as Credentials | undefined;
   const store = new BotStateStore(ctx.sessions, config, credentials);
+  store.computer.attachBroadcaster((channel, payload) => {
+    ctx.get("rpc")?.broadcast(channel, payload);
+  });
 
   const notifyUpdated = (reason: string, extra?: Record<string, unknown>) => {
     ctx.get("rpc")?.broadcast("bot/updated", { reason, ts: Date.now(), ...extra });
@@ -134,6 +139,7 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
     clearInterval(idleTimer);
     pulseEngine.stop();
     ctx.tools.setSessionFilter(undefined);
+    store.computer.dispose();
     void store.liveView.close();
   });
 
@@ -225,7 +231,9 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
       if (!store.isBotSession(env.sessionId)) return next();
       const vmOut = await store.executeToolInVm(call, env);
       if (vmOut !== undefined) return vmOut;
-      return next();
+      const fallbackOut = await next();
+      await store.recordFallbackBotTool(call, fallbackOut);
+      return fallbackOut;
     },
     true,
   );

@@ -5,8 +5,10 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
+import type { BrowserSession } from "@qianji/browser";
 import type { BotDocumentItem, BotMediaItem, BotServerMode } from "@qianji/protocol";
 import type { PluginManager } from "../plugin-manager.ts";
+import type { ComputerHelperInvoke } from "./computer/win-pip-engine.ts";
 import type { ProcessProbeFn } from "./connectors/process-sensor.ts";
 import {
   DEFAULT_SOUL_MARKDOWN,
@@ -22,6 +24,10 @@ export interface BotStoreConfig {
   storageDir?: string;
   defaultModel?: () => { provider: string; model: string } | undefined;
   distroName?: string;
+  wslSupported?: boolean;
+  computerHelperPath?: string;
+  computerHelperInvoker?: ComputerHelperInvoke;
+  browserFactory?: (opts: { workspace: string; profileDir: string }) => BrowserSession;
   displayName?: string;
   avatarPreset?: string;
   serverMode?: BotServerMode;

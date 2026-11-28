@@ -50,11 +50,16 @@ export class BotLiveViewController {
       wsl: WslContainerRuntime;
       ssh: SshRemoteRuntime;
       getRemotePassword: () => Promise<string | undefined>;
+      browserFactory?: (opts: { workspace: string; profileDir: string }) => BrowserSession;
     },
   ) {
     this.profileDir = join(options.botDir, "browser-profile");
     this.botWorkspaceDir = options.botWorkspaceDir;
     mkdirSync(this.profileDir, { recursive: true });
+  }
+
+  getBrowserSessionForInput(): BrowserSession {
+    return this.ensureBrowser();
   }
 
   async setPaths(next: { storageDir: string; botWorkspaceDir: string }): Promise<void> {
@@ -69,10 +74,12 @@ export class BotLiveViewController {
 
   private ensureBrowser(): BrowserSession {
     if (this.browser === null) {
-      this.browser = new BrowserSession({
-        workspace: this.botWorkspaceDir,
-        profileDir: this.profileDir,
-      });
+      this.browser = this.options.browserFactory
+        ? this.options.browserFactory({ workspace: this.botWorkspaceDir, profileDir: this.profileDir })
+        : new BrowserSession({
+            workspace: this.botWorkspaceDir,
+            profileDir: this.profileDir,
+          });
     }
     return this.browser;
   }
