@@ -10,12 +10,14 @@ import { useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import {
   Activity, AlertCircle, ArrowUpRight, CalendarClock, CheckCircle2, ChevronDown,
-  Clock, Fingerprint, Globe, Heart, Layers, Loader2, Mail, Play, Plus, ShieldCheck, Target, X,
+  Clock, Fingerprint, Globe, Heart, Layers, Loader2, Mail, MonitorPlay, Play, Plus, ShieldCheck, Target, X,
 } from "lucide-react";
 import type { BotActivityKind, BotActivityStatus } from "@qianji/protocol";
 import { BotCharacterStage, useCompanionTaskRuntime } from "./BotCharacterStage";
 import { BotCompanionApprovalsTab } from "./BotCompanionApprovalsTab";
 import { BotCompanionIdentityTab, BotCompanionInboxTab } from "./BotCompanionIdentityAndInbox";
+import { BotComputerMiniPip } from "./computer-studio/BotComputerMiniPip";
+import { toggleComputerStudio, useComputerStudioUi } from "./computer-studio/computerStudioStore";
 import { formatBotScheduleCadence, formatRelativeNextRun, useBotScheduleManager } from "./botScheduleStore";
 import {
   formatVirtualServerStatus, openBotActivityDetail, openBotModal, openBotScheduledModal,
@@ -74,6 +76,7 @@ function renderActivityStatusIcon(
 
 export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactElement {
   const ui = useBotUiState();
+  const studioUi = useComputerStudioUi();
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
   const sched = useBotScheduleManager(ctx);
@@ -142,19 +145,34 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
 
         <div className="qj-sheet-hero-meta">
           <div className="qj-sheet-companion-name">{snapshot.profile.displayName}</div>
-          <button
-            type="button"
-            data-testid="bot-vserver-pill"
-            data-task-phase={taskPresence.phase}
-            data-tone={isIdlePhase ? "neutral" : taskPresence.statusTone}
-            className="qj-sheet-vserver-pill"
-            title={statusTitle}
-            onClick={handleStatusPillClick}
-          >
-            <span className="qj-sheet-vserver-dot" style={{ background: statusDotColor }} />
-            <span className="qj-sheet-vserver-label">{statusLabel}</span>
-          </button>
+          <div className="qj-sheet-status-row">
+            <button
+              type="button"
+              data-testid="bot-vserver-pill"
+              data-task-phase={taskPresence.phase}
+              data-tone={isIdlePhase ? "neutral" : taskPresence.statusTone}
+              className="qj-sheet-vserver-pill"
+              title={statusTitle}
+              onClick={handleStatusPillClick}
+            >
+              <span className="qj-sheet-vserver-dot" style={{ background: statusDotColor }} />
+              <span className="qj-sheet-vserver-label">{statusLabel}</span>
+            </button>
+            <button
+              type="button"
+              data-testid="bot-open-computer-studio-btn"
+              aria-pressed={studioUi.studioOpen}
+              className={`qj-cs-quick-studio-pill${studioUi.studioOpen ? " active" : ""}`}
+              title="打开千机的分身电脑实时分屏"
+              onClick={() => toggleComputerStudio()}
+            >
+              <MonitorPlay size={12} strokeWidth={1.9} />
+              <span>打开分身电脑</span>
+            </button>
+          </div>
         </div>
+
+        <BotComputerMiniPip />
 
         <div
           id="right-tab-pill"
