@@ -69,7 +69,10 @@ test("Agent ⇄ Bot 1:1 Muse layout matches Agent palette, opens Side-Chat drawe
   await expect(app.getByTestId("bot-hero-orb")).toBeVisible();
 
   // Send a real message and verify `<think>` reasoning block is stripped in both Muse bubble and Search modal
-  harness.provider.push(textReply("<think>先查看工作区</think>工作区一切正常，随时准备协助。"));
+  harness.provider.push(
+    textReply("<think>先查看工作区</think>工作区一切正常，随时准备协助。"),
+    textReply("{}"),
+  );
   await chatInput.fill("帮我查看一下状态");
   await chatInput.press("Enter");
   await expect(app.locator(".qj-sanctuary-bubble-bot").first()).toContainText("工作区一切正常，随时准备协助。");
@@ -78,6 +81,50 @@ test("Agent ⇄ Bot 1:1 Muse layout matches Agent palette, opens Side-Chat drawe
   await expect(app.locator(".qj-muse-search-modal")).toContainText("工作区一切正常");
   await expect(app.locator(".qj-muse-search-modal")).not.toContainText("先查看工作区");
   await app.keyboard.press("Escape");
+
+  // Send a long multi-section message to overflow #muse-chat-scroll and verify auto-scroll to bottom + scroll-to-bottom pill
+  const longSections = Array.from(
+    { length: 24 },
+    (_, idx) => `### 巡检分项 ${idx + 1}\n- 工作区模块与门禁状态核验通过，无阻塞风险。`,
+  ).join("\n\n");
+  harness.provider.push(
+    textReply(`已完成长清单核查：\n\n${longSections}\n\n全部 24 项核查完毕。`),
+    textReply("{}"),
+  );
+  await chatInput.fill("生成完整多模块长清单测试自动滚到底部");
+  await chatInput.press("Enter");
+  await expect(app.locator(".qj-sanctuary-bubble-bot").last()).toContainText("全部 24 项核查完毕。");
+
+  await expect
+    .poll(() =>
+      app.locator("#muse-chat-scroll").evaluate((el) => ({
+        overflows: el.scrollHeight > el.clientHeight + 200,
+        dist: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
+      })),
+    )
+    .toEqual({ overflows: true, dist: expect.any(Number) });
+  const distAfterLong = await app.locator("#muse-chat-scroll").evaluate((el) =>
+    Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
+  );
+  expect(distAfterLong).toBeLessThanOrEqual(48);
+
+  // Scroll to top -> floating `回到底部` button appears; sending a new message while scrolled up snaps right back to bottom!
+  await app.locator("#muse-chat-scroll").evaluate((el) => {
+    el.scrollTop = 0;
+    el.dispatchEvent(new Event("scroll"));
+  });
+  await expect(app.getByTestId("bot-scroll-to-bottom-btn")).toBeVisible();
+
+  harness.provider.push(textReply("收到，已自动定位到最新消息底部。"), textReply("{}"));
+  await chatInput.fill("在顶部发消息也必须立即滚到底部看到最新消息");
+  await chatInput.press("Enter");
+  await expect(app.locator(".qj-sanctuary-bubble-user").last()).toContainText("在顶部发消息也必须立即滚到底部看到最新消息");
+  await expect(app.locator(".qj-sanctuary-bubble-bot").last()).toContainText("收到，已自动定位到最新消息底部。");
+  await expect
+    .poll(() =>
+      app.locator("#muse-chat-scroll").evaluate((el) => Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)),
+    )
+    .toBeLessThanOrEqual(48);
 
   // Toggle slide-out Muse side-chat drawer
   await app.locator("#btn-toggle-chat-drawer").click();
@@ -152,4 +199,16 @@ test("Agent ⇄ Bot 1:1 Muse layout matches Agent palette, opens Side-Chat drawe
 
   await app.getByTestId("bot-handoff-return").getByRole("button", { name: /完成并回传 Bot/ }).click();
   await expect(app.locator(".app-shell")).toHaveAttribute("data-shell-mode", "bot");
+
+  // Cold-reload the app and verify persisted Bot chat history renders immediately at the bottom without sending a message!
+  await app.reload();
+  await app.locator('#mode-pill [data-mode-tab="bot"]').click();
+  await expect(app.locator(".app-shell")).toHaveAttribute("data-shell-mode", "bot");
+  await expect(app.locator(".qj-sanctuary-bubble-bot").last()).toContainText("Agent 工作台已完成接力回传");
+  await expect(app.locator("#pane-bot")).toContainText("收到，已自动定位到最新消息底部。");
+  await expect
+    .poll(() =>
+      app.locator("#muse-chat-scroll").evaluate((el) => Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)),
+    )
+    .toBeLessThanOrEqual(64);
 });

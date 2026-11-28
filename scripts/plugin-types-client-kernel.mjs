@@ -104,7 +104,12 @@ export interface SlotFactoryMap {
   "bot.rail": SlotFactorySpec<{ readonly active?: boolean }, "root">;
   "bot.stage": SlotFactorySpec<{ readonly active?: boolean; readonly cwd?: string }, "root">;
   "host.settings.providers": SlotFactorySpec<
-    { readonly cwd?: string; readonly onClose?: () => void; readonly initialExpandPluginId?: string },
+    {
+      readonly cwd?: string;
+      readonly onClose?: () => void;
+      readonly initialExpandPluginId?: string;
+      readonly hideDefaultPreferences?: boolean;
+    },
     "root"
   >;
 }

@@ -2,20 +2,27 @@
  * Message stream helpers, Muse Floating Topbar, and Quick-Option Bubble renderer
  * for `BotChatView` (`src/builtin-plugins/bot-mode/BotChatThreadWidgets.tsx`).
  */
-import type { ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   ArrowUpRight,
+  Check,
+  ChevronDown,
   Cpu,
   GitBranch,
+  LoaderCircle,
   Menu,
   MoreHorizontal,
   PanelRight,
   Phone,
   Reply,
+  Settings2,
   ShieldAlert,
   Smile,
 } from "lucide-react";
+import type { SessionServiceSnapshot } from "@qianji/client";
 import { Markdown } from "@qianji/client-primitives";
+
+type BotCatalogModel = SessionServiceSnapshot["availableModels"][number];
 
 export function stripBotThinking(raw: string): string {
   if (!raw.includes("<think>")) return raw;
@@ -72,6 +79,15 @@ export function BotLiveThinkingRow(): ReactElement {
   );
 }
 
+export function BotHistoryHydratingState(): ReactElement {
+  return (
+    <div className="qj-bot-hydrating-state" data-testid="bot-chat-hydrating" role="status">
+      <LoaderCircle size={16} strokeWidth={1.9} className="qj-bot-spin" aria-hidden="true" />
+      <span>正在加载历史对话…</span>
+    </div>
+  );
+}
+
 export function BotChatFloatingTopbar(props: {
   readonly topTitle: string;
   readonly isMain: boolean;
@@ -81,6 +97,10 @@ export function BotChatFloatingTopbar(props: {
   readonly voiceCallActive: boolean;
   readonly pendingApprovalsCount: number;
   readonly modelLabel?: string;
+  readonly availableModels?: readonly BotCatalogModel[];
+  readonly selectedPrimaryKey?: string;
+  readonly defaultModelLabel?: string;
+  readonly onSelectPrimaryModel?: (next: { provider: string; model: string } | null) => void;
   readonly onOpenDrawer: () => void;
   readonly onOpenModels?: () => void;
   readonly onOpenApprovals: () => void;
@@ -96,12 +116,39 @@ export function BotChatFloatingTopbar(props: {
     voiceCallActive,
     pendingApprovalsCount,
     modelLabel,
+    availableModels = [],
+    selectedPrimaryKey = "",
+    defaultModelLabel,
+    onSelectPrimaryModel,
     onOpenDrawer,
     onOpenModels,
     onOpenApprovals,
     onToggleVoice,
     onOpenRightPanel,
   } = props;
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen || typeof document === "undefined") return undefined;
+    const onPointerDown = (event: MouseEvent) => {
+      if (anchorRef.current !== null && !anchorRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  const canShowQuickMenu = availableModels.length > 0 && onSelectPrimaryModel !== undefined;
 
   return (
     <header className="qj-muse-float-topbar" data-tauri-drag-region="">
@@ -123,17 +170,101 @@ export function BotChatFloatingTopbar(props: {
       </div>
 
       <div className="qj-bot-topbar-right">
-        {!compactSplit && onOpenModels && (
-          <button
-            type="button"
-            className="qj-muse-pill-btn"
-            data-testid="bot-topbar-model-btn"
-            title="在分身设置中切换模型或配置密钥"
-            onClick={onOpenModels}
-          >
-            <Cpu size={13.5} strokeWidth={1.85} aria-hidden="true" />
-            <span>{modelLabel || "配置模型"}</span>
-          </button>
+        {!compactSplit && (onOpenModels || canShowQuickMenu) && (
+          <div ref={anchorRef} className="qj-bot-model-anchor">
+            <button
+              type="button"
+              className={`qj-muse-pill-btn${menuOpen ? " active" : ""}`}
+              data-testid="bot-topbar-model-btn"
+              aria-haspopup={canShowQuickMenu ? "listbox" : undefined}
+              aria-expanded={canShowQuickMenu ? menuOpen : undefined}
+              title="切换当前分身对话模型或管理 API 密钥"
+              onClick={() => {
+                if (canShowQuickMenu) {
+                  setMenuOpen((prev) => !prev);
+                } else {
+                  onOpenModels?.();
+                }
+              }}
+            >
+              <Cpu size={13.5} strokeWidth={1.85} aria-hidden="true" />
+              <span>{modelLabel || "配置模型"}</span>
+              {canShowQuickMenu && <ChevronDown size={12.5} strokeWidth={1.9} aria-hidden="true" />}
+            </button>
+
+            {menuOpen && canShowQuickMenu && (
+              <div
+                className="qj-bot-model-popover"
+                data-testid="bot-topbar-model-menu"
+                role="listbox"
+                aria-label="切换分身对话模型"
+              >
+                <div className="qj-bot-model-popover-scroll">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selectedPrimaryKey === ""}
+                    data-testid="bot-model-opt-default"
+                    className={`qj-bot-model-opt${selectedPrimaryKey === "" ? " active" : ""}`}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onSelectPrimaryModel(null);
+                    }}
+                  >
+                    <div className="qj-bot-model-opt-copy">
+                      <span className="qj-bot-model-opt-name">跟随默认模型</span>
+                      {defaultModelLabel && (
+                        <span className="qj-bot-model-opt-sub">{defaultModelLabel}</span>
+                      )}
+                    </div>
+                    {selectedPrimaryKey === "" && <Check size={14} strokeWidth={2.1} />}
+                  </button>
+
+                  {availableModels.map((m) => {
+                    const key = `${m.provider}::${m.id}`;
+                    const isSelected = selectedPrimaryKey === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        data-testid={`bot-model-opt-${m.provider}-${m.id}`}
+                        className={`qj-bot-model-opt${isSelected ? " active" : ""}`}
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onSelectPrimaryModel({ provider: m.provider, model: m.id });
+                        }}
+                      >
+                        <div className="qj-bot-model-opt-copy">
+                          <span className="qj-bot-model-opt-name">{m.name || m.id}</span>
+                          <span className="qj-bot-model-opt-sub">{m.provider}</span>
+                        </div>
+                        {isSelected && <Check size={14} strokeWidth={2.1} />}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {onOpenModels && (
+                  <div className="qj-bot-model-popover-foot">
+                    <button
+                      type="button"
+                      data-testid="bot-topbar-open-model-settings"
+                      className="qj-bot-model-settings-btn"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onOpenModels();
+                      }}
+                    >
+                      <Settings2 size={13} strokeWidth={1.85} />
+                      <span>管理供应商与 API 密钥…</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {pendingApprovalsCount > 0 && (
@@ -172,6 +303,7 @@ export function BotChatFloatingTopbar(props: {
 export function BotAssistantBubbleRow(props: {
   readonly msgId: string;
   readonly cleanContent: string;
+  readonly replyModel?: string;
   readonly isStreaming: boolean;
   readonly reacted: boolean;
   readonly moreOpen: boolean;
@@ -186,6 +318,7 @@ export function BotAssistantBubbleRow(props: {
 }): ReactElement {
   const {
     cleanContent,
+    replyModel,
     isStreaming,
     reacted,
     moreOpen,
@@ -224,6 +357,11 @@ export function BotAssistantBubbleRow(props: {
       </div>
 
       <div className="qj-msg-actions">
+        {replyModel && (
+          <span className="qj-bot-msg-model-tag" data-testid="bot-msg-model-tag" title={`本条回复生成模型：${replyModel}`}>
+            {replyModel}
+          </span>
+        )}
         <button
           type="button"
           className={`qj-msg-action-btn${reacted ? " active" : ""}`}

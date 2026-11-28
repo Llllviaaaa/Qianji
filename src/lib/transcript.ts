@@ -20,6 +20,7 @@ export type TranscriptEvent =
   | { type: "assistant-delta"; text: string; thinking: string }
   | { type: "assistant-tool-calls"; calls: UiToolCall[] }
   | { type: "assistant"; message: UiMessage }
+  | { type: "model-changed"; provider: string; model: string }
   | { type: "tool-start"; callId: string; name: string; args: Record<string, unknown> }
   | { type: "tool-progress"; callId: string; name: string; text: string }
   | { type: "tool-end"; callId: string; name: string; result: ToolResult }
@@ -382,6 +383,12 @@ export class TranscriptTranslator {
       }
       case "tool-result":
         return [{ type: "tool-end", ...toolResultOf(event) }];
+      case "model": {
+        const data = event.data as { provider?: unknown; model?: unknown } | undefined;
+        return typeof data?.provider === "string" && typeof data.model === "string"
+          ? [{ type: "model-changed", provider: data.provider, model: data.model }]
+          : [];
+      }
       case "custom": {
         const notice = continuationNoticeOf(event) ?? goalCompleteNoticeOf(event);
         return notice === null ? [] : [{ type: "notice", message: notice }];

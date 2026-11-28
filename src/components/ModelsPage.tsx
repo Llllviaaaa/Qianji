@@ -11,17 +11,27 @@ import { PresetAccordionBody } from "./models/PresetAccordionBody";
 import { ProviderAccordionBody } from "./models/ProviderAccordionBody";
 import { useModelsPageState } from "./models/useModelsPageState";
 
-export function ModelsPage({ form, update }: { form: AppSettings; update: Update }) {
+export function ModelsPage({
+  form,
+  update,
+  hideDefaultPreferences = false,
+}: {
+  form: AppSettings;
+  update: Update;
+  hideDefaultPreferences?: boolean;
+}) {
   const state = useModelsPageState(form, update);
 
   return (
     <div className="models-single-stream">
-      <DefaultPreferencesCard
-        providers={state.providers}
-        hidden={state.hidden}
-        form={form}
-        update={update}
-      />
+      {!hideDefaultPreferences && (
+        <DefaultPreferencesCard
+          providers={state.providers}
+          hidden={state.hidden}
+          form={form}
+          update={update}
+        />
+      )}
 
       <section className="settings-layered-section">
         <div className="models-section-head">

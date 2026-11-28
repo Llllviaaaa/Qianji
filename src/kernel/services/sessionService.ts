@@ -230,6 +230,8 @@ export class SessionService extends Service {
         ? createActivePoolEntry(key, normalizedId)
         : createIsolatedPoolEntry(key, normalizedId, options);
       this.internal.pool.set(key, entry);
+    } else {
+      entry.activate?.(options);
     }
     entry.refCount += 1;
 

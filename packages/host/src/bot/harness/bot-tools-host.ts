@@ -76,6 +76,7 @@ export function createBotHarnessHost(
     readSoul: () => store.readSoul(),
     readMemory: () => store.readMemory(),
     persist: () => store.persist(),
+    resolvePrimaryModel: (st) => store.resolvePrimaryModel(st),
     getReflectionModel: (st) => st.modelConfig?.patrol ?? st.modelConfig?.primary,
     executeToolInVm: (call, env) => store.executeToolInVm(call, env),
     recordTurnProgress: (session, options) => store.recordTurnProgress(session, options),

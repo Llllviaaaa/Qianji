@@ -78,7 +78,7 @@ export function useCompanionTaskRuntime(
 
   const retained = useSessionHandle(
     canAttach ? targetSessionFile : null,
-    canAttach ? { isolated: false, autoStart: false, cwd: effectiveCwd } : undefined,
+    canAttach ? { isolated: false, autoStart: true, cwd: effectiveCwd } : undefined,
     ctx,
   );
 

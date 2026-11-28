@@ -17,6 +17,7 @@ export interface BotPromptBuildInput {
   soulMarkdown: string;
   memoryMarkdown: string;
   state: PersistedBotState;
+  activeModel?: { readonly provider: string; readonly model: string };
   scheduledTasks?: readonly ScheduledTask[];
   now?: Date;
 }
@@ -170,8 +171,19 @@ export function buildBotSystemPrompt(input: BotPromptBuildInput): string {
     .filter(Boolean)
     .join("\n");
 
+  const activeModelSection =
+    input.activeModel?.provider && input.activeModel?.model
+      ? [
+          "<active_model>",
+          `当前本轮实际调用的模型：provider="${input.activeModel.provider}", model="${input.activeModel.model}"。`,
+          "注意：当前会话的历史记录中可能包含此前由其他模型（如 DeepSeek、Claude、GPT、Grok 等）生成的回复。若用户询问你当前所用的模型，必须严格以本 `<active_model>` 中的真实模型标识为准，切勿沿用历史消息里旧模型的自我介绍。",
+          "</active_model>",
+        ].join("\n")
+      : "";
+
   return [
     companionIdentity,
+    activeModelSection,
     soulSection,
     profileSection,
     scheduledSection,

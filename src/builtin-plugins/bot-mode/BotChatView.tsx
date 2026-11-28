@@ -5,9 +5,9 @@
  * pills (`≡ 聊天`, character badge, `通话`), avatar-free `22px` bubbles with
  * `[[options: ...]]` quick-choice buttons, and the bottom docked pill composer.
  */
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowDown, ArrowUpRight } from "lucide-react";
 import {
   useAppStore,
   useFrontendService,
@@ -22,10 +22,12 @@ import { getMergedConnectorCatalog, resolveConnectorState } from "./botConnector
 import {
   BotAssistantBubbleRow,
   BotChatFloatingTopbar,
+  BotHistoryHydratingState,
   BotLiveThinkingRow,
   filterVisibleBotMessages,
   stripBotThinking,
 } from "./BotChatThreadWidgets";
+import { encodeBotModelKey } from "./BotModelsSettingsPane";
 import { BotSideChatDrawer } from "./BotSideChatDrawer";
 import {
   openBotConnector,
@@ -35,52 +37,14 @@ import {
   useBotSnapshot,
   useBotUiState,
 } from "./botStore";
+import {
+  formatBotDividerTimestamp,
+  resolveEffectiveBotModel,
+  resolvePendingAutoSend,
+  useBotChatScroll,
+} from "./useBotChatScroll";
 
-export function resolvePendingAutoSend(input: {
-  readonly pendingPrompt: string | null;
-  readonly canAttach: boolean;
-  readonly hasHandle: boolean;
-  readonly handlePhase: string;
-  readonly isStreaming: boolean;
-  readonly desiredProvider: string;
-  readonly desiredModelId: string;
-}): "noop" | "clear" | "send" | "fallback-draft" {
-  const {
-    pendingPrompt,
-    canAttach,
-    hasHandle,
-    handlePhase,
-    isStreaming,
-    desiredProvider,
-    desiredModelId,
-  } = input;
-  if (pendingPrompt === null) return "noop";
-  if (pendingPrompt.trim() === "") return "clear";
-  if (
-    hasHandle &&
-    handlePhase === "ready" &&
-    !isStreaming &&
-    desiredProvider !== "" &&
-    desiredModelId !== ""
-  ) {
-    return "send";
-  }
-  if (
-    !canAttach ||
-    desiredProvider === "" ||
-    desiredModelId === "" ||
-    handlePhase === "error" ||
-    (handlePhase === "ready" && !hasHandle)
-  ) {
-    return "fallback-draft";
-  }
-  return "noop";
-}
-
-function formatDividerTimestamp(): string {
-  const now = new Date();
-  return `${now.getMonth() + 1}月${now.getDate()}日 ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-}
+export { resolvePendingAutoSend };
 
 export function BotChatColumn(props: {
   readonly ctx?: Context;
@@ -97,6 +61,26 @@ export function BotChatColumn(props: {
 
   const [reactedIds, setReactedIds] = useState<Readonly<Record<string, boolean>>>({});
   const [moreMsgId, setMoreMsgId] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  const availableModels = sessionSnap?.availableModels ?? [];
+  const resolvedBotModel = resolveEffectiveBotModel({
+    modelConfig: snapshot.modelConfig,
+    settingsProvider: appSettings?.provider,
+    settingsModel: appSettings?.model,
+    sessionModel: sessionSnap?.model ?? null,
+    availableModels,
+  });
+  const defaultFallbackModel = resolveEffectiveBotModel({
+    modelConfig: {},
+    settingsProvider: appSettings?.provider,
+    settingsModel: appSettings?.model,
+    sessionModel: sessionSnap?.model ?? null,
+    availableModels,
+  });
+  const desiredProvider = resolvedBotModel.provider;
+  const desiredModelId = resolvedBotModel.modelId;
 
   const targetSessionId = ui.activeSessionId ?? snapshot.mainSessionId;
   const targetSessionFile =
@@ -118,18 +102,12 @@ export function BotChatColumn(props: {
           permissionMode: "full-access",
           agentMode: "agent",
           thinkingLevel: "off",
-          ...(sessionSnap?.model ? { model: sessionSnap.model } : {}),
+          ...(resolvedBotModel.modelInfo ? { model: resolvedBotModel.modelInfo } : {}),
         }
       : undefined,
     ctx,
   );
 
-  const primaryRef = snapshot.modelConfig.primary;
-  const hasExplicitPrimary =
-    primaryRef !== undefined && primaryRef.provider !== "" && primaryRef.model !== "";
-  const fallbackModel = sessionSnap?.model ?? sessionSnap?.availableModels[0] ?? null;
-  const desiredProvider = hasExplicitPrimary ? primaryRef.provider : (fallbackModel?.provider ?? "");
-  const desiredModelId = hasExplicitPrimary ? primaryRef.model : (fallbackModel?.id ?? "");
   const currentProvider = retained.snapshot?.model?.provider ?? "";
   const currentModelId = retained.snapshot?.model?.id ?? "";
   const currentThinkingLevel = retained.snapshot?.thinkingLevel ?? "medium";
@@ -147,7 +125,11 @@ export function BotChatColumn(props: {
       currentModelId !== desiredModelId;
     if (needsSync) {
       void retained.handle
-        .setModel({ id: desiredModelId, name: desiredModelId, provider: desiredProvider })
+        .setModel({
+          id: desiredModelId,
+          name: resolvedBotModel.label || desiredModelId,
+          provider: desiredProvider,
+        })
         .catch(() => undefined);
     }
   }, [
@@ -156,14 +138,31 @@ export function BotChatColumn(props: {
     currentThinkingLevel,
     currentProvider,
     currentModelId,
-    hasExplicitPrimary,
     desiredProvider,
     desiredModelId,
+    resolvedBotModel.label,
   ]);
 
   const messages = retained.snapshot?.messages ?? [];
   const isStreaming = retained.snapshot?.isStreaming === true;
   const runtimeError = retained.snapshot?.error ?? null;
+  const visibleMessages = filterVisibleBotMessages(messages, isStreaming);
+  const lastVisible = visibleMessages[visibleMessages.length - 1];
+  const userMessageCount = visibleMessages.reduce(
+    (acc, m) => (m.role === "user" ? acc + 1 : acc),
+    0,
+  );
+  const lastMessageSignature = `${lastVisible?.id ?? "none"}:${lastVisible?.content.length ?? 0}:${isStreaming ? 1 : 0}`;
+
+  const { showScrollToBottom, scrollToBottom, notifyUserSent } = useBotChatScroll({
+    scrollRef,
+    contentRef,
+    sessionKey: targetSessionId || "bot-main",
+    messageCount: visibleMessages.length,
+    userMessageCount,
+    lastMessageSignature,
+    isStreaming,
+  });
 
   useEffect(() => {
     const decision = resolvePendingAutoSend({
@@ -180,6 +179,7 @@ export function BotChatColumn(props: {
       patchBotUi({ pendingAutoSendPrompt: null });
     } else if (decision === "send" && retained.handle !== null) {
       patchBotUi({ pendingAutoSendPrompt: null });
+      notifyUserSent();
       void retained.handle.sendMessage(trimmed, []);
     } else if (decision === "fallback-draft") {
       patchBotUi({ pendingAutoSendPrompt: null, composerDraft: trimmed });
@@ -192,6 +192,7 @@ export function BotChatColumn(props: {
     isStreaming,
     desiredProvider,
     desiredModelId,
+    notifyUserSent,
   ]);
 
   const isMain = ui.activeSessionId === null || ui.activeSessionId === snapshot.mainSessionId;
@@ -219,6 +220,7 @@ export function BotChatColumn(props: {
       desiredProvider !== "" &&
       desiredModelId !== ""
     ) {
+      notifyUserSent();
       void retained.handle.sendMessage(trimmed, []);
       return;
     }
@@ -232,10 +234,28 @@ export function BotChatColumn(props: {
     connected: resolveConnectorState(entry, snapshot, ui.mcpStatus, appSettings?.mcpServers ?? []).connected,
   }));
 
-  const activeModelObj = (sessionSnap?.availableModels ?? []).find(
-    (m) => m.provider === desiredProvider && m.id === desiredModelId,
-  );
-  const topModelLabel = activeModelObj?.name || desiredModelId || "配置模型";
+  const topModelLabel = resolvedBotModel.label;
+
+  const handleSelectPrimaryModel = async (next: { provider: string; model: string } | null) => {
+    await ctrl.configureBot({ modelConfig: { primary: next } });
+    const target =
+      next ??
+      (defaultFallbackModel.provider !== "" && defaultFallbackModel.modelId !== ""
+        ? { provider: defaultFallbackModel.provider, model: defaultFallbackModel.modelId }
+        : null);
+    if (target && retained.handle !== null) {
+      const matched = availableModels.find(
+        (m) => m.provider === target.provider && m.id === target.model,
+      );
+      await retained.handle
+        .setModel(matched ?? { id: target.model, name: target.model, provider: target.provider })
+        .catch(() => undefined);
+    }
+    navigationService?.showToast(
+      next ? `分身主力模型已切换为 ${next.model}` : "已恢复跟随默认模型",
+      "info",
+    );
+  };
 
   const toggleComposerApp = (appId: string) => {
     const exists = ui.composerApps.includes(appId);
@@ -259,23 +279,32 @@ export function BotChatColumn(props: {
       navigationService?.showToast("正在连接后台会话服务，请稍候重试", "warning");
       return;
     }
+    notifyUserSent();
     if (
       desiredProvider !== "" &&
       desiredModelId !== "" &&
       (currentProvider !== desiredProvider || currentModelId !== desiredModelId)
     ) {
       await retained.handle
-        .setModel({ id: desiredModelId, name: desiredModelId, provider: desiredProvider })
+        .setModel({
+          id: desiredModelId,
+          name: resolvedBotModel.label || desiredModelId,
+          provider: desiredProvider,
+        })
         .catch(() => undefined);
     }
     await retained.handle.sendMessage(fullText, queuedAttachments);
+    notifyUserSent();
   };
 
-  const visibleMessages = filterVisibleBotMessages(messages, isStreaming);
-  const lastVisible = visibleMessages[visibleMessages.length - 1];
   const showTrailingThinking =
     isStreaming && (lastVisible === undefined || lastVisible.role === "user");
-  const isEmptyChat = visibleMessages.length === 0 && !isStreaming;
+  const isHydratingHistory =
+    canAttach &&
+    (handlePhase === "starting" || (handlePhase === "idle" && retained.handle !== null)) &&
+    visibleMessages.length === 0 &&
+    !isStreaming;
+  const isEmptyChat = !isHydratingHistory && visibleMessages.length === 0 && !isStreaming;
 
   return (
     <div className={`qj-bot-chat-shell${compactSplit ? " is-compact-split" : ""}`}>
@@ -291,6 +320,12 @@ export function BotChatColumn(props: {
           voiceCallActive={ui.voiceCallActive}
           pendingApprovalsCount={pendingApprovalsCount}
           modelLabel={topModelLabel}
+          availableModels={availableModels}
+          selectedPrimaryKey={encodeBotModelKey(snapshot.modelConfig.primary)}
+          defaultModelLabel={
+            defaultFallbackModel.provider !== "" ? defaultFallbackModel.label : undefined
+          }
+          onSelectPrimaryModel={(next) => void handleSelectPrimaryModel(next)}
           onOpenDrawer={() => patchBotUi({ chatDrawerOpen: true })}
           onOpenModels={() => openBotModal("settings", "models")}
           onOpenApprovals={() =>
@@ -304,9 +339,17 @@ export function BotChatColumn(props: {
           onOpenRightPanel={() => patchBotUi({ rightPanelOpen: true })}
         />
 
-        <div id="muse-chat-scroll" className={`qj-bot-chat-scroll${isEmptyChat ? " is-empty" : ""}`}>
-          <div className="qj-bot-chat-stream">
-            {isEmptyChat ? (
+        <div
+          ref={scrollRef}
+          id="muse-chat-scroll"
+          className={`qj-bot-chat-scroll${isEmptyChat ? " is-empty" : ""}`}
+        >
+          <div ref={contentRef} className="qj-bot-chat-stream">
+            {isHydratingHistory ? (
+              <div className="qj-sanctuary-empty-stack">
+                <BotHistoryHydratingState />
+              </div>
+            ) : isEmptyChat ? (
               <div className="qj-sanctuary-empty-stack">
                 <BotChatHeroStage
                   isMain={isMain}
@@ -316,7 +359,7 @@ export function BotChatColumn(props: {
               </div>
             ) : (
               <>
-                <div className="qj-muse-date-divider">{formatDividerTimestamp()}</div>
+                <div className="qj-muse-date-divider">{formatBotDividerTimestamp()}</div>
 
                 {visibleMessages.map((msg) => {
                   if (msg.role === "user") {
@@ -331,11 +374,16 @@ export function BotChatColumn(props: {
                     return <BotLiveThinkingRow key={msg.id} />;
                   }
                   const reacted = reactedIds[msg.id] === true;
+                  const replyModel =
+                    typeof msg.model === "string" && msg.model !== "" && msg.model !== "bot-companion"
+                      ? msg.model
+                      : undefined;
                   return (
                     <BotAssistantBubbleRow
                       key={msg.id}
                       msgId={msg.id}
                       cleanContent={cleanContent}
+                      replyModel={replyModel}
                       isStreaming={isStreaming}
                       reacted={reacted}
                       moreOpen={moreMsgId === msg.id}
@@ -412,6 +460,19 @@ export function BotChatColumn(props: {
             )}
           </div>
         </div>
+
+        {showScrollToBottom && !isEmptyChat && (
+          <button
+            type="button"
+            className={`qj-bot-scroll-bottom-btn${isStreaming ? " is-streaming" : ""}`}
+            data-testid="bot-scroll-to-bottom-btn"
+            aria-label="滚动到最新消息"
+            onClick={() => scrollToBottom("smooth")}
+          >
+            <ArrowDown size={14} strokeWidth={2} />
+            <span>{isStreaming ? "最新回复" : "回到底部"}</span>
+          </button>
+        )}
 
         <footer className="qj-bot-docked-footer">
           <BotChatComposer

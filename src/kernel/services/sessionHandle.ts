@@ -75,6 +75,8 @@ export function createIsolatedPoolEntry(
   const initialCwd = options.cwd ?? appState.cwd;
   const sideFork = options.isolated === true || Boolean(options.parentSessionFile);
   let disposed = false;
+  let autoStartWanted = options.autoStart === true;
+  let pendingExplicitModel: ModelInfo | null = options.model ?? null;
   let startPromise: Promise<string | null> | null = null;
   let activeTurnStartedAt: number | null = null;
 
@@ -164,6 +166,21 @@ export function createIsolatedPoolEntry(
         patch({ retryStatus: null, messages: completeAssistant([...snapshot.messages], { ...event.message, durationMs }) });
         return;
       }
+      case "model-changed": {
+        const matched = snapshot.availableModels.find(
+          (m) => m.provider === event.provider && m.id === event.model,
+        );
+        const nextModel: ModelInfo = matched ?? {
+          id: event.model,
+          name: event.model,
+          provider: event.provider,
+        };
+        patch({
+          model: nextModel,
+          availableThinkingLevels: harnessRuntimes.thinkingLevels(nextModel),
+        });
+        return;
+      }
       case "retry-status":
         patch({ retryStatus: event.text, messages: resetStreamingAssistant([...snapshot.messages]) });
         return;
@@ -217,7 +234,19 @@ export function createIsolatedPoolEntry(
             : Promise.resolve(snapshot.messages),
         ]);
         let resolvedModel = stateInfo?.model ?? null;
-        if (resolvedModel === null) {
+        if (pendingExplicitModel !== null) {
+          const desired = pendingExplicitModel;
+          pendingExplicitModel = null;
+          if (
+            resolvedModel === null ||
+            resolvedModel.provider !== desired.provider ||
+            resolvedModel.id !== desired.id
+          ) {
+            resolvedModel = await harnessRuntimes
+              .setModel(started.runtimeId, desired.provider, desired.id)
+              .catch(() => resolvedModel ?? desired);
+          }
+        } else if (resolvedModel === null) {
           const fallback = pickFallbackModel(snapshot.model, models);
           if (fallback !== null) {
             resolvedModel = await harnessRuntimes
@@ -253,7 +282,13 @@ export function createIsolatedPoolEntry(
     return startPromise;
   };
 
-  if (options.autoStart === true && snapshot.cwd) {
+  const offHostStatus = harnessRuntimes.onHostStatus((status) => {
+    if (status === "connected" && autoStartWanted && snapshot.runtimeId === null && snapshot.cwd) {
+      void ensureRuntime();
+    }
+  });
+
+  if (autoStartWanted && snapshot.cwd) {
     void ensureRuntime();
   }
 
@@ -262,6 +297,25 @@ export function createIsolatedPoolEntry(
     sessionId,
     isolated: true,
     refCount: 0,
+    activate(nextOptions) {
+      if (disposed || nextOptions === undefined) return;
+      if (!snapshot.cwd && nextOptions.cwd) {
+        patch({ cwd: nextOptions.cwd });
+      }
+      if (snapshot.runtimeId === null && nextOptions.model) {
+        pendingExplicitModel = nextOptions.model;
+        patch({
+          model: nextOptions.model,
+          availableThinkingLevels: harnessRuntimes.thinkingLevels(nextOptions.model),
+        });
+      }
+      if (nextOptions.autoStart === true) {
+        autoStartWanted = true;
+        if (snapshot.runtimeId === null && snapshot.cwd) {
+          void ensureRuntime();
+        }
+      }
+    },
     getSnapshot: () => snapshot,
     subscribe: (listener) => emitter.add(listener),
 
@@ -373,9 +427,11 @@ export function createIsolatedPoolEntry(
     },
 
     async setModel(model) {
+      pendingExplicitModel = model;
       patch({ model, availableThinkingLevels: harnessRuntimes.thinkingLevels(model) });
-      const runtimeId = snapshot.runtimeId;
+      const runtimeId = snapshot.runtimeId ?? (startPromise !== null ? await startPromise : null);
       if (runtimeId) {
+        pendingExplicitModel = null;
         const confirmed = await harnessRuntimes.setModel(runtimeId, model.provider, model.id);
         patch({ model: confirmed, availableThinkingLevels: harnessRuntimes.thinkingLevels(confirmed) });
       }
@@ -420,6 +476,7 @@ export function createIsolatedPoolEntry(
 
     dispose() {
       disposed = true;
+      offHostStatus();
       offRuntime();
       emitter.clear();
       const runtimeId = snapshot.runtimeId;

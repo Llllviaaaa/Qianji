@@ -136,7 +136,7 @@ export function BotModelsSettingsPane({
         </div>
         <div className="qj-bset-embedded-providers" data-testid="bot-embedded-providers-host">
           {renderFactory ? (
-            renderFactory("host.settings.providers", {}, {
+            renderFactory("host.settings.providers", { hideDefaultPreferences: true }, {
               fallback: (
                 <div className="qj-bset-card qj-bset-card-pad">
                   模型服务商配置面板正在加载中…
