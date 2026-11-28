@@ -81,9 +81,9 @@ function permissionLabel(mode: AppSettings["permissionMode"]): string {
 }
 
 function promptTitle(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (!normalized || normalized.startsWith("/")) return "侧边对话";
-  return normalized.length > 28 ? `${normalized.slice(0, 28)}…` : normalized;
+  const cleaned = text.replace(/^\/[a-zA-Z0-9:_-]+\s*/, "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return "侧边对话";
+  return cleaned.length > 28 ? `${cleaned.slice(0, 28)}…` : cleaned;
 }
 
 const EMPTY_COMMANDS: SlashCommand[] = [];
@@ -480,7 +480,7 @@ export function SideChatPanel({
               return true;
             }
             if (commandResult.prompt !== undefined && commandResult.prompt.trim() !== "") {
-              effectivePayload = { message: commandResult.prompt, images: [] };
+              effectivePayload = { message: payload.message, metaPrompt: commandResult.prompt, images: payload.images };
             } else {
               const now = Date.now();
               const nonce = `${now}-${Math.random().toString(36).slice(2, 7)}`;

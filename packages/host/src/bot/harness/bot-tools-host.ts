@@ -92,12 +92,17 @@ export function createBotHarnessHost(
 
       const sections: string[] = [];
       if (source === "all" || source === "email") {
-        const items = st.inboxItems.filter((m) => m.source !== "telegram").slice(0, 6);
+        const items = st.inboxItems.filter((m) => !m.source || m.source === "email").slice(0, 6);
+        const mailConnected = Boolean(
+          st.connectorConfigs?.email.enabled || st.connectorConfigs?.appPolicies?.gmail?.connected,
+        );
         sections.push(
           items.length > 0
             ? `[Email Inbox (${items.length} recent)]\n` +
                 items.map((m) => `- From: ${m.sender} <${m.replyTo ?? ""}> | Subject: ${m.subject}\n  Preview: ${m.fullBody?.slice(0, 260) ?? m.preview}`).join("\n")
-            : "[Email Inbox] No emails synced yet (or email connector disabled).",
+            : mailConnected
+              ? "[Email Inbox] Connected and synced — inbox currently has 0 messages."
+              : "[Email Inbox] No email / Gmail MCP connector connected yet.",
         );
       }
       if (source === "all" || source === "calendar") {

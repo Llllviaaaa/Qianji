@@ -131,6 +131,15 @@ export function summarizeProcessGroup(thinking: number, calls: UiToolCall[]): st
       case "read":
         bucket("read", (count) => `读取 ${count} 个文件`, fileKey);
         break;
+      case "skill": {
+        const slug = presented.detail || fileKey;
+        bucket(
+          `skill:${slug}`,
+          () => (presented.detail ? `启用技能 ${presented.detail}` : "启用技能"),
+          slug,
+        );
+        break;
+      }
       case "write":
       case "edit":
         bucket("edit", (count) => `编辑 ${count} 个文件`, fileKey);

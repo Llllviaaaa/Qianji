@@ -1,7 +1,7 @@
 /**
- * Standards-compliant OAuth 2.1 + RFC 8414/9728 Metadata Discovery + RFC 7591
- * Dynamic Client Registration + S256 PKCE loopback flow for Remote MCP servers
- * (`packages/host/src/bot/connectors/mcp-oauth.ts`).
+ * Standards-compliant OAuth 2.1 + RFC 8414/9728 Metadata Discovery + RFC 8707
+ * Resource Indicators + RFC 7591 Dynamic Client Registration + S256 PKCE +
+ * `refresh_token` rotation for Remote MCP servers (`packages/host/src/bot/connectors/mcp-oauth.ts`).
  */
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -13,16 +13,25 @@ export interface McpOAuthMetadata {
   tokenEndpoint: string;
   registrationEndpoint?: string;
   scopesSupported?: string[];
+  resource?: string;
 }
 
-export interface McpOAuthResult {
+export interface McpOAuthTokenRecord {
   accessToken: string;
   refreshToken?: string;
   tokenType: string;
   scope?: string;
   issuer: string;
-  expiresIn?: number;
+  tokenEndpoint: string;
+  clientId: string;
+  clientSecret?: string;
+  resource?: string;
+  expiresAt?: number;
 }
+
+export type McpOAuthResult = McpOAuthTokenRecord & {
+  expiresIn?: number;
+};
 
 export type BrowserOpener = (url: string) => void | Promise<void>;
 
@@ -45,9 +54,9 @@ export function defaultOpenSystemBrowser(url: string): void {
   child.unref();
 }
 
-async function fetchJsonSafe(url: string): Promise<Record<string, unknown> | null> {
+async function fetchJsonSafe(url: string, fetchImpl: typeof fetch = fetch): Promise<Record<string, unknown> | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(8_000) });
     if (!res.ok) return null;
     const ct = res.headers.get("content-type") ?? "";
     if (!ct.includes("json")) return null;
@@ -57,25 +66,32 @@ async function fetchJsonSafe(url: string): Promise<Record<string, unknown> | nul
   }
 }
 
-export async function discoverMcpOAuthMetadata(mcpUrl: string): Promise<McpOAuthMetadata> {
+export function canonicalMcpResourceUri(mcpUrl: string): string {
+  const parsed = new URL(mcpUrl);
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+export async function discoverMcpOAuthMetadata(
+  mcpUrl: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<McpOAuthMetadata> {
   const parsed = new URL(mcpUrl);
   const origin = parsed.origin;
+  const canonicalResource = canonicalMcpResourceUri(mcpUrl);
 
-  let authServerOrigin = origin;
+  let authServerIssuer = origin;
+  let resourceFromMetadata: string | undefined;
+
   const pathScoped =
     parsed.pathname && parsed.pathname !== "/"
-      ? await fetchJsonSafe(`${origin}/.well-known/oauth-protected-resource${parsed.pathname}`)
+      ? await fetchJsonSafe(`${origin}/.well-known/oauth-protected-resource${parsed.pathname}`, fetchImpl)
       : null;
-  const protectedResource = pathScoped ?? (await fetchJsonSafe(`${origin}/.well-known/oauth-protected-resource`));
-  const prAuthServers = Array.isArray(protectedResource?.authorization_servers)
-    ? (protectedResource.authorization_servers as unknown[])
-    : [];
-  if (typeof prAuthServers[0] === "string" && prAuthServers[0].trim() !== "") {
-    authServerOrigin = new URL(prAuthServers[0]).origin;
-  } else {
-    // Probe resource server 401 WWW-Authenticate resource_metadata if needed
+  let protectedResource = pathScoped ?? (await fetchJsonSafe(`${origin}/.well-known/oauth-protected-resource`, fetchImpl));
+
+  if (!protectedResource) {
     try {
-      const probe = await fetch(mcpUrl, {
+      const probe = await fetchImpl(mcpUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
@@ -84,20 +100,40 @@ export async function discoverMcpOAuthMetadata(mcpUrl: string): Promise<McpOAuth
       const www = probe.headers.get("www-authenticate") ?? "";
       const rmMatch = /resource_metadata="([^"]+)"/i.exec(www);
       if (rmMatch?.[1]) {
-        const rm = await fetchJsonSafe(rmMatch[1]);
-        const servers = Array.isArray(rm?.authorization_servers) ? rm.authorization_servers : [];
-        if (typeof servers[0] === "string" && servers[0].trim() !== "") {
-          authServerOrigin = new URL(servers[0]).origin;
-        }
+        protectedResource = await fetchJsonSafe(rmMatch[1], fetchImpl);
       }
     } catch {
       // Ignore probe failure and continue with standard well-known paths.
     }
   }
 
+  if (protectedResource) {
+    if (typeof protectedResource.resource === "string" && protectedResource.resource.trim() !== "") {
+      resourceFromMetadata = protectedResource.resource.trim();
+    } else {
+      resourceFromMetadata = canonicalResource;
+    }
+    const prAuthServers = Array.isArray(protectedResource.authorization_servers)
+      ? protectedResource.authorization_servers
+      : [];
+    if (typeof prAuthServers[0] === "string" && prAuthServers[0].trim() !== "") {
+      authServerIssuer = prAuthServers[0].trim().replace(/\/+$/, "");
+    }
+  }
+
+  const issuerUrl = new URL(authServerIssuer);
+  const issuerOrigin = issuerUrl.origin;
+  const issuerPath = issuerUrl.pathname && issuerUrl.pathname !== "/" ? issuerUrl.pathname : "";
+
   const meta =
-    (await fetchJsonSafe(`${authServerOrigin}/.well-known/oauth-authorization-server`)) ??
-    (await fetchJsonSafe(`${authServerOrigin}/.well-known/openid-configuration`));
+    (issuerPath
+      ? await fetchJsonSafe(`${issuerOrigin}/.well-known/oauth-authorization-server${issuerPath}`, fetchImpl)
+      : null) ??
+    (await fetchJsonSafe(`${issuerOrigin}/.well-known/oauth-authorization-server`, fetchImpl)) ??
+    (issuerPath
+      ? await fetchJsonSafe(`${issuerOrigin}${issuerPath}/.well-known/openid-configuration`, fetchImpl)
+      : null) ??
+    (await fetchJsonSafe(`${issuerOrigin}/.well-known/openid-configuration`, fetchImpl));
 
   if (
     !meta ||
@@ -108,18 +144,27 @@ export async function discoverMcpOAuthMetadata(mcpUrl: string): Promise<McpOAuth
   }
 
   return {
-    issuer: typeof meta.issuer === "string" ? meta.issuer : authServerOrigin,
+    issuer: typeof meta.issuer === "string" ? meta.issuer : authServerIssuer,
     authorizationEndpoint: meta.authorization_endpoint,
     tokenEndpoint: meta.token_endpoint,
     ...(typeof meta.registration_endpoint === "string" ? { registrationEndpoint: meta.registration_endpoint } : {}),
     ...(Array.isArray(meta.scopes_supported)
       ? { scopesSupported: meta.scopes_supported.filter((s): s is string => typeof s === "string") }
       : {}),
+    ...(resourceFromMetadata ? { resource: resourceFromMetadata } : {}),
   };
 }
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function negotiateScope(explicitScope: string | undefined, scopesSupported: readonly string[] | undefined): string | undefined {
+  const parts = (explicitScope ?? "").split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  if (scopesSupported?.includes("offline_access") && !parts.includes("offline_access")) {
+    parts.push("offline_access");
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 export async function runMcpOAuthFlow(
@@ -129,10 +174,13 @@ export async function runMcpOAuthFlow(
     timeoutMs?: number;
     openBrowser?: BrowserOpener;
     clientId?: string;
+    clientSecret?: string;
     scope?: string;
+    fetchImpl?: typeof fetch;
   },
 ): Promise<McpOAuthResult> {
-  const meta = await discoverMcpOAuthMetadata(mcpUrl);
+  const fetchImpl = options?.fetchImpl ?? fetch;
+  const meta = await discoverMcpOAuthMetadata(mcpUrl, fetchImpl);
   const timeoutMs = options?.timeoutMs ?? 180_000;
   const verifier = base64Url(randomBytes(32));
   const challenge = base64Url(createHash("sha256").update(verifier).digest());
@@ -194,11 +242,14 @@ export async function runMcpOAuthFlow(
 
   try {
     let clientId = options?.clientId?.trim() || "";
+    let clientSecret = options?.clientSecret?.trim() || undefined;
     if (!clientId) {
       if (!meta.registrationEndpoint) {
-        throw new Error("该服务未启用动态客户端注册 (RFC 7591)，请改用 Bearer Token 或独立浏览器连接");
+        throw new Error(
+          `该 MCP 服务 (${meta.issuer}) 未启用动态客户端注册 (RFC 7591)，请填入 OAuth Client ID（或使用已预审的 MCP 网关）`,
+        );
       }
-      const regRes = await fetch(meta.registrationEndpoint, {
+      const regRes = await fetchImpl(meta.registrationEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -213,11 +264,12 @@ export async function runMcpOAuthFlow(
       if (!regRes.ok) {
         throw new Error(`OAuth 客户端注册失败：HTTP ${regRes.status}`);
       }
-      const regJson = (await regRes.json()) as { client_id?: string };
+      const regJson = (await regRes.json()) as { client_id?: string; client_secret?: string };
       if (!regJson.client_id) {
         throw new Error("OAuth 动态注册响应缺少 client_id");
       }
       clientId = regJson.client_id;
+      if (regJson.client_secret) clientSecret = regJson.client_secret;
     }
 
     const authUrl = new URL(meta.authorizationEndpoint);
@@ -227,7 +279,17 @@ export async function runMcpOAuthFlow(
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("code_challenge", challenge);
     authUrl.searchParams.set("code_challenge_method", "S256");
-    if (options?.scope) authUrl.searchParams.set("scope", options.scope);
+    if (meta.resource) {
+      authUrl.searchParams.set("resource", meta.resource);
+    }
+    const resolvedScope = negotiateScope(options?.scope, meta.scopesSupported);
+    if (resolvedScope) {
+      authUrl.searchParams.set("scope", resolvedScope);
+    }
+    if (authUrl.hostname.endsWith("google.com")) {
+      authUrl.searchParams.set("access_type", "offline");
+      authUrl.searchParams.set("prompt", "consent");
+    }
 
     const opener = options?.openBrowser ?? defaultOpenSystemBrowser;
     await opener(authUrl.toString());
@@ -240,7 +302,10 @@ export async function runMcpOAuthFlow(
       client_id: clientId,
       code_verifier: verifier,
     });
-    const tokenRes = await fetch(meta.tokenEndpoint, {
+    if (clientSecret) tokenBody.set("client_secret", clientSecret);
+    if (meta.resource) tokenBody.set("resource", meta.resource);
+
+    const tokenRes = await fetchImpl(meta.tokenEndpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: tokenBody.toString(),
@@ -260,17 +325,69 @@ export async function runMcpOAuthFlow(
     if (!tokenJson.access_token) {
       throw new Error("OAuth 令牌响应缺少 access_token");
     }
+    const expiresIn = typeof tokenJson.expires_in === "number" && tokenJson.expires_in > 0 ? tokenJson.expires_in : undefined;
     return {
       accessToken: tokenJson.access_token,
       ...(tokenJson.refresh_token ? { refreshToken: tokenJson.refresh_token } : {}),
       tokenType: tokenJson.token_type || "Bearer",
-      ...(tokenJson.scope ? { scope: tokenJson.scope } : {}),
+      ...(tokenJson.scope ?? resolvedScope ? { scope: tokenJson.scope ?? resolvedScope } : {}),
       issuer: meta.issuer,
-      ...(typeof tokenJson.expires_in === "number" ? { expiresIn: tokenJson.expires_in } : {}),
+      tokenEndpoint: meta.tokenEndpoint,
+      clientId,
+      ...(clientSecret ? { clientSecret } : {}),
+      ...(meta.resource ? { resource: meta.resource } : {}),
+      ...(expiresIn !== undefined ? { expiresIn, expiresAt: Date.now() + expiresIn * 1_000 } : {}),
     };
   } finally {
     clearTimeout(timer);
     options?.signal?.removeEventListener("abort", onAbort);
     server.close();
   }
+}
+
+export async function refreshMcpOAuthToken(
+  record: McpOAuthTokenRecord,
+  fetchImpl: typeof fetch = fetch,
+): Promise<McpOAuthTokenRecord> {
+  if (!record.refreshToken || !record.tokenEndpoint || !record.clientId) {
+    throw new Error("缺少 refresh_token 或 token_endpoint，无法自动续期");
+  }
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: record.refreshToken,
+    client_id: record.clientId,
+  });
+  if (record.clientSecret) body.set("client_secret", record.clientSecret);
+  if (record.resource) body.set("resource", record.resource);
+  if (record.scope) body.set("scope", record.scope);
+
+  const res = await fetchImpl(record.tokenEndpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: body.toString(),
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`OAuth 令牌刷新失败：HTTP ${res.status} ${text.slice(0, 180)}`);
+  }
+  const json = (await res.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    token_type?: string;
+    scope?: string;
+    expires_in?: number;
+  };
+  if (!json.access_token) {
+    throw new Error("OAuth 令牌刷新响应缺少 access_token");
+  }
+  const expiresIn = typeof json.expires_in === "number" && json.expires_in > 0 ? json.expires_in : undefined;
+  return {
+    ...record,
+    accessToken: json.access_token,
+    refreshToken: json.refresh_token || record.refreshToken,
+    tokenType: json.token_type || record.tokenType || "Bearer",
+    scope: json.scope ?? record.scope,
+    ...(expiresIn !== undefined ? { expiresAt: Date.now() + expiresIn * 1_000 } : {}),
+  };
 }

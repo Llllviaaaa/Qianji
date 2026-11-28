@@ -9,10 +9,12 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import type { Credentials } from "@qianji/llm";
+import type { Mcp } from "@qianji/mcp";
 import "@qianji/schedule";
 import type { Schedule, ScheduledRun } from "@qianji/schedule";
 import "@qianji/session";
 import "@qianji/tools";
+import { McpOAuthTokenStore } from "../mcp-oauth-store.ts";
 import { HostConnectorsService } from "../plugin-connectors.ts";
 import { registerBotRpcMethods } from "./bot-rpc.ts";
 import { VirtualComputerManager } from "./computer/manager.ts";
@@ -44,7 +46,12 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
     ctx.plugin(HostConnectorsService);
   }
   const credentials = ctx.get("credentials") as Credentials | undefined;
+  const mcpOAuthStore = new McpOAuthTokenStore(() => ctx.get("credentials") as Credentials | undefined);
   const store = new BotStateStore(ctx.sessions, config, credentials);
+  store.connectorsHub.setMcpGetter(() => ctx.get("mcp") as Mcp | undefined);
+  ctx.inject(["mcp"], (inner) => {
+    inner.mcp.setAuthProvider(mcpOAuthStore);
+  });
   store.computer.attachBroadcaster((channel, payload) => {
     ctx.get("rpc")?.broadcast(channel, payload);
   });
@@ -264,6 +271,6 @@ export function apply(ctx: Context, config: BotStoreConfig): void {
   });
 
   ctx.inject(["rpc"], (rpcCtx) => {
-    registerBotRpcMethods(rpcCtx, store, pulseEngine, config.pluginManager);
+    registerBotRpcMethods(rpcCtx, store, pulseEngine, config.pluginManager, mcpOAuthStore);
   });
 }

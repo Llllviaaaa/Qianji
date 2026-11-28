@@ -64,69 +64,73 @@ export function BotSettingsSecondaryPane({
       <div className="qj-bset-stack">
         <section className="qj-bset-group">
           <div className="qj-bset-group-head">
-            <span className="qj-bset-group-title">独立沙箱与人机接管</span>
+            <span className="qj-bset-group-title">Computer Use 独立沙箱与人工接管</span>
           </div>
           <div className="qj-bset-card">
             <div className="qj-bset-row">
               <div className="qj-bset-row-copy">
                 <div className="qj-bset-row-title">
                   <Globe size={14.5} className="qj-bset-inline-icon" />
-                  <span>独立浏览器会话隔离</span>
+                  <span>独立浏览器会话隔离（仅用于长尾网页操作）</span>
                 </div>
                 <div className="qj-bset-row-desc">
-                  分身在独立 Profile 中执行网页检索与阅读，不触碰个人浏览器历史与密码库；遇到登录或人机验证时自动暂停，支持一键接管。
+                  Gmail、GitHub、Notion、Figma 等主流应用均已通过标准 MCP / OAuth 2.1 直连；独立浏览器专用于无公开 API 的网页检索与人工接管，不触碰个人浏览器历史与密码库。
                 </div>
               </div>
-              <button
-                type="button"
-                className="qj-bset-btn primary sm"
-                onClick={() => openBotLiveView(undefined, { returnToCurrent: true })}
-              >
-                <MonitorPlay size={13} />
-                <span>查看实时画面</span>
-              </button>
+              <div className="qj-bset-inline-controls">
+                <button
+                  type="button"
+                  className="qj-bset-btn soft sm"
+                  onClick={() => patchBotUi({ settingsTab: "connectors", activeConnectorId: null })}
+                >
+                  <span>MCP 连接器目录</span>
+                  <ArrowRight size={12.5} />
+                </button>
+                <button
+                  type="button"
+                  className="qj-bset-btn primary sm"
+                  onClick={() => openBotLiveView(undefined, { returnToCurrent: true })}
+                >
+                  <MonitorPlay size={13} />
+                  <span>查看实时画面</span>
+                </button>
+              </div>
             </div>
           </div>
         </section>
 
-        <section className="qj-bset-group">
-          <div className="qj-bset-group-head">
-            <span className="qj-bset-group-title">支持安全浏览器登录的连接器</span>
-            <button
-              type="button"
-              className="qj-bset-text-link"
-              onClick={() => patchBotUi({ settingsTab: "connectors", activeConnectorId: null })}
-            >
-              <span>全部连接器</span>
-              <ArrowRight size={12.5} />
-            </button>
-          </div>
-          <div className="qj-conn-list">
-            {browserEntries.slice(0, 8).map((entry) => {
-              const st = resolveConnectorState(entry, snapshot, ui.mcpStatus, mcpServers);
-              return (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className="qj-conn-row"
-                  onClick={() => openBotConnector(entry.id, "browser")}
-                >
-                  <ConnectorBrandIcon id={entry.id} icon={entry.icon} iconBg={entry.iconBg} size={34} />
-                  <div className="qj-conn-row-copy">
-                    <div className="qj-conn-row-name">{entry.name}</div>
-                    <div className="qj-conn-row-sub">{entry.tagline}</div>
-                  </div>
-                  <div className="qj-conn-row-right">
-                    <span className={`qj-conn-action-chip${st.connected ? " connected" : ""}`}>
-                      {st.connected ? "已授权" : "去登录"}
-                    </span>
-                    <ChevronRight size={14} className="qj-conn-row-chevron" />
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        {browserEntries.length > 0 && (
+          <section className="qj-bset-group">
+            <div className="qj-bset-group-head">
+              <span className="qj-bset-group-title">扩展插件网页连接器</span>
+            </div>
+            <div className="qj-conn-list">
+              {browserEntries.slice(0, 8).map((entry) => {
+                const st = resolveConnectorState(entry, snapshot, ui.mcpStatus, mcpServers);
+                return (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    className="qj-conn-row"
+                    onClick={() => openBotConnector(entry.id, "browser")}
+                  >
+                    <ConnectorBrandIcon id={entry.id} icon={entry.icon} iconBg={entry.iconBg} size={34} />
+                    <div className="qj-conn-row-copy">
+                      <div className="qj-conn-row-name">{entry.name}</div>
+                      <div className="qj-conn-row-sub">{entry.tagline}</div>
+                    </div>
+                    <div className="qj-conn-row-right">
+                      <span className={`qj-conn-action-chip${st.connected ? " connected" : ""}`}>
+                        {st.connected ? "已授权" : "查看"}
+                      </span>
+                      <ChevronRight size={14} className="qj-conn-row-chevron" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
       </div>
     );
   }

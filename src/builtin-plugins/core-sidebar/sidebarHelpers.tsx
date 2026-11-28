@@ -112,8 +112,26 @@ export function repoName(path: string): string {
 export function formatSessionTitle(session: SidebarSessionItem): string {
   const explicit = session.name?.trim();
   if (explicit) return explicit;
-  const first = session.firstMessage?.trim();
-  if (first) return first.replace(/\s+/g, " ").slice(0, 72);
+  let first = session.firstMessage?.trim() ?? "";
+  if (first) {
+    first = first
+      .replace(/(?:^|\r?\n\r?\n)附加的本地文件：\r?\n[\s\S]*$/, "")
+      .replace(/^(?:>[ \t]?.*(?:\r?\n|$))+\r?\n/, "")
+      .replace(/^\[已关联连接器上下文:\s*[^\]]+\]\r?\n?/, "")
+      .trim();
+    const slash = /^\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?:\s+([\s\S]*))?$/.exec(first);
+    if (slash?.[1] !== undefined) {
+      const args = (slash[2] ?? "").trim();
+      first =
+        args !== ""
+          ? args
+          : slash[1].toLowerCase().startsWith("skill:") && slash[1].length > 6
+            ? slash[1].slice(6)
+            : `/${slash[1]}`;
+    }
+    const clean = first.replace(/\s+/g, " ").trim();
+    if (clean) return clean.slice(0, 72);
+  }
   return "新对话";
 }
 

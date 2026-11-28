@@ -6,7 +6,9 @@
  */
 import {
   useEffect,
+  useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -14,9 +16,16 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
-import { ArrowUp, Check, LayoutGrid, Mic, Paperclip, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Check, LayoutGrid, Mic, Paperclip, Plus, Sparkles, Square, X } from "lucide-react";
 import type { AttachmentPayload } from "@qianji/client";
 import { ConnectorBrandIcon } from "./BotConnectorLogos";
+import {
+  BotActiveDirectiveChip,
+  BotSlashPopover,
+  extractCommittedDraftDirective,
+  filterBotSlashCommands,
+  type BotSlashCommandItem,
+} from "./BotSlashPopover";
 
 export interface ComposerAppItem {
   readonly id: string;
@@ -29,6 +38,7 @@ export interface BotChatComposerProps {
   readonly quotedText: string | null;
   readonly isStreaming: boolean;
   readonly placeholder?: string;
+  readonly commands?: readonly BotSlashCommandItem[];
   readonly availableApps?: readonly ComposerAppItem[];
   readonly selectedApps?: readonly string[];
   readonly onToggleApp?: (appId: string) => void;
@@ -44,7 +54,8 @@ export function BotChatComposer({
   draft,
   quotedText,
   isStreaming,
-  placeholder = "消息",
+  placeholder = "输入消息，或输入 / 调用技能与指令",
+  commands = [],
   availableApps = [],
   selectedApps = [],
   onToggleApp,
@@ -60,6 +71,40 @@ export function BotChatComposer({
   const plusAnchorRef = useRef<HTMLDivElement | null>(null);
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [dismissedSlashDraft, setDismissedSlashDraft] = useState<string | null>(null);
+  const slashListboxId = useId();
+
+  const slashQuery =
+    draft.startsWith("/") && !draft.includes(" ") && !draft.includes("\n")
+      ? draft.slice(1)
+      : null;
+  const slashMatches = useMemo(
+    () => filterBotSlashCommands(commands, slashQuery),
+    [commands, slashQuery],
+  );
+  const slashOpen =
+    slashQuery !== null && slashMatches.length > 0 && dismissedSlashDraft !== draft;
+  const clampedSlashIdx = slashMatches.length > 0 ? Math.min(slashIndex, slashMatches.length - 1) : 0;
+  const activeDirective = useMemo(
+    () => (slashOpen ? null : extractCommittedDraftDirective(draft, commands)),
+    [commands, draft, slashOpen],
+  );
+
+  const selectSlashCommand = (cmd: BotSlashCommandItem) => {
+    const next = `/${cmd.name} `;
+    setDismissedSlashDraft(null);
+    setSlashIndex(0);
+    onDraftChange(next);
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+      });
+    }
+  };
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -123,7 +168,29 @@ export function BotChatComposer({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.nativeEvent.isComposing) return;
+    if (slashOpen) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDismissedSlashDraft(draft);
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setSlashIndex((idx) => (Math.min(idx, slashMatches.length - 1) + step + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey) {
+        const picked = slashMatches[clampedSlashIdx];
+        if (picked !== undefined) {
+          event.preventDefault();
+          selectSlashCommand(picked);
+          return;
+        }
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submitCurrent();
     }
@@ -136,6 +203,17 @@ export function BotChatComposer({
   return (
     <div className="qj-bot-composer-wrap">
       <form className="qj-muse-pill-composer" onSubmit={(e) => void submitCurrent(e)}>
+        {slashOpen && (
+          <BotSlashPopover
+            matches={slashMatches}
+            activeIndex={clampedSlashIdx}
+            query={slashQuery ?? ""}
+            listboxId={slashListboxId}
+            onHoverIndex={setSlashIndex}
+            onSelect={selectSlashCommand}
+          />
+        )}
+
         {quotedText !== null && (
           <div className="qj-sanctuary-quote-bar">
             <span className="qj-sanctuary-quote-text">回复：{quotedText}</span>
@@ -150,8 +228,17 @@ export function BotChatComposer({
           </div>
         )}
 
-        {(attachments.length > 0 || selectedApps.length > 0) && (
+        {(activeDirective !== null || attachments.length > 0 || selectedApps.length > 0) && (
           <div className="qj-sanctuary-attachment-row">
+            {activeDirective !== null && (
+              <BotActiveDirectiveChip
+                directive={activeDirective}
+                onClear={() => {
+                  onDraftChange(activeDirective.remainingDraft);
+                  textareaRef.current?.focus();
+                }}
+              />
+            )}
             {selectedApps.map((appId) => {
               const info = availableApps.find((a) => a.id === appId);
               return (
@@ -221,6 +308,25 @@ export function BotChatComposer({
                   <span>添加图片与本地文件</span>
                 </button>
 
+                {commands.length > 0 && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="qj-composer-plus-item"
+                    onClick={() => {
+                      setPlusMenuOpen(false);
+                      setDismissedSlashDraft(null);
+                      setSlashIndex(0);
+                      onDraftChange("/");
+                      window.requestAnimationFrame(() => textareaRef.current?.focus());
+                    }}
+                  >
+                    <Sparkles size={15} />
+                    <span className="qj-composer-plus-name">调用技能与快捷指令</span>
+                    <span className="qj-conn-mini-tag">/</span>
+                  </button>
+                )}
+
                 {menuApps.length > 0 && (
                   <>
                     <div className="qj-bot-menu-sep" />
@@ -282,11 +388,19 @@ export function BotChatComposer({
             ref={textareaRef}
             id="muse-msg-input"
             rows={1}
+            role="combobox"
+            aria-expanded={slashOpen}
+            aria-controls={slashOpen ? slashListboxId : undefined}
+            aria-activedescendant={slashOpen ? `${slashListboxId}-${clampedSlashIdx}` : undefined}
             aria-label="消息输入框"
             className="qj-sanctuary-composer-input"
             placeholder={placeholder}
             value={draft}
-            onChange={(e) => onDraftChange(e.target.value)}
+            onChange={(e) => {
+              setDismissedSlashDraft(null);
+              setSlashIndex(0);
+              onDraftChange(e.target.value);
+            }}
             onKeyDown={handleKeyDown}
           />
 

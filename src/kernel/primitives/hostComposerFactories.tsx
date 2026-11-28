@@ -14,6 +14,7 @@ import type {
   SlotFactorySpec,
   SlotRegistry,
 } from "@qianji/client-slots";
+import { ComposerDirectiveBar } from "../../components/composer/ComposerDirectiveBar";
 import { ComposerSuggestionMenus } from "../../components/composer/ComposerSuggestionMenus";
 import { useComposerSuggestionsAndDrop } from "../../components/composer/useComposerSuggestionsAndDrop";
 import { insertNewlineAtSelection, resolveChatEnterAction } from "../../lib/composerKeys";
@@ -291,6 +292,17 @@ function HostComposerInputFactory({
         suggestionsId={suggest.suggestionsId}
         suggestionMenuRef={suggestionMenuRef}
         setSuggestionIndex={suggest.setSuggestionIndex}
+      />
+
+      <ComposerDirectiveBar
+        text={text}
+        commands={commands}
+        suppress={suggest.commandMenuOpen}
+        onClear={(remaining) => {
+          updateDraft(remaining);
+          setCaret(remaining.length);
+          window.requestAnimationFrame(() => textareaRef.current?.focus());
+        }}
       />
 
       <div className="dsh-claude-input-box" data-input-scroll="" onClick={() => textareaRef.current?.focus()}>

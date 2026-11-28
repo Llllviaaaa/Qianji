@@ -4,6 +4,7 @@
 import { useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { Heart, Mail, Pencil } from "lucide-react";
+import { useAppStore } from "@qianji/client";
 import { openBotModal, useBotController, useBotSnapshot } from "./botStore";
 
 export function BotCompanionIdentityTab({ ctx }: { readonly ctx?: Context }): ReactElement {
@@ -108,7 +109,18 @@ export function BotCompanionIdentityTab({ ctx }: { readonly ctx?: Context }): Re
 export function BotCompanionInboxTab({ ctx }: { readonly ctx?: Context }): ReactElement {
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
-  const hasRealMail = snapshot.connectorConfigs.email.enabled;
+  const appSettings = useAppStore((s) => s.settings);
+
+  const hasImapMail = snapshot.connectorConfigs.email.enabled;
+  const gmailPol = snapshot.connectorConfigs.appPolicies?.gmail;
+  const gmailMcpConfigured = Boolean(
+    gmailPol?.connected || appSettings?.mcpServers?.some((s) => s.id === "preset-mcp-gmail" && s.enabled),
+  );
+  const hasRealMail = hasImapMail || gmailMcpConfigured;
+  const accountAddress =
+    (hasImapMail ? snapshot.connectorConfigs.email.emailAddress : "") ||
+    gmailPol?.accountLabel ||
+    (gmailMcpConfigured ? "Gmail (MCP)" : snapshot.connectorConfigs.email.emailAddress);
 
   return (
     <div className="qj-animate-page-in qj-sheet-pane qj-sheet-pane-fill">
@@ -119,6 +131,7 @@ export function BotCompanionInboxTab({ ctx }: { readonly ctx?: Context }): React
             {hasRealMail && (
               <button
                 type="button"
+                data-testid="inbox-refresh-mail-btn"
                 className="qj-soft-btn qj-sheet-pill-xs"
                 onClick={() => void ctrl.testConnector("email")}
               >
@@ -153,12 +166,23 @@ export function BotCompanionInboxTab({ ctx }: { readonly ctx?: Context }): React
         </div>
       ) : (
         <div className="qj-sheet-pane">
-          {snapshot.connectorConfigs.email.emailAddress && (
+          {accountAddress && (
             <div className="qj-soft-card qj-sheet-mail-account">
-              <span className="qj-sheet-mono">{snapshot.connectorConfigs.email.emailAddress}</span>
+              <span className="qj-sheet-mono">{accountAddress}</span>
               <span className="qj-sheet-status-ok">
-                {hasRealMail ? "IMAP 已接入" : "未开启自动拉取"}
+                {gmailMcpConfigured && !hasImapMail
+                  ? gmailPol?.backgroundSync === false
+                    ? "MCP 已接入（手动同步）"
+                    : "Gmail MCP 自动同步"
+                  : hasImapMail
+                    ? "IMAP 已接入"
+                    : "未开启自动拉取"}
               </span>
+            </div>
+          )}
+          {(gmailPol?.lastError || snapshot.connectorConfigs.email.lastError) && (
+            <div className="qj-connector-card-err">
+              {gmailPol?.lastError || snapshot.connectorConfigs.email.lastError}
             </div>
           )}
           {snapshot.inboxItems.length === 0 ? (

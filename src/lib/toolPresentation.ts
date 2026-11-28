@@ -1,10 +1,12 @@
 import type { UiToolCall } from "../types";
 import { goalMilestoneCopy } from "./activeGoal";
 import { planFromToolCall, type TaskPlanSummary } from "./envSources";
+import { extractSkillSlugFromPath, presentBuiltinMetaTool } from "./toolSkillMeta";
 import { isWebSearchTool, webSearchQuery, webSearchSources, type WebSearchSource } from "./webAccess";
 
 export type ToolKind =
   | "read"
+  | "skill"
   | "write"
   | "edit"
   | "shell"
@@ -376,8 +378,10 @@ function computerHeading(name: string): string {
 }
 
 export function presentToolCall(call: UiToolCall): ToolPresentation {
-  const kind = classifyToolKind(call.name);
+  const baseKind = classifyToolKind(call.name);
   const path = toolPathFromArgs(call.args);
+  const skillSlug = baseKind === "read" ? extractSkillSlugFromPath(path) : null;
+  const kind: ToolKind = skillSlug !== null ? "skill" : baseKind;
   const command = commandArg(call.args);
   const query = kind === "web-search"
     ? webSearchQuery(call.args)
@@ -400,7 +404,7 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
 
   const resultText = typeof call.result === "string" ? call.result : undefined;
   const hits = kind === "search" && resultText ? parseSearchHits(resultText) : [];
-  const lineRange = kind === "read" ? readLineRange(call.args) : undefined;
+  const lineRange = kind === "read" || kind === "skill" ? readLineRange(call.args) : undefined;
   const previewSource = kind === "write"
     ? (content || resultText)
     : kind === "shell"
@@ -414,11 +418,16 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
             : resultText;
   const preview = previewSource ? truncatePreview(previewSource) : undefined;
   const plan = kind === "plan" ? planFromToolCall(call) ?? undefined : undefined;
-  const goalCopy = goalMilestoneCopy(normalizedToolName(call.name), call.args);
+  const normName = normalizedToolName(call.name);
+  const goalCopy = goalMilestoneCopy(normName, call.args);
+  const metaCopy = kind === "other" ? presentBuiltinMetaTool(normName, call.args) : null;
   const uiTitle = kind === "ui" ? stringArg(call.args, ["title", "id"]) : undefined;
 
   let heading: string;
-  if (kind === "web-search") {
+  if (kind === "skill" && skillSlug !== null) {
+    heading = `加载技能 · ${skillSlug}`;
+    if (lineRange) heading += ` · ${lineRange}`;
+  } else if (kind === "web-search") {
     const label = call.running ? "正在搜索网页" : call.isError ? "网页搜索失败" : "已搜索网页";
     heading = query ? `${label} · ${clipHeading(query)}` : label;
   } else if (kind === "read") {
@@ -442,17 +451,14 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
       ? (goalCopy.detail ? `${goalCopy.title} · ${clipHeading(goalCopy.detail)}` : goalCopy.title)
       : (plan ? `计划 ${plan.completed}/${plan.steps.length}` : "更新计划");
   } else if (kind === "ui") {
-    const base = normalizedToolName(call.name) === "update_ui" ? "更新交互组件" : "渲染交互组件";
+    const base = normName === "update_ui" ? "更新交互组件" : "渲染交互组件";
     heading = uiTitle ? `${base} · ${clipHeading(uiTitle, 48)}` : base;
   } else if (kind === "mcp") {
     const parts = call.name.split("__");
     const label = `MCP · ${(parts[parts.length - 1] || call.name).replace(/_/g, " ")}`;
     heading = path ? `${label} · ${displayPath(path)}` : label;
-  } else if (normalizedToolName(call.name) === "activate_tools") {
-    const requested = Array.isArray(call.args.names)
-      ? call.args.names.filter((item): item is string => typeof item === "string" && item.trim() !== "").join(", ")
-      : "";
-    heading = requested ? `加载扩展工具 · ${clipHeading(requested, 48)}` : "加载扩展工具";
+  } else if (metaCopy !== null) {
+    heading = metaCopy.heading;
   } else {
     heading = path ? `${call.name} · ${displayPath(path)}` : call.name;
   }
@@ -460,7 +466,7 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
   const expandable = Boolean(
     preview
     || (kind === "shell" && command)
-    || (kind === "read" && (path || preview))
+    || ((kind === "read" || kind === "skill") && (path || preview))
     || (diffSource && diffSource.length > 0)
     || hits.length > 0
     || sources.length > 0
@@ -468,10 +474,15 @@ export function presentToolCall(call: UiToolCall): ToolPresentation {
     || call.images?.length,
   );
 
+  const explicitCopy =
+    skillSlug !== null
+      ? { title: "加载技能", detail: skillSlug }
+      : goalCopy ?? (metaCopy ? { title: metaCopy.title, ...(metaCopy.detail ? { detail: metaCopy.detail } : {}) } : null);
+
   return {
     kind,
     heading,
-    ...(goalCopy !== null ? { title: goalCopy.title, ...(goalCopy.detail !== undefined ? { detail: goalCopy.detail } : {}) } : {}),
+    ...(explicitCopy !== null ? explicitCopy : {}),
     path,
     command,
     inputKind: kind === "shell" ? shellInputKind(command, call.args) : undefined,
