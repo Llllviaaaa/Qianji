@@ -227,6 +227,29 @@ describe("OpenMausBot-Style Computer Panel (3-Column Layout, VNC, Child Session,
     cleanups.push(harness.dispose);
 
     openComputerStudio({ engine: "local-linux", tab: "browser" });
+    // Desktop frame must NOT bleed into Browser tab, and welcome URL keeps clean address bar draft
+    applyComputerEventNotification({
+      kind: "frame",
+      frame: {
+        engine: "local-linux", tab: "desktop", mimeType: "image/png", dataBase64: SAMPLE_PNG_B64,
+        width: 1280, height: 800, seq: 1, ts: 1732752090_000, title: "Desktop 1x1",
+      },
+    });
+    expect(harness.renderHtml()).toContain('data-testid="computer-viewport-placeholder"');
+    expect(harness.renderHtml()).not.toContain('data-testid="computer-viewport-frame"');
+
+    applyComputerEventNotification({
+      kind: "frame",
+      frame: {
+        engine: "local-linux", tab: "browser", mimeType: "image/png", dataBase64: SAMPLE_PNG_B64,
+        width: 1280, height: 800, seq: 2, ts: 1732752095_000, url: "about:qianji-live-view", title: "千机分身隔离浏览器",
+      },
+    });
+    const welcomeBrowserHtml = harness.renderHtml();
+    expect(welcomeBrowserHtml).toContain('data-testid="computer-viewport-frame"');
+    expect(welcomeBrowserHtml).toContain('value="https://example.com"');
+    expect(welcomeBrowserHtml).not.toContain('value="about:qianji-live-view"');
+
     applyComputerEventNotification({
       kind: "frame",
       frame: {

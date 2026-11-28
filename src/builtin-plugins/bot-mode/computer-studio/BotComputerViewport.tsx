@@ -37,7 +37,12 @@ export function BotComputerViewport({ ctx }: { readonly ctx?: Context }): ReactE
   const isScrubbing = ui.scrubIndex !== null && snap.timeline[ui.scrubIndex] !== undefined;
   const scrubStep = ui.scrubIndex !== null ? snap.timeline[ui.scrubIndex] : undefined;
 
-  const liveUrl = snap.latestFrame?.url ?? "";
+  const browserFrame = snap.latestFrame?.tab === "browser" ? snap.latestFrame : undefined;
+  const rawLiveUrl = browserFrame?.url ?? "";
+  const liveUrl =
+    rawLiveUrl !== "" && rawLiveUrl !== "about:qianji-live-view" && rawLiveUrl !== "about:blank"
+      ? rawLiveUrl
+      : "";
   const [urlSyncKey, setUrlSyncKey] = useState(liveUrl);
   const [urlDraft, setUrlDraft] = useState(liveUrl || "https://example.com");
   if (urlSyncKey !== liveUrl && liveUrl !== "") {
@@ -49,8 +54,8 @@ export function BotComputerViewport({ ctx }: { readonly ctx?: Context }): ReactE
   const imgRef = useRef<HTMLImageElement | null>(null);
   const lastMoveTsRef = useRef<number>(0);
 
-  const vpWidth = snap.latestFrame?.width ?? 1280;
-  const vpHeight = snap.latestFrame?.height ?? 800;
+  const vpWidth = browserFrame?.width ?? 1280;
+  const vpHeight = browserFrame?.height ?? 800;
 
   const takeover = snap.takeover;
   const isTakeoverRequested = takeover.status === "requested";
@@ -60,13 +65,13 @@ export function BotComputerViewport({ ctx }: { readonly ctx?: Context }): ReactE
     ? scrubStep?.thumbnailBase64
       ? `data:image/png;base64,${scrubStep.thumbnailBase64}`
       : null
-    : snap.latestFrame?.dataBase64
-      ? `data:${snap.latestFrame.mimeType};base64,${snap.latestFrame.dataBase64}`
+    : browserFrame?.dataBase64
+      ? `data:${browserFrame.mimeType};base64,${browserFrame.dataBase64}`
       : null;
 
   const activeCursor = isScrubbing
     ? scrubStep?.cursor
-    : (ui.latestPointer ?? snap.latestFrame?.cursor);
+    : (ui.latestPointer ?? browserFrame?.cursor);
 
   const cursorLeftPct =
     activeCursor !== undefined && activeCursor.viewportWidth > 0
@@ -281,7 +286,7 @@ export function BotComputerViewport({ ctx }: { readonly ctx?: Context }): ReactE
             <img
               ref={imgRef}
               src={displayImageSrc}
-              alt={isScrubbing ? (scrubStep?.title ?? "历史快照") : (snap.latestFrame?.title ?? "千机浏览器画面")}
+              alt={isScrubbing ? (scrubStep?.title ?? "历史快照") : (browserFrame?.title ?? "千机浏览器画面")}
               draggable={false}
               className="qj-cs-browser-frame-img"
               data-testid="computer-viewport-frame"
@@ -290,7 +295,7 @@ export function BotComputerViewport({ ctx }: { readonly ctx?: Context }): ReactE
             <div className="qj-cs-screen-empty" data-testid="computer-viewport-placeholder">
               <Globe size={22} strokeWidth={1.7} />
               <span className="qj-cs-screen-empty-title">
-                {snap.latestFrame?.title || "浏览器就绪"}
+                {browserFrame?.title || "浏览器就绪"}
               </span>
               <span className="qj-cs-screen-empty-desc">
                 千机浏览网页或在上方地址栏输入网址时，16:10 实时页面与光标在此同步显示。

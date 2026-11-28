@@ -97,14 +97,16 @@ export function resolveFencedPath(
   const fencedRoots = computeFencedRoots(botWorkspaceDir, sharedFolders);
   const wsRoot = resolve(botWorkspaceDir);
   const trimmed = (rawPath ?? "").trim();
+  const isWinDriveOrUnc = /^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\");
+  const vpath = isWinDriveOrUnc ? trimmed : trimmed.replace(/\\/g, "/");
 
   let candidateHostPath: string;
-  if (trimmed === "" || trimmed === "." || trimmed === "/workspace" || trimmed === "/workspace/") {
+  if (vpath === "" || vpath === "." || vpath === "/workspace" || vpath === "/workspace/") {
     candidateHostPath = wsRoot;
-  } else if (trimmed.startsWith("/workspace/")) {
-    candidateHostPath = resolve(wsRoot, trimmed.slice("/workspace/".length));
-  } else if (trimmed === "/shared" || trimmed.startsWith("/shared/")) {
-    const rest = trimmed.slice("/shared".length).replace(/^\/+/, "");
+  } else if (vpath.startsWith("/workspace/")) {
+    candidateHostPath = resolve(wsRoot, vpath.slice("/workspace/".length));
+  } else if (vpath === "/shared" || vpath.startsWith("/shared/")) {
+    const rest = vpath.slice("/shared".length).replace(/^\/+/, "");
     const slashIdx = rest.indexOf("/");
     const slug = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest;
     const sub = slashIdx >= 0 ? rest.slice(slashIdx + 1) : "";
@@ -114,10 +116,10 @@ export function resolveFencedPath(
       throw new SentinelFenceError(`Sentinel Path Fence blocked unknown shared mount "${trimmed}"`, trimmed, fencedRoots);
     }
     candidateHostPath = sub ? resolve(matched.path, sub) : resolve(matched.path);
-  } else if (isAbsolute(trimmed) || /^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith("/")) {
-    candidateHostPath = resolve(trimmed);
+  } else if (isWinDriveOrUnc || isAbsolute(vpath) || vpath.startsWith("/")) {
+    candidateHostPath = resolve(isWinDriveOrUnc ? trimmed : vpath);
   } else {
-    candidateHostPath = resolve(wsRoot, trimmed);
+    candidateHostPath = resolve(wsRoot, vpath);
   }
 
   let matchedRoot: string | undefined;

@@ -12,7 +12,8 @@ import type {
   BotRemoteComputerNode,
   BotSharedFolderRule,
 } from "@qianji/protocol";
-import type { WslContainerRuntime } from "../wsl-runtime.ts";
+import { runWslSubprocess, winPathToWslMount, type WslContainerRuntime } from "../wsl-runtime.ts";
+import { parseWslVerboseList, selectPreferredUbuntuDistro } from "./linux-gui-helpers.ts";
 import { quotePosixPath, quotePosixSingle } from "./remote-lease.ts";
 import type { RemoteNodesEngine } from "./remote-nodes-engine.ts";
 import { computeFencedRoots, resolveFencedPath } from "./sentinel-fence.ts";
@@ -78,9 +79,13 @@ async function terminateChildProcess(child: ChildProcessWithoutNullStreams): Pro
       const t = setTimeout(() => { child.removeListener("close", onExit); res(false); }, ms);
       child.once("close", onExit);
     });
-  try { child.stdin.end(); } catch { /* Ignore */ }
+  try {
+    if (child.stdin.writable) child.stdin.write("\x03\nexit\n");
+    child.stdin.end();
+  } catch { /* Ignore */ }
+  if (await waitClose(400)) return;
   try { child.kill(); } catch { /* Ignore */ }
-  if (await waitClose(1_200)) return;
+  if (await waitClose(1_000)) return;
   if (process.platform === "win32" && child.pid !== undefined) {
     await new Promise<void>((res) => {
       const tk = spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
@@ -122,6 +127,15 @@ export class PtySessionManager {
     return id ? this.sessions.get(id) : undefined;
   }
 
+  private async resolveLinuxPtyDistro(): Promise<string | undefined> {
+    const activeGui = this.deps.getLinuxDistro?.();
+    if (activeGui) return activeGui;
+    if (!this.deps.wsl.isSupported()) return undefined;
+    const listRes = await runWslSubprocess("wsl.exe", ["--list", "--verbose"], { timeoutMs: 6_000 });
+    const selected = selectPreferredUbuntuDistro(parseWslVerboseList(listRes.stdout), this.deps.wsl.distroName);
+    return selected.state !== "not-installed" ? selected.distro : undefined;
+  }
+
   async open(params: { engine: BotComputerEngineId; cwd?: string; cols?: number; rows?: number }): Promise<BotComputerPtySessionInfo> {
     const { engine, cols = 100, rows = 30 } = params;
     const existing = this.resolveEntry(undefined, engine);
@@ -153,24 +167,18 @@ export class PtySessionManager {
     let child: ChildProcessWithoutNullStreams;
     let shellKind: "sh" | "powershell";
     let initialDisplayCwd = fencedTarget.hostPath;
-    const activeGuiDistro = engine === "local-linux" ? this.deps.getLinuxDistro?.() : undefined;
-    const wslRunning =
-      engine === "local-linux" &&
-      this.deps.wsl.isSupported() &&
-      (Boolean(activeGuiDistro) || (await this.deps.wsl.inspect()).engineState === "running");
+    const linuxDistro = engine === "local-linux" ? await this.resolveLinuxPtyDistro() : undefined;
 
-    if (wslRunning) {
+    if (linuxDistro) {
       shellKind = "sh";
       initialDisplayCwd = fencedTarget.virtualPath;
-      const targetDistro = activeGuiDistro ?? this.deps.wsl.distroName;
-      const useCustomUbuntu = Boolean(activeGuiDistro && activeGuiDistro.toLowerCase() !== this.deps.wsl.distroName.toLowerCase());
-      child = useCustomUbuntu
-        ? spawn("wsl.exe", ["-d", targetDistro, "--", "env", "DISPLAY=:99", "/bin/sh"], {
-            cwd: fencedTarget.hostPath, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, WSL_UTF8: "1" },
-          })
-        : spawn("wsl.exe", ["-d", targetDistro, "--cd", "/workspace", "-u", "bot", "--", "env", "DISPLAY=:99", "/bin/sh"], {
-            windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, WSL_UTF8: "1" },
-          });
+      const isDedicatedBotVm = linuxDistro.toLowerCase() === this.deps.wsl.distroName.toLowerCase();
+      const userArgs = isDedicatedBotVm ? ["-u", "bot"] : [];
+      child = spawn(
+        "wsl.exe",
+        ["-d", linuxDistro, "--cd", "/", ...userArgs, "--", "env", "DISPLAY=:99", "/bin/sh"],
+        { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, WSL_UTF8: "1" } },
+      );
     } else if (process.platform === "win32") {
       shellKind = "powershell";
       child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"], {
@@ -208,7 +216,11 @@ export class PtySessionManager {
     };
 
     child.stdout.on("data", (buf: Buffer) => handleChunk(buf.toString("utf8")));
-    child.stderr.on("data", (buf: Buffer) => handleChunk(buf.toString("utf8")));
+    child.stderr.on("data", (buf: Buffer) => {
+      const raw = buf.toString("utf8").replace(/\0/g, "");
+      const cleanedStderr = linuxDistro ? raw.replace(/^wsl:\s[^\r\n]*\r?\n?/gim, "") : raw;
+      if (cleanedStderr !== "") handleChunk(cleanedStderr);
+    });
     child.on("close", (code) => {
       entry.alive = false;
       entry.exitCode = code;
@@ -223,7 +235,10 @@ export class PtySessionManager {
       entry.waiters.clear();
     });
 
-    if (shellKind === "powershell") {
+    if (linuxDistro) {
+      const wslMountCwd = winPathToWslMount(fencedTarget.hostPath);
+      child.stdin.write(`cd ${quotePosixPath(wslMountCwd)} 2>/dev/null || cd /workspace 2>/dev/null || true\n`, "utf8");
+    } else if (shellKind === "powershell") {
       const initScript = [
         "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
@@ -264,9 +279,7 @@ export class PtySessionManager {
     if (entry.shellKind === "powershell") {
       const wsDir = resolve(this.deps.getBotWorkspaceDir());
       const roots = computeFencedRoots(wsDir, this.deps.getSharedFolders());
-      const fenceSnippet = entry.engine === "local-win-pip"
-        ? `$__roots = @(${roots.map((r) => psQuote(r.toLowerCase())).join(", ")}); $__cur = (Get-Location).ProviderPath; $__ok = $false; foreach ($__r in $__roots) { if ($__cur.ToLowerInvariant().StartsWith($__r)) { $__ok = $true; break } }; if (-not $__ok) { Set-Location -LiteralPath ${psQuote(wsDir)}; Write-Output '[Sentinel Fence] Directory outside fenced roots refused.' }; `
-        : "";
+      const fenceSnippet = `$__roots = @(${roots.map((r) => psQuote(r.toLowerCase())).join(", ")}); $__cur = (Get-Location).ProviderPath; $__ok = $false; foreach ($__r in $__roots) { if ($__cur.ToLowerInvariant().StartsWith($__r)) { $__ok = $true; break } }; if (-not $__ok) { Set-Location -LiteralPath ${psQuote(wsDir)}; Write-Output '[Sentinel Fence] Directory outside fenced roots refused.' }; `;
       entry.child.stdin.write(`${cmdLine}\n${fenceSnippet}Write-Output "__QJ_DONE_${tok}__:$((Get-Location).ProviderPath)"\n`, "utf8");
     } else {
       entry.child.stdin.write(`${cmdLine}\nprintf '\\n__QJ_DONE_${tok}__:%s\\n' "$(pwd)"\n`, "utf8");

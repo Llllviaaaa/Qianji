@@ -21,6 +21,7 @@ import type {
   BotComputerTakeoverState,
   BotRemoteComputerNode,
 } from "@qianji/protocol";
+import { useBotUiState } from "../botStore";
 import { botDataStore } from "../botUiAtoms";
 import {
   applyComputerEventNotification,
@@ -47,6 +48,7 @@ function syncPtyInfoToStores(pty: BotComputerPtySessionInfo): void {
 
 export function useComputerStudioRuntimeSync(ctx?: Context): void {
   const rpcService = useFrontendService("rpcService", ctx);
+  const botUi = useBotUiState();
   const studioUi = useComputerStudioUi();
   const studioSnap = useComputerStudioSnapshot();
 
@@ -67,8 +69,9 @@ export function useComputerStudioRuntimeSync(ctx?: Context): void {
     return () => offComputer();
   }, [rpcService]);
 
+  const studioVisible = studioUi.studioOpen || botUi.modal === "live-view";
   const shouldStream =
-    studioUi.studioOpen &&
+    studioVisible &&
     studioUi.scrubIndex === null &&
     (studioSnap.activeTab === "desktop" || studioSnap.activeTab === "browser");
 

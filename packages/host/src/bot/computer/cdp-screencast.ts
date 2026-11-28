@@ -9,6 +9,7 @@ import type {
   BotComputerPointerTelemetry,
   BotComputerStreamFrame,
 } from "@qianji/protocol";
+import { WELCOME_HTML_DATA_URL } from "../live-view.ts";
 import { encodeCdpModifiers, resolveCdpKeyDescriptor, type CdpKeyDescriptor } from "./cdp-keymap.ts";
 
 export { encodeCdpModifiers, resolveCdpKeyDescriptor, type CdpKeyDescriptor };
@@ -78,7 +79,10 @@ export class CdpScreencastController {
     const browser = this.deps.getBrowser();
     await browser.ensureStarted(true);
     await this.ensureViewport(browser);
-    const snap = await browser.inspect().catch(() => null);
+    let snap = await browser.inspect().catch(() => null);
+    if (!snap || snap.url === "about:blank" || snap.url === "") {
+      snap = await browser.navigate(WELCOME_HTML_DATA_URL).catch(() => snap);
+    }
     if (snap) {
       this.currentUrl = snap.url.startsWith("data:text/html") ? "about:qianji-live-view" : snap.url;
       this.currentTitle = snap.title;

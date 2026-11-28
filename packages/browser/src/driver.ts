@@ -654,8 +654,8 @@ async function waitForTarget(port: number | null, targetId: string): Promise<Bro
 
 export function normalizeUrl(value: string): string {
   const input = value.trim();
-  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(input) ? input : `https://${input}`;
-  const parsed = new URL(candidate);
+  if (input === "about:blank" || /^data:(?:text\/(?:html|plain)|image\/(?:png|jpeg|gif|webp|svg\+xml))[;,]/i.test(input)) return input;
+  const parsed = new URL(/^[a-z][a-z0-9+.-]*:/i.test(input) ? input : `https://${input}`);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("Only http and https pages are supported");
   return parsed.toString();
 }

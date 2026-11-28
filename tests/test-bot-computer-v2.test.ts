@@ -911,4 +911,56 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
     expect(idleRpc.takeover.status).toBe("idle");
     await store.computer.dispose();
   });
+
+  it("handles cold-start Browser tab welcome page, data:text/html navigation, UTF-16LE WSL output, and Windows backslash file paths", async () => {
+    const { rpc, dataDir, cdpCalls } = await bootBotHost();
+    const wsDir = join(dataDir, "bot-workspace");
+    mkdirSync(join(wsDir, "win-sub", "deep"), { recursive: true });
+    writeFileSync(join(wsDir, "win-sub", "deep", "readme.txt"), "win-sep-ok", "utf8");
+
+    // 1. Cold-start switching directly to Browser tab auto-loads welcome page instead of leaving about:blank
+    await rpc.invoke("bot.computer.select", { tab: "browser" });
+    await rpc.invoke("bot.computer.stream", { active: true, engine: "local-linux", tab: "browser" });
+    expect(cdpCalls.some((c) => c.method === "Page.startScreencast")).toBe(true);
+    const snapAfterColdBrowser = await rpc.invoke<BotComputerStudioSnapshot>("bot.computer.getSnapshot", {});
+    expect(snapAfterColdBrowser.latestFrame?.tab).toBe("browser");
+    expect(snapAfterColdBrowser.latestFrame?.url).toBe("about:qianji-live-view");
+
+    // 2. Navigating to data:text/html and about:qianji-live-view works cleanly
+    const dataNav = await rpc.invoke<{ ok: boolean; frame?: BotComputerStreamFrame }>("bot.computer.navigate", {
+      url: 'data:text/html,<h1>Hello Qianji</h1><input id="q" />',
+    });
+    expect(dataNav.ok).toBe(true);
+    expect(dataNav.frame?.tab).toBe("browser");
+    const welcomeNav = await rpc.invoke<{ ok: boolean }>("bot.computer.navigate", { url: "about:qianji-live-view" });
+    expect(welcomeNav.ok).toBe(true);
+    await rpc.invoke("bot.computer.stream", { active: false, engine: "local-linux", tab: "browser" });
+
+    // 3. Windows backslash & mixed-separator paths work in files.list / files.read while blocking traversal
+    const listBackslash = await rpc.invoke<BotComputerFilesListResult>("bot.computer.files.list", {
+      engine: "local-win-pip",
+      path: "\\workspace\\win-sub\\deep",
+    });
+    expect(listBackslash.cwd).toBe("/workspace/win-sub/deep");
+    expect(listBackslash.entries.map((e) => e.name)).toContain("readme.txt");
+
+    const readRelBackslash = await rpc.invoke<BotComputerFilesReadResult>("bot.computer.files.read", {
+      engine: "local-win-pip",
+      path: "win-sub\\deep\\readme.txt",
+    });
+    expect(readRelBackslash.content).toBe("win-sep-ok");
+
+    const readMixed = await rpc.invoke<BotComputerFilesReadResult>("bot.computer.files.read", {
+      engine: "local-win-pip",
+      path: "/workspace\\win-sub/deep\\readme.txt",
+    });
+    expect(readMixed.content).toBe("win-sep-ok");
+
+    await expect(
+      rpc.invoke("bot.computer.files.read", {
+        engine: "local-win-pip",
+        path: "\\workspace\\..\\..\\outside.txt",
+      }),
+    ).rejects.toThrow(/Sentinel Path Fence/);
+  });
 });

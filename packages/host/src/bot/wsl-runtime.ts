@@ -192,8 +192,9 @@ export class WslContainerRuntime {
 
   private async listDistros(): Promise<Array<{ name: string; state: string; version: string }>> {
     const res = await runWslSubprocess("wsl.exe", ["--list", "--verbose"], { timeoutMs: 8_000 });
-    if (res.exitCode !== 0 && res.stdout.trim() === "") return [];
-    const lines = res.stdout.split(/\r?\n/).slice(1);
+    const cleanStdout = res.stdout.replace(/\0/g, "").replace(/^\ufeff/, "");
+    if (res.exitCode !== 0 && cleanStdout.trim() === "") return [];
+    const lines = cleanStdout.split(/\r?\n/).slice(1);
     const out: Array<{ name: string; state: string; version: string }> = [];
     for (const raw of lines) {
       const cleaned = raw.replace(/^\s*\*?\s*/, "").trim();
