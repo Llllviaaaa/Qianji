@@ -4,25 +4,31 @@
  */
 import { useEffect, useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import { ArrowLeft, ArrowUpRight } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, RefreshCw } from "lucide-react";
 import { useAppStore, useFrontendService } from "@qianji/client";
 import { SlotHost } from "@qianji/client-slots";
 import type {
   BotActionPermissionLevel,
-  BotConnectorPermission,
-  BotConnectorPolicyTier,
+  BotConnectorTestKind,
   BotMcpDiscoveredTool,
-  McpServerConfig,
   McpServerStatus,
 } from "@qianji/protocol";
 import { CONNECTOR_CATALOG, resolveConnectorState, type ConnectorCatalogEntry } from "./botConnectorCatalog";
 import { ConnectorBrandIcon } from "./BotConnectorLogos";
-import { BotConnectorModal, type ConnectorModalKind } from "./BotConnectorModals";
+import { BotConnectorModal } from "./BotConnectorModals";
 import { BotConnectorPermissionSection } from "./BotConnectorPermissionSection";
+import { BotGoogleMcpModal } from "./BotGoogleMcpModal";
 import { BotPluginConfigModal } from "./BotPluginsSettingsPane";
 import { patchBotUi, useBotController, useBotSnapshot, useBotUiState } from "./botStore";
+import { useBotConnectorActions } from "./useBotConnectorActions";
 
-const nowMs = (): number => Date.now();
+function resolveSyncTestKind(id: string): BotConnectorTestKind | null {
+  if (id === "gmail" || id === "outlook" || id === "imap_email") return "email";
+  if (id === "calendar") return "calendar";
+  if (id === "github") return "github";
+  if (id === "notion") return "notion";
+  return null;
+}
 
 export function BotConnectorDetailView({
   connectorId,
@@ -43,21 +49,22 @@ export function BotConnectorDetailView({
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
   const rpcService = useFrontendService("rpcService", ctx);
-  const workspaceService = useFrontendService("workspaceService", ctx);
-  const navigationService = useFrontendService("navigationService", ctx);
   const appSettings = useAppStore((s) => s.settings);
-  const saveAppSettings = useAppStore((s) => s.saveSettings);
 
-  const [oauthBusy, setOauthBusy] = useState(false);
-  const [browserPending, setBrowserPending] = useState(false);
-  const [browserVerifying, setBrowserVerifying] = useState(false);
-  const [pluginConfigOpen, setPluginConfigOpen] = useState(false);
-  const [pluginConfigHint, setPluginConfigHint] = useState<string | undefined>(undefined);
-  const [modalKind, setModalKind] = useState<ConnectorModalKind>(null);
   const [discoveredTools, setDiscoveredTools] = useState<readonly BotMcpDiscoveredTool[]>([]);
 
   const entry = pluginEntry ?? CONNECTOR_CATALOG.find((c) => c.id === connectorId);
   const mcpServerId = entry?.mcpPreset?.serverId;
+  const state = entry
+    ? resolveConnectorState(entry, snapshot, mcpStatus, appSettings?.mcpServers ?? [])
+    : undefined;
+
+  const actions = useBotConnectorActions({
+    entry,
+    state,
+    ctx,
+    onPluginMutated,
+  });
 
   useEffect(() => {
     if (!rpcService || !mcpServerId) return undefined;
@@ -73,20 +80,7 @@ export function BotConnectorDetailView({
     };
   }, [mcpServerId, mcpStatus, rpcService]);
 
-  useEffect(() => {
-    if (!rpcService || !entry || entry.authMode !== "browser") return undefined;
-    return rpcService.onNotification("bot/browserAuth", (raw) => {
-      const payload = raw as { connectorId?: string; status?: string; accountLabel?: string } | undefined;
-      if (payload?.connectorId !== entry.id) return;
-      setBrowserPending(false);
-      setBrowserVerifying(false);
-      if (payload.status === "connected") {
-        navigationService?.showToast(`已成功连接 ${entry.name}${payload.accountLabel ? `（${payload.accountLabel}）` : ""}`, "info");
-      }
-    });
-  }, [entry, navigationService, rpcService]);
-
-  if (!entry) {
+  if (!entry || !state) {
     return (
       <div className="qj-conn-detail-wrap">
         <button type="button" className="qj-conn-back-btn" onClick={onBack}>
@@ -96,203 +90,7 @@ export function BotConnectorDetailView({
     );
   }
 
-  const state = resolveConnectorState(entry, snapshot, mcpStatus, appSettings?.mcpServers ?? []);
-
-  const savePresetMcp = async (headers: Record<string, string>) => {
-    if (!appSettings || !entry.mcpPreset) return;
-    const nextServer: McpServerConfig = {
-      id: entry.mcpPreset.serverId,
-      name: entry.mcpPreset.name,
-      enabled: true,
-      transport: "http",
-      command: "",
-      args: [],
-      cwd: "",
-      env: {},
-      inheritEnvironment: true,
-      url: entry.mcpPreset.url,
-      headers,
-      trustedReadOnly: entry.mcpPreset.trustedReadOnly,
-    };
-    await saveAppSettings({
-      ...appSettings,
-      mcpEnabled: true,
-      mcpServers: [...appSettings.mcpServers.filter((s) => s.id !== entry.mcpPreset?.serverId), nextServer],
-    });
-    await rpcService?.call("mcp.reconnect", { serverId: entry.mcpPreset.serverId }).catch(() => undefined);
-  };
-
-  const connectOneClick = async (forceInteractive = false) => {
-    if (entry.authMode === "mcp-oauth" && entry.mcpPreset) {
-      if (!appSettings || !rpcService) return;
-      setOauthBusy(true);
-      try {
-        const res = await rpcService.call<{ accessToken: string; tokenType: string }>("bot.connector.oauth", {
-          connectorId: entry.id,
-          mcpUrl: entry.mcpPreset.url,
-        });
-        await savePresetMcp({ Authorization: `${res.tokenType || "Bearer"} ${res.accessToken}` });
-        navigationService?.showToast(`已完成官方 OAuth 授权并连接 ${entry.name}`, "info");
-      } catch (err) {
-        navigationService?.showToast(err instanceof Error ? err.message : "OAuth 授权未完成", "warning");
-      } finally {
-        setOauthBusy(false);
-      }
-      return;
-    }
-
-    if (entry.authMode === "mcp-direct" && entry.mcpPreset) {
-      await savePresetMcp({});
-      await ctrl.configureBot({
-        appPolicies: {
-          [entry.id]: {
-            connected: true,
-            authKind: "mcp",
-            accountLabel: entry.mcpPreset.url,
-            connectedAt: nowMs(),
-            policy: entry.mcpPreset.trustedReadOnly ? "read-only-auto" : "low-risk-auto",
-          },
-        },
-      });
-      navigationService?.showToast(`已连接 ${entry.name}`, "info");
-      return;
-    }
-
-    if (entry.authMode === "browser") {
-      if (!rpcService) return;
-      setOauthBusy(true);
-      try {
-        const res = await rpcService.call<{ status: string; accountLabel?: string }>("bot.connector.browserAuthStart", {
-          connectorId: entry.id,
-          forceInteractive,
-        });
-        if (res.status === "connected") {
-          setBrowserPending(false);
-          navigationService?.showToast(`已连接 ${entry.name}${res.accountLabel ? `（${res.accountLabel}）` : ""}`, "info");
-        } else {
-          setBrowserPending(true);
-        }
-      } catch (err) {
-        navigationService?.showToast(err instanceof Error ? err.message : "未能启动安全登录窗口", "warning");
-      } finally {
-        setOauthBusy(false);
-      }
-      return;
-    }
-
-    if (entry.authMode === "plugin" && entry.pluginItem) {
-      if (!rpcService) return;
-      setOauthBusy(true);
-      try {
-        const res = await rpcService.call<{ status: string; accountLabel?: string; message?: string }>(
-          "bot.connector.pluginConnect",
-          {
-            pluginId: entry.pluginItem.pluginId,
-            connectorId: entry.id,
-            forceInteractive,
-          },
-        );
-        onPluginMutated?.();
-        if (res.status === "needs_config") {
-          setPluginConfigHint(res.message || "请完成插件所需参数后继续连接");
-          setPluginConfigOpen(true);
-        } else {
-          navigationService?.showToast(`已连接插件连接器「${entry.name}」`, "info");
-        }
-      } catch (err) {
-        navigationService?.showToast(err instanceof Error ? err.message : "插件连接失败", "warning");
-      } finally {
-        setOauthBusy(false);
-      }
-      return;
-    }
-
-    if (entry.authMode === "folder-picker") {
-      const picked = await workspaceService?.pickFolder().catch(() => null);
-      if (!picked?.trim()) return;
-      await ctrl.configureBot({
-        meetingsIm: { meetingNotesEnabled: true, meetingNotesDir: picked.trim() },
-        appPolicies: { [entry.id]: { connected: true, authKind: "local", accountLabel: picked.trim(), connectedAt: nowMs(), policy: "read-only-auto" } },
-      });
-      await ctrl.testConnector("meeting_notes");
-      return;
-    }
-
-    setModalKind(entry.authMode === "imap-modal" ? "imap" : "webhook");
-  };
-
-  const confirmBrowserAuth = async () => {
-    if (!rpcService) return;
-    setBrowserVerifying(true);
-    try {
-      const res = await rpcService.call<{ status: string; accountLabel?: string; message?: string }>(
-        "bot.connector.browserAuthComplete",
-        { connectorId: entry.id },
-      );
-      if (res.status === "connected") {
-        setBrowserPending(false);
-        navigationService?.showToast(`已连接 ${entry.name}${res.accountLabel ? `（${res.accountLabel}）` : ""}`, "info");
-      } else {
-        navigationService?.showToast(res.message || "尚未检测到登录完成，请在弹出窗口中登录", "warning");
-      }
-    } catch (err) {
-      navigationService?.showToast(err instanceof Error ? err.message : "验证登录状态失败", "warning");
-    } finally {
-      setBrowserVerifying(false);
-    }
-  };
-
-  const cancelBrowserAuth = async () => {
-    setBrowserPending(false);
-    await rpcService?.call("bot.connector.browserAuthCancel", {}).catch(() => undefined);
-  };
-
-  const handleDisconnect = async () => {
-    void rpcService?.call("bot.connector.browserAuthCancel", {}).catch(() => undefined);
-    setBrowserPending(false);
-    if (entry.authMode === "plugin") {
-      await rpcService?.call("bot.connector.pluginDisconnect", { connectorId: entry.id }).catch(() => undefined);
-      onPluginMutated?.();
-      navigationService?.showToast(`已断开「${entry.name}」`, "info");
-      return;
-    }
-    await ctrl.configureBot({
-      appPolicies: { [entry.id]: null },
-      ...(entry.id === "github" ? { github: { enabled: false } } : {}),
-      ...(entry.id === "notion" ? { notion: { enabled: false } } : {}),
-      ...(entry.id === "calendar" ? { calendar: { enabled: false } } : {}),
-      ...(entry.id === "slack" ? { slack: { enabled: false } } : {}),
-      ...(entry.id === "meeting_notes" ? { meetingsIm: { meetingNotesEnabled: false } } : {}),
-      ...(entry.id === "custom_webhook" ? { customWebhook: { enabled: false } } : {}),
-      ...(entry.id === "gmail" || entry.id === "outlook" || entry.id === "imap_email" ? { email: { enabled: false } } : {}),
-    });
-    if (entry.mcpPreset && appSettings) {
-      await saveAppSettings({
-        ...appSettings,
-        mcpServers: appSettings.mcpServers.filter((s) => s.id !== entry.mcpPreset?.serverId),
-      });
-      await rpcService?.call("mcp.reconnect", {}).catch(() => undefined);
-    }
-    navigationService?.showToast(`已断开「${entry.name}」`, "info");
-  };
-
-  const updatePolicyTier = async (tier: BotConnectorPolicyTier) => {
-    const legacyPerm: BotConnectorPermission = tier === "strict-read-only" ? "read-only" : "ask-write";
-    await ctrl.configureBot({
-      appPolicies: { [entry.id]: { policy: tier, connected: true } },
-      ...(entry.id === "github" ? { github: { permission: legacyPerm } } : {}),
-      ...(entry.id === "notion" ? { notion: { permission: legacyPerm } } : {}),
-      ...(entry.id === "slack" ? { slack: { permission: legacyPerm } } : {}),
-      ...(entry.id === "custom_webhook" ? { customWebhook: { permission: legacyPerm } } : {}),
-      ...(entry.id === "gmail" || entry.id === "outlook" || entry.id === "imap_email" ? { email: { permission: legacyPerm } } : {}),
-    });
-  };
-
-  const updateActionPerm = async (capId: string, level: BotActionPermissionLevel) => {
-    await ctrl.configureBot({
-      appPolicies: { [entry.id]: { policy: state.policyTier, actionPermissions: { [capId]: level } } },
-    });
-  };
+  const syncKind = resolveSyncTestKind(entry.id);
 
   const tryInChat = (promptText: string) => {
     const nextApps = ui.composerApps.includes(entry.id) ? ui.composerApps : [...ui.composerApps, entry.id];
@@ -329,11 +127,11 @@ export function BotConnectorDetailView({
             <button
               type="button"
               data-testid="connect-app-btn"
-              disabled={oauthBusy || browserVerifying || ui.serverBusy}
+              disabled={actions.oauthBusy || ui.serverBusy}
               className="qj-primary-pill-btn qj-conn-connect-cta"
-              onClick={() => void connectOneClick()}
+              onClick={() => void actions.connectOneClick()}
             >
-              {oauthBusy || browserVerifying ? "正在授权…" : "连接"}
+              {actions.oauthBusy ? "正在授权…" : "连接"}
             </button>
           ) : (
             <button
@@ -346,22 +144,6 @@ export function BotConnectorDetailView({
             </button>
           )}
         </div>
-        {!state.connected && browserPending && (
-          <div className="qj-conn-liveview-bar" data-testid="browser-auth-waiting-bar">
-            <span>请在弹出的安全浏览器窗口中登录 {entry.name}。完成后关闭窗口，或点击右侧确认。</span>
-            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-              <button type="button" data-testid="confirm-browser-auth-btn" className="qj-primary-pill-btn qj-conn-pill-btn" disabled={browserVerifying} onClick={() => void confirmBrowserAuth()}>
-                {browserVerifying ? "验证中…" : "✓ 我已完成登录"}
-              </button>
-              <button type="button" className="qj-soft-btn qj-conn-pill-btn" disabled={oauthBusy || browserVerifying} onClick={() => void connectOneClick(true)}>
-                重新打开
-              </button>
-              <button type="button" className="qj-soft-btn qj-conn-pill-btn" disabled={browserVerifying} onClick={() => void cancelBrowserAuth()}>
-                取消
-              </button>
-            </div>
-          </div>
-        )}
         {state.lastError && <div className="qj-connector-card-err">{state.lastError}</div>}
       </div>
 
@@ -376,7 +158,7 @@ export function BotConnectorDetailView({
               </div>
               <div>
                 <div className="qj-conn-about-item-t">本地隐私与审批守护</div>
-                <div className="qj-conn-about-item-d">凭据加密存放于本地保险箱；任何写入与外发动作默认须经你批准。</div>
+                <div className="qj-conn-about-item-d">OAuth 令牌与凭据加密存放于系统 Keychain；写入与外发动作默认须经你批准。</div>
               </div>
             </div>
           </div>
@@ -403,35 +185,48 @@ export function BotConnectorDetailView({
             <div className="qj-conn-account-row">
               <div>
                 <div style={{ fontSize: 13.5, fontWeight: 560 }}>{state.accountLabel || `${entry.name}（已授权）`}</div>
-                <div className="qj-conn-hint">授权方式：{state.authMethodUsed}</div>
+                <div className="qj-conn-hint">
+                  授权方式：{state.authMethodUsed}
+                  {state.lastSyncAt
+                    ? ` · 最近同步 ${new Date(state.lastSyncAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}`
+                    : ""}
+                </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" className="qj-soft-btn qj-conn-pill-btn" onClick={() => void connectOneClick(true)}>
+                {syncKind && (
+                  <button
+                    type="button"
+                    data-testid="sync-connector-now-btn"
+                    disabled={ui.serverBusy}
+                    className="qj-soft-btn qj-conn-pill-btn"
+                    onClick={() => void ctrl.testConnector(syncKind)}
+                  >
+                    <RefreshCw size={12} />
+                    <span>立即同步</span>
+                  </button>
+                )}
+                <button type="button" className="qj-soft-btn qj-conn-pill-btn" onClick={() => void actions.connectOneClick(true)}>
                   重新授权
                 </button>
-                {entry.authMode === "plugin" && entry.pluginItem && (
+                {entry.pluginItem && (
                   <button
                     type="button"
                     className="qj-soft-btn qj-conn-pill-btn"
                     onClick={() => {
-                      setPluginConfigHint(undefined);
-                      setPluginConfigOpen(true);
+                      actions.setPluginConfigHint(undefined);
+                      actions.setPluginConfigOpen(true);
                     }}
                   >
                     插件参数配置
                   </button>
                 )}
-                {(entry.id === "gmail" || entry.id === "outlook" || entry.id === "github" || entry.id === "calendar") && (
+                {(entry.id === "calendar" || entry.id === "github") && (
                   <button
                     type="button"
                     className="qj-soft-btn qj-conn-pill-btn"
-                    onClick={() =>
-                      setModalKind(
-                        entry.id === "github" ? "github-sync" : entry.id === "calendar" ? "calendar-sync" : "imap",
-                      )
-                    }
+                    onClick={() => actions.setModalKind(entry.id === "github" ? "github-sync" : "calendar-sync")}
                   >
-                    后台同步配置
+                    {entry.id === "calendar" ? "ICS 订阅源" : "PAT 同步配置"}
                   </button>
                 )}
               </div>
@@ -444,8 +239,8 @@ export function BotConnectorDetailView({
             policyTier={state.policyTier}
             appPolicy={state.appPolicy}
             actionRows={actionRows}
-            onSelectTier={(tier) => void updatePolicyTier(tier)}
-            onUpdateActionPerm={(capId, level) => void updateActionPerm(capId, level)}
+            onSelectTier={(tier) => void actions.updatePolicyTier(tier)}
+            onUpdateActionPerm={(capId, level) => void actions.updateActionPerm(capId, level)}
             onResetDefaults={() => void ctrl.configureBot({ appPolicies: { [entry.id]: { policy: state.policyTier, actionPermissions: {} } } })}
             onToggleBackgroundSync={(enabled) => void ctrl.configureBot({ appPolicies: { [entry.id]: { policy: state.policyTier, backgroundSync: enabled } } })}
           />
@@ -459,7 +254,7 @@ export function BotConnectorDetailView({
               <div><span>授权方式</span><span>{state.authMethodUsed}</span></div>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 4 }}>
-              <button type="button" className="qj-soft-btn qj-conn-danger-pill" onClick={() => void handleDisconnect()}>断开连接</button>
+              <button type="button" className="qj-soft-btn qj-conn-danger-pill" onClick={() => void actions.handleDisconnect()}>断开连接</button>
             </div>
           </div>
         </>
@@ -476,21 +271,33 @@ export function BotConnectorDetailView({
         props={{ connectorId: entry.id, pluginId: entry.pluginItem?.pluginId, connected: state.connected }}
       />
 
-      <BotConnectorModal kind={modalKind} defaultEmailPreset={entry.id === "outlook" ? "outlook" : entry.id === "gmail" ? "gmail" : "qq"} ctx={ctx} onClose={() => setModalKind(null)} />
+      <BotConnectorModal kind={actions.modalKind} defaultEmailPreset={entry.id === "outlook" ? "outlook" : "qq"} ctx={ctx} onClose={() => actions.setModalKind(null)} />
 
-      {pluginConfigOpen && entry.pluginItem && (
+      {(entry.id === "gmail" || entry.id === "calendar" || entry.id === "google_drive") && entry.mcpPreset && (
+        <BotGoogleMcpModal
+          open={actions.googleModalOpen}
+          connectorId={entry.id}
+          connectorName={entry.name}
+          defaultMcpUrl={entry.mcpPreset.url}
+          trustedReadOnly={entry.mcpPreset.trustedReadOnly}
+          ctx={ctx}
+          onClose={() => actions.setGoogleModalOpen(false)}
+        />
+      )}
+
+      {actions.pluginConfigOpen && entry.pluginItem && (
         <BotPluginConfigModal
           pluginId={entry.pluginItem.pluginId}
           pluginName={entry.pluginItem.pluginName}
           configSchema={entry.pluginItem.configSchema}
           initialConfig={entry.pluginItem.config}
           ctx={ctx}
-          hintMessage={pluginConfigHint}
+          hintMessage={actions.pluginConfigHint}
           onSaved={async () => {
             onPluginMutated?.();
-            if (!state.connected) await connectOneClick();
+            if (!state.connected) await actions.connectOneClick();
           }}
-          onClose={() => setPluginConfigOpen(false)}
+          onClose={() => actions.setPluginConfigOpen(false)}
         />
       )}
     </div>

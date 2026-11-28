@@ -57,6 +57,11 @@ export function toolRowCopy(presented: ToolPresentation, call: UiToolCall): { ti
   switch (presented.kind) {
     case "read":
       return { title: "读取", summary: path ? (detail ? `${path} · ${detail}` : path) : detail ?? "" };
+    case "skill":
+      return {
+        title: presented.title ?? "加载技能",
+        summary: presented.detail ?? path ?? "",
+      };
     case "write":
       return { title: "写入", summary: path ?? "" };
     case "edit":
@@ -96,6 +101,12 @@ export function toolRowCopy(presented: ToolPresentation, call: UiToolCall): { ti
     case "mcp":
       return { title: "MCP", summary: detail ? `${headingLabel(presented.heading).replace(/^MCP\s*·?\s*/, "")} · ${detail}` : headingLabel(presented.heading).replace(/^MCP\s*·?\s*/, "") };
     default:
+      if (presented.title !== undefined) {
+        return {
+          title: presented.title,
+          summary: presented.detail ? clipLine(presented.detail) : (path ?? ""),
+        };
+      }
       return { title: "工具调用", summary: path ? `${call.name} · ${path}` : call.name };
   }
 }
@@ -285,7 +296,7 @@ function ToolBody({ presented, call, state }: { presented: ToolPresentation; cal
     return <TerminalCard presented={presented} state={state} output={shellOutputText(presented, call, shellOutputMode)} />;
   }
   if (presented.diff && presented.diff.length > 0) return <DiffCard lines={presented.diff} path={presented.path} />;
-  if (presented.kind === "read") {
+  if (presented.kind === "read" || presented.kind === "skill") {
     return <ReadCard text={(presented.preview ?? "").replace(/\s+$/, "") || "(空)"} path={presented.path} />;
   }
   if (presented.hits && presented.hits.length > 0) {
@@ -376,8 +387,8 @@ export function ToolCall({
   const { title, summary } = toolRowCopy(presented, call);
   const expandable = presented.expandable;
   const open = expanded && expandable;
-  // Reads, writes and edits name one file: the summary opens it, Ctrl+click opens it in the editor.
-  const filePath = presented.path && (presented.kind === "read" || presented.kind === "write" || presented.kind === "edit") && state !== "error"
+  // Reads, skills, writes and edits name one file: the summary opens it, Ctrl+click opens it in the editor.
+  const filePath = presented.path && (presented.kind === "read" || presented.kind === "skill" || presented.kind === "write" || presented.kind === "edit") && state !== "error"
     ? presented.path
     : null;
   const added = presented.added ?? 0;

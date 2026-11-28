@@ -4,6 +4,7 @@ import { insertNewlineAtSelection, resolveChatEnterAction } from "../lib/compose
 import { rewindController } from "../lib/rewindController";
 import { SlotEntryHost } from "./common/ErrorBoundary";
 import { ComposerBottomToolbar } from "./composer/ComposerBottomToolbar";
+import { ComposerDirectiveBar } from "./composer/ComposerDirectiveBar";
 import {
   ComposerAttachmentStrip,
   ComposerBreadcrumbTrail,
@@ -213,6 +214,18 @@ export const Composer = memo(function Composer({
         />
 
         <ComposerAttachmentStrip attachments={attachments} onRemoveAttachment={onRemoveAttachment} />
+
+        <ComposerDirectiveBar
+          text={text}
+          commands={commands}
+          suppress={suggest.commandMenuOpen}
+          onClear={(remaining) => {
+            textRef.current = remaining;
+            setText(remaining);
+            setCaret(remaining.length);
+            window.requestAnimationFrame(() => textareaRef.current?.focus());
+          }}
+        />
 
         <div className="dsh-claude-input-box" data-input-scroll="" onClick={() => textareaRef.current?.focus()}>
           <textarea

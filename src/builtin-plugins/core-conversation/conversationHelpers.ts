@@ -310,7 +310,19 @@ export function groupMessagesIntoTurns(messages: readonly UiMessage[]): readonly
 }
 
 export function singleLineExcerpt(text: string, maxLen = 46): string {
-  const clean = text.replace(/\s+/g, " ").trim();
+  let clean = text
+    .replace(/(?:^|\r?\n\r?\n)附加的本地文件：\r?\n[\s\S]*$/, "")
+    .replace(/^(?:>[ \t]?.*(?:\r?\n|$))+\r?\n/, "")
+    .replace(/^\[已关联连接器上下文:\s*[^\]]+\]\r?\n?/, "")
+    .trim();
+  const slash = /^\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?:\s+([\s\S]*))?$/.exec(clean);
+  if (slash?.[1] !== undefined) {
+    const cmd = slash[1];
+    const args = (slash[2] ?? "").trim();
+    const label = cmd.toLowerCase().startsWith("skill:") && cmd.length > 6 ? `✦ ${cmd.slice(6)}` : `/${cmd}`;
+    clean = args !== "" ? `${label} ${args}` : label;
+  }
+  clean = clean.replace(/\s+/g, " ").trim();
   if (clean === "") return "（图片或附件）";
   return clean.length > maxLen ? `${clean.slice(0, maxLen - 1)}…` : clean;
 }

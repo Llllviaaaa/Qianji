@@ -19,6 +19,7 @@ import {
   Settings2,
   ShieldAlert,
   Smile,
+  Sparkles,
 } from "lucide-react";
 import type { SessionServiceSnapshot } from "@qianji/client";
 import { Markdown } from "@qianji/client-primitives";
@@ -291,6 +292,7 @@ export function BotAssistantBubbleRow(props: {
   readonly msgId: string;
   readonly cleanContent: string;
   readonly replyModel?: string;
+  readonly usedSkills?: readonly string[];
   readonly isStreaming: boolean;
   readonly reacted: boolean;
   readonly moreOpen: boolean;
@@ -304,7 +306,7 @@ export function BotAssistantBubbleRow(props: {
   readonly onSelectQuickOption: (option: string) => void;
 }): ReactElement {
   const {
-    cleanContent, replyModel, isStreaming, reacted, moreOpen,
+    cleanContent, replyModel, usedSkills, isStreaming, reacted, moreOpen,
     onToggleReaction, onQuote, onToggleMore, onCloseMore,
     onCopy, onBranchSideChat, onOpenInWorkbench, onSelectQuickOption,
   } = props;
@@ -333,7 +335,18 @@ export function BotAssistantBubbleRow(props: {
         )}
       </div>
 
-      <div className="qj-msg-actions">
+      <div className={`qj-msg-actions${usedSkills && usedSkills.length > 0 ? " has-skill-tag" : ""}`}>
+        {usedSkills?.map((skill) => (
+          <span
+            key={skill}
+            className="qj-bot-msg-skill-tag"
+            data-testid="bot-msg-skill-tag"
+            title={`本轮回复已启用技能：${skill}`}
+          >
+            <Sparkles size={11} strokeWidth={2} aria-hidden="true" />
+            <span>{skill}</span>
+          </span>
+        ))}
         {replyModel && (
           <span className="qj-bot-msg-model-tag" data-testid="bot-msg-model-tag" title={`本条回复生成模型：${replyModel}`}>
             {replyModel}

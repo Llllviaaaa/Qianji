@@ -5,7 +5,6 @@
 import { agent } from "../../lib/agent";
 import { describeError } from "../../lib/errors";
 import {
-  buildPromptPayload,
   HARNESS_SESSION_PREFIX,
   harnessRuntimes,
   isHarnessSessionFile,
@@ -30,6 +29,7 @@ import {
   buildActiveHandleSnapshot,
   createActivePoolEntry,
   createBoundSessionHandle,
+  dispatchIsolatedSessionPrompt,
   type RetainSessionOptions,
   type SessionHandle,
   type SessionHandleSnapshot,
@@ -322,8 +322,7 @@ export function createIsolatedPoolEntry(
     subscribe: (listener) => emitter.add(listener),
 
     async sendMessage(text, attachments = [], behavior) {
-      const payload = buildPromptPayload(text, attachments);
-      if (!payload.message && payload.images.length === 0) return false;
+      if (!text.trim() && attachments.length === 0) return false;
       const runtimeId = await ensureRuntime();
       if (!runtimeId) return false;
       if (snapshot.model === null) {
@@ -339,36 +338,18 @@ export function createIsolatedPoolEntry(
           patch({ model: confirmed, availableModels: latestModels });
         }
       }
-      const wasStreaming = snapshot.isStreaming;
-      if (!wasStreaming) {
-        activeTurnStartedAt = Date.now();
-        patch({
-          isStreaming: true,
-          messages: [
-            ...snapshot.messages,
-            {
-              id: `iso-user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              role: "user",
-              content: payload.message,
-              images: payload.images.length > 0
-                ? payload.images.map(({ data, mimeType }) => ({ type: "image", data, mimeType }))
-                : undefined,
-              timestamp: Date.now(),
-            },
-          ],
-        });
-      }
-      try {
-        if (wasStreaming) {
-          await harnessRuntimes.queue(runtimeId, behavior === "followUp" ? "followUp" : "steer", payload);
-        } else {
-          await harnessRuntimes.prompt(runtimeId, payload);
-        }
-        return true;
-      } catch (error) {
-        patch({ isStreaming: wasStreaming, error: describeError(error) });
-        return false;
-      }
+      return dispatchIsolatedSessionPrompt({
+        text,
+        attachments,
+        behavior,
+        runtimeId,
+        snapshot,
+        patch,
+        compact: () => this.compact(),
+        onTurnStart: (ts) => {
+          activeTurnStartedAt = ts;
+        },
+      });
     },
 
     async abort() {

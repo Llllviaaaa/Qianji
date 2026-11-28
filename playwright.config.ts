@@ -23,6 +23,14 @@ export default defineConfig({
   use: {
     baseURL: E2E_ORIGIN,
     channel: process.env.QIANJI_E2E_CHANNEL ?? process.env.PID_E2E_CHANNEL ?? "msedge",
+    launchOptions: {
+      args: [
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+      ],
+    },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     viewport: { width: 1280, height: 800 },

@@ -13,6 +13,7 @@ import {
   BotLiveThinkingRow,
   stripBotThinking,
 } from "./BotChatThreadWidgets";
+import { BotUserBubbleRow, type BotAttachedImage } from "./BotUserBubble";
 import { formatBotDividerTimestamp } from "./useBotChatScroll";
 
 export interface BotChatVisibleMessage {
@@ -20,6 +21,8 @@ export interface BotChatVisibleMessage {
   readonly role: string;
   readonly content: string;
   readonly model?: string;
+  readonly images?: readonly BotAttachedImage[];
+  readonly usedSkills?: readonly string[];
 }
 
 export function BotChatMessageStream(props: {
@@ -30,6 +33,7 @@ export function BotChatMessageStream(props: {
   readonly isStreaming: boolean;
   readonly showTrailingThinking: boolean;
   readonly visibleMessages: readonly BotChatVisibleMessage[];
+  readonly knownSkills?: ReadonlySet<string>;
   readonly embeddedTasks: readonly BotTaskHandoffPayload[];
   readonly runtimeError: string | null;
   readonly reactedIds: Readonly<Record<string, boolean>>;
@@ -53,6 +57,7 @@ export function BotChatMessageStream(props: {
     isStreaming,
     showTrailingThinking,
     visibleMessages,
+    knownSkills,
     embeddedTasks,
     runtimeError,
     reactedIds,
@@ -90,9 +95,14 @@ export function BotChatMessageStream(props: {
           {visibleMessages.map((msg) => {
             if (msg.role === "user") {
               return (
-                <div key={msg.id} className="qj-sanctuary-msg-user-row">
-                  <div className="qj-sanctuary-bubble-user">{msg.content}</div>
-                </div>
+                <BotUserBubbleRow
+                  key={msg.id}
+                  content={msg.content}
+                  images={msg.images}
+                  knownSkills={knownSkills}
+                  onCopy={onCopy}
+                  onQuote={onQuote}
+                />
               );
             }
             const cleanContent = stripBotThinking(msg.content);
@@ -110,6 +120,7 @@ export function BotChatMessageStream(props: {
                 msgId={msg.id}
                 cleanContent={cleanContent}
                 replyModel={replyModel}
+                usedSkills={msg.usedSkills}
                 isStreaming={isStreaming}
                 reacted={reacted}
                 moreOpen={moreMsgId === msg.id}

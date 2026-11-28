@@ -40,6 +40,9 @@ export function BotChannelsSettingsPane({ ctx }: { readonly ctx?: Context }): Re
   const feishuConnected = im.feishuEnabled && Boolean(im.hasFeishuWebhook);
   const tgConnected = im.telegramEnabled && Boolean(im.hasTelegramToken);
   const mailCfg = snapshot.connectorConfigs.email;
+  const gmailPol = snapshot.connectorConfigs.appPolicies?.gmail;
+  const gmailConnected = Boolean(gmailPol?.connected);
+  const anyMailConnected = mailCfg.enabled || gmailConnected;
 
   return (
     <div className="qj-bset-stack">
@@ -210,20 +213,27 @@ export function BotChannelsSettingsPane({ ctx }: { readonly ctx?: Context }): Re
           <button
             type="button"
             className="qj-conn-row"
-            onClick={() => openBotConnector(mailCfg.enabled ? "imap_email" : "gmail", "channels")}
+            onClick={() =>
+              openBotConnector(
+                gmailConnected ? "gmail" : mailCfg.enabled ? (mailCfg.preset === "outlook" ? "outlook" : "imap_email") : "gmail",
+                "channels",
+              )
+            }
           >
             <ConnectorBrandIcon id="gmail" size={36} />
             <div className="qj-conn-row-copy">
-              <div className="qj-conn-row-name">外部电子邮箱 (Gmail / Outlook / IMAP)</div>
+              <div className="qj-conn-row-name">外部电子邮箱 (Gmail MCP / Outlook / IMAP)</div>
               <div className="qj-conn-row-sub">
-                {mailCfg.enabled && mailCfg.emailAddress
-                  ? `已接入邮箱：${mailCfg.emailAddress}`
-                  : "连接个人或工作邮箱以开启重要来信巡检与草拟回复"}
+                {gmailConnected
+                  ? `已连接 Gmail MCP：${gmailPol?.accountLabel || "自动同步已开启"}`
+                  : mailCfg.enabled && mailCfg.emailAddress
+                    ? `已接入邮箱：${mailCfg.emailAddress}`
+                    : "通过标准 Gmail MCP 或 ImapFlow 接入邮箱，开启来信同步与草拟回复"}
               </div>
             </div>
             <div className="qj-conn-row-right">
-              <span className={`qj-conn-action-chip${mailCfg.enabled ? " connected" : ""}`}>
-                {mailCfg.enabled ? "已连接" : "去配置"}
+              <span className={`qj-conn-action-chip${anyMailConnected ? " connected" : ""}`}>
+                {anyMailConnected ? "已连接" : "去配置"}
               </span>
               <ChevronRight size={14} className="qj-conn-row-chevron" />
             </div>

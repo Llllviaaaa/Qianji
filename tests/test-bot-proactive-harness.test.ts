@@ -60,7 +60,7 @@ class SpyRpc extends Service implements RpcService {
 async function startMockImapServer(getEmails: () => Array<{ uid: string; from: string; subject: string; body: string }>) {
   const srv = createNetServer((sock: Socket) => {
     sock.on("error", () => undefined);
-    sock.write("* OK Mock IMAP ready\r\n");
+    sock.write("* OK [CAPABILITY IMAP4rev1] Mock IMAP ready\r\n");
     let buf = "";
     sock.on("data", (chunk) => {
       buf += chunk.toString("utf8");
@@ -73,25 +73,60 @@ async function startMockImapServer(getEmails: () => Array<{ uid: string; from: s
         const tag = spaceIdx > 0 ? line.slice(0, spaceIdx) : "A0";
         const rest = spaceIdx > 0 ? line.slice(spaceIdx + 1) : line;
         const list = getEmails();
-        if (/^LOGIN\b/i.test(rest) || /^SELECT\b/i.test(rest)) {
-          sock.write(`${tag} OK done\r\n`);
+        if (/^CAPABILITY\b/i.test(rest)) {
+          sock.write(`* CAPABILITY IMAP4rev1\r\n${tag} OK CAPABILITY completed\r\n`);
+        } else if (/^LOGIN\b/i.test(rest)) {
+          sock.write(`${tag} OK LOGIN completed\r\n`);
+        } else if (/^(?:SELECT|EXAMINE)\b/i.test(rest)) {
+          sock.write(
+            `* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n* ${list.length} EXISTS\r\n* 0 RECENT\r\n* OK [UIDVALIDITY 1] UIDs valid\r\n${tag} OK [READ-WRITE] SELECT completed\r\n`,
+          );
         } else if (/^UID SEARCH/i.test(rest)) {
           sock.write(`* SEARCH ${list.map((e) => e.uid).join(" ")}\r\n${tag} OK SEARCH completed\r\n`);
-        } else if (/^UID FETCH\s+(\d+)/i.test(rest)) {
-          const uid = /^UID FETCH\s+(\d+)/i.exec(rest)?.[1];
-          const found = list.find((e) => e.uid === uid) ?? list[0];
-          if (!found) {
-            sock.write(`${tag} OK empty\r\n`);
-          } else {
-            const b64Subj = `=?UTF-8?B?${Buffer.from(found.subject, "utf8").toString("base64")}?=`;
-            const hdr = `From: ${found.from}\r\nReply-To: ${found.from}\r\nSubject: ${b64Subj}\r\nDate: ${new Date().toUTCString()}\r\n`;
-            sock.write(`* 1 FETCH (UID ${found.uid} BODY[HEADER.FIELDS (FROM REPLY-TO SUBJECT DATE)] {${Buffer.byteLength(hdr, "utf8")}}\r\n${hdr} BODY[TEXT]<0> {${Buffer.byteLength(found.body, "utf8")}}\r\n${found.body})\r\n${tag} OK FETCH completed\r\n`);
+        } else if (/^UID FETCH\s+([^\s]+)/i.test(rest)) {
+          const seqSpec = /^UID FETCH\s+([^\s]+)/i.exec(rest)?.[1] ?? "";
+          const wanted = new Set<string>();
+          for (const part of seqSpec.split(",")) {
+            if (part.includes(":")) {
+              const [loRaw, hiRaw] = part.split(":");
+              const lo = Number(loRaw);
+              const hi = hiRaw === "*" ? Infinity : Number(hiRaw);
+              for (const item of list) {
+                const n = Number(item.uid);
+                if (n >= lo && n <= hi) wanted.add(item.uid);
+              }
+            } else if (part) {
+              wanted.add(part);
+            }
           }
-        } else if (/^LOGOUT/i.test(rest)) {
+          const matched = list.filter((e) => wanted.has(e.uid));
+          for (let i = 0; i < matched.length; i += 1) {
+            const found = matched[i];
+            if (!found) continue;
+            const b64Subj = `=?UTF-8?B?${Buffer.from(found.subject, "utf8").toString("base64")}?=`;
+            const rawMime = [
+              `From: ${found.from}`,
+              `Reply-To: ${found.from}`,
+              `Subject: ${b64Subj}`,
+              `Date: ${new Date().toUTCString()}`,
+              "MIME-Version: 1.0",
+              "Content-Type: text/plain; charset=UTF-8",
+              "",
+              found.body,
+              "",
+            ].join("\r\n");
+            const byteLen = Buffer.byteLength(rawMime, "utf8");
+            const bodyAttr = /BODY\.PEEK\[\]<0\.\d+>/i.test(rest) ? "BODY[]<0>" : "BODY[]";
+            sock.write(`* ${i + 1} FETCH (UID ${found.uid} ${bodyAttr} {${byteLen}}\r\n${rawMime})\r\n`);
+          }
+          sock.write(`${tag} OK FETCH completed\r\n`);
+        } else if (/^CLOSE\b/i.test(rest)) {
+          sock.write(`${tag} OK CLOSE completed\r\n`);
+        } else if (/^LOGOUT\b/i.test(rest)) {
           sock.write(`* BYE\r\n${tag} OK LOGOUT\r\n`);
           sock.end();
         } else {
-          sock.write(`${tag} OK\r\n`);
+          sock.write(`${tag} OK Completed\r\n`);
         }
       }
     });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowUp, ChevronDown, ChevronUp, LoaderCircle, Pencil, RotateCcw } from "lucide-react";
 import { useSyncOnChange } from "../../hooks/useSyncOnChange";
@@ -7,8 +7,10 @@ import {
   insertNewlineAtSelection,
   resolveChatEnterAction,
 } from "../../lib/composerKeys";
+import { useAppStore } from "../../store";
 import type { UiMessage } from "../../types";
 import { PluginSlot } from "../common/PluginSlot";
+import { WorkspaceFileOpenContext } from "../Markdown";
 import { MessageIconActions } from "./MessageActionToolbar";
 import {
   isUserMessageOverLineLimit,
@@ -18,29 +20,12 @@ import {
   USER_MESSAGE_COLLAPSED_LINES,
   USER_MESSAGE_ENTRY_WINDOW_MS,
 } from "./messageHelpers";
-
-const LEADING_SLASH_CMD_RE = /^\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?:\s+([\s\S]*))?$/;
-
-function renderUserMessageBody(content: string) {
-  const match = LEADING_SLASH_CMD_RE.exec(content.trim());
-  if (match?.[1] === undefined) return content;
-  const cmdName = match[1];
-  const cmdArgs = (match[2] ?? "").trim();
-  if (cmdName === "goal" && cmdArgs !== "") {
-    return (
-      <>
-        <span className="qj-cmd-pill is-goal">🎯 /goal</span>{" "}
-        <span className="qj-cmd-objective">{cmdArgs}</span>
-      </>
-    );
-  }
-  return (
-    <>
-      <span className="qj-cmd-pill">/{cmdName}</span>
-      {cmdArgs !== "" ? <>{" "}<span className="qj-cmd-args">{cmdArgs}</span></> : null}
-    </>
-  );
-}
+import {
+  AttachedFileChips,
+  buildKnownSkillSet,
+  parseStructuredUserMessage,
+  renderStructuredUserBubbleBody,
+} from "./userBubbleContent";
 
 export interface UserMessageRowProps {
   message: UiMessage;
@@ -71,6 +56,21 @@ export function UserMessageRow({
   onCancelEdit,
   onSubmitEdit,
 }: UserMessageRowProps) {
+  const openInApp = useContext(WorkspaceFileOpenContext);
+  const commands = useAppStore((store) => store.commands);
+  const knownSkills = useMemo(() => buildKnownSkillSet(commands), [commands]);
+  const structured = useMemo(
+    () => parseStructuredUserMessage(message.content, knownSkills),
+    [knownSkills, message.content],
+  );
+  const hasBubbleContent =
+    structured.quotedText !== null ||
+    structured.connectors.length > 0 ||
+    structured.directive !== null ||
+    structured.bodyText.trim() !== "";
+  const hasAttachments =
+    Boolean(message.images && message.images.length > 0) || structured.attachedFiles.length > 0;
+
   const [editDraft, setEditDraft] = useState(message.content);
   const [submittingEdit, setSubmittingEdit] = useState(false);
   const [rewinding, setRewinding] = useState(false);
@@ -280,14 +280,15 @@ export function UserMessageRow({
         transition={USER_BUBBLE_SPRING}
         style={{ originX: 1, originY: 1 }}
       >
-        {message.images && message.images.length > 0 && (
+        {hasAttachments && (
           <div className="dshc-attachment-row" data-message-attachments="">
-            {message.images.map((image, index) => (
+            {message.images?.map((image, index) => (
               <img key={index} src={`data:${image.mimeType};base64,${image.data}`} alt={`附件 ${index + 1}`} />
             ))}
+            <AttachedFileChips files={structured.attachedFiles} onOpenFile={openInApp} />
           </div>
         )}
-        {message.content && (
+        {hasBubbleContent && (
           <div className={`dshc-bubble${userMessageCollapsible ? userMessageExpanded ? " is-collapsible is-expanded" : " is-collapsible is-collapsed" : ""}`}>
             <div
               ref={userMessageTextRef}
@@ -296,7 +297,7 @@ export function UserMessageRow({
               aria-hidden={userMessageCollapsed || undefined}
               inert={userMessageCollapsed || undefined}
             >
-              {renderUserMessageBody(message.content)}
+              {renderStructuredUserBubbleBody(structured, openInApp)}
             </div>
             {userMessageCollapsed && (
               <span id={summaryId} className="dshc-visually-hidden">

@@ -5,11 +5,13 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Context } from "@deepseek-ai/cordis";
 import * as browser from "@qianji/browser";
 import * as computer from "@qianji/computer";
 import * as hooks from "@qianji/hooks";
 import * as intelligentUi from "@qianji/intelligent-ui";
-import { Mcp, type McpServerConfig } from "@qianji/mcp";
+import type { Credentials } from "@qianji/llm";
+import { Mcp, type Config as McpPluginConfig, type McpServerConfig } from "@qianji/mcp";
 import * as memory from "@qianji/memory";
 import { Permissions } from "@qianji/permissions";
 import * as plan from "@qianji/plan";
@@ -24,9 +26,19 @@ import * as botPlugin from "./bot/index.ts";
 import { resolveDesktopBundledSkillRoots, resolveDesktopPluginTypesDir } from "./control.ts";
 import type { HarnessConfig } from "./harness-config.ts";
 import { bashSandboxPlugin } from "./host-plugins.ts";
+import { McpOAuthTokenStore } from "./mcp-oauth-store.ts";
 import * as pluginDevTools from "./plugin-dev-tools.ts";
 import * as providers from "./providers.ts";
 import { readSecretFile, type McpServerSecrets } from "./secrets.ts";
+
+const mcpHostPlugin = {
+  name: "qianji-mcp-host",
+  inject: ["sessions", "tools", "ui"],
+  apply(ctx: Context, cfg: McpPluginConfig) {
+    const authProvider = new McpOAuthTokenStore(() => ctx.get("credentials") as Credentials | undefined);
+    ctx.plugin(Mcp, { ...cfg, authProvider });
+  },
+};
 
 /** MCP servers with their env and headers from the desktop's encrypted secrets, in memory only. */
 export function withMcpSecrets(servers: readonly McpServerConfig[], secrets: Record<string, McpServerSecrets>): McpServerConfig[] {
@@ -239,7 +251,7 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
       enabled: config.mcp.enabled !== false,
       hasHost: true,
       hasClient: false,
-      plugin: Mcp,
+      plugin: mcpHostPlugin,
       inject: ["sessions", "tools", "ui"],
       provides: ["mcp"],
       config: { ...mcpConfig, servers: withMcpSecrets(mcpConfig.servers ?? [], mcpSecrets) },

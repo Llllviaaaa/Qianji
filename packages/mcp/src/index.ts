@@ -4,11 +4,6 @@
  * tool as `mcp__<server>__<tool>`, plus `mcp_list_resources`,
  * `mcp_read_resource`, `mcp_(un)subscribe_resource`, `mcp_list_prompts` and
  * `mcp_get_prompt` when a connected server supports them.
- *
- * `notifications/tools/list_changed` refreshes that server's tools live
- * without restarting the Host; unexpected STDIO server exits trigger bounded
- * exponential-backoff reconnection, and `reconnect()` lets the UI or slash
- * commands reconnect on demand.
  */
 import { Context, Service } from "@deepseek-ai/cordis";
 import "@qianji/commands";
@@ -31,10 +26,14 @@ import {
   promptResultMarkdown,
   resourceContent,
   type ConnectedServer,
+  type McpHttpAuthProvider,
   type McpPrompt,
   type McpResource,
+  type McpTool,
+  type McpToolResult,
   type ServerStatus,
 } from "./client.ts";
+import { registerMcpSlashCommands } from "./slash-commands.ts";
 import { registerAllMcpTools, resolveMcpServer, type McpServerConfig } from "./tool-defs.ts";
 
 export {
@@ -55,6 +54,7 @@ export {
   type McpCapabilities,
   type McpClient,
   type McpConnectResult,
+  type McpHttpAuthProvider,
   type McpNotificationHandler,
   type McpPrompt,
   type McpPromptResult,
@@ -84,6 +84,8 @@ export interface Config {
   reconnectDelaysMs?: readonly number[];
   /** Default tool deferral policy when a server does not specify `deferTools`. */
   deferTools?: boolean;
+  /** Optional dynamic HTTP OAuth 2.1 Bearer header & 401 refresh provider. */
+  authProvider?: McpHttpAuthProvider;
 }
 
 export interface ListedMcpResource extends McpResource {
@@ -116,10 +118,12 @@ export class Mcp extends Service {
   private readonly disposers: Array<() => void> = [];
   private readonly reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly refreshLocks = new Map<string, Promise<void>>();
+  private authProvider: McpHttpAuthProvider | undefined;
   private closed = false;
 
   constructor(ctx: Context, private readonly config: Config = {}) {
     super(ctx, "mcp");
+    this.authProvider = config.authProvider;
     this.enabledConfigs = (config.servers ?? []).filter((server) => server.enabled);
     ctx.effect(() => () => {
       this.closed = true;
@@ -129,9 +133,55 @@ export class Mcp extends Service {
       for (const server of this.connected.values()) server.client.close();
       this.connected.clear();
     }, "mcp: servers");
-    this.registerSlashCommands(ctx);
+    registerMcpSlashCommands(ctx, this);
     this.ready = this.connectAll(this.enabledConfigs);
     this.registerRpcMethods(ctx);
+  }
+
+  setAuthProvider(provider: McpHttpAuthProvider | undefined): void {
+    this.authProvider = provider;
+  }
+
+  /** Programmatically upsert or remove a runtime MCP server (e.g. from Bot Connectors) without restarting Host. */
+  async upsertRuntimeServer(server: McpServerConfig): Promise<ServerStatus | undefined> {
+    await this.ready;
+    if (this.closed) return undefined;
+    const idx = this.enabledConfigs.findIndex((c) => c.id === server.id);
+    if (server.enabled) {
+      if (idx >= 0) this.enabledConfigs[idx] = server;
+      else this.enabledConfigs.push(server);
+      await this.reconnect(server.id);
+      return this.statusMap.get(server.id);
+    }
+    if (idx >= 0) this.enabledConfigs.splice(idx, 1);
+    this.clearReconnectTimer(server.id);
+    const existing = this.connected.get(server.id);
+    if (existing) {
+      this.connected.delete(server.id);
+      existing.client.close();
+    }
+    this.statusMap.delete(server.id);
+    this.rebuildToolRegistrations();
+    this.ctx.emit("mcp/changed");
+    return undefined;
+  }
+
+  async listServerTools(serverId: string): Promise<McpTool[]> {
+    await this.ready;
+    const srv = this.connected.get(serverId);
+    return srv ? [...srv.tools] : [];
+  }
+
+  async callServerTool(
+    serverId: string,
+    name: string,
+    args: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ): Promise<McpToolResult> {
+    await this.ready;
+    const srv = this.connected.get(serverId);
+    if (!srv) throw new Error(`MCP 服务器「${serverId}」未连接`);
+    return srv.client.callTool(name, args, signal);
   }
 
   statuses(): ServerStatus[] {
@@ -347,7 +397,7 @@ export class Mcp extends Service {
   }
 
   private async connect(config: McpServerConfig): Promise<ConnectedServer | null> {
-    const client = createClient(config);
+    const client = createClient(config, this.authProvider);
     const label = config.name || config.id;
     client.setNotificationHandler(async (message) => {
       if (message.method === "notifications/resources/updated") {
@@ -390,104 +440,6 @@ export class Mcp extends Service {
         ...(this.config.deferTools === undefined ? {} : { defaultDeferTools: this.config.deferTools }),
       }),
     );
-  }
-
-  private registerSlashCommands(ctx: Context): void {
-    const formatStatuses = (): string => {
-      const list = this.statuses();
-      if (list.length === 0) return "### MCP 服务器状态\n\n尚未启用任何 MCP 服务器。";
-      const rows = list.map((status) => {
-        const label = status.config.name || status.config.id;
-        const state = status.connected ? `已连接（${status.toolCount} 个工具）` : `未连接（${status.error || "连接失败"}）`;
-        const caps = [
-          status.hasResources ? "资源" : null,
-          status.hasPrompts ? "提示词" : null,
-          status.protocolVersion ? `协议 ${status.protocolVersion}` : null,
-        ].filter(Boolean).join(" · ");
-        return `- **${label}** (\`${status.config.id}\`, ${status.config.transport.toUpperCase()})：${state}${caps ? ` — ${caps}` : ""}`;
-      });
-      return `### MCP 服务器状态\n\n${rows.join("\n")}`;
-    };
-
-    ctx.inject(["commands"], (inner) => {
-      const disposers = [
-        inner.commands.register({
-          name: "mcp-status",
-          description: "查看 MCP 服务器连接状态、协议版本与工具数量",
-          source: "mcp",
-          async execute() {
-            await inner.mcp.ready;
-            return { output: formatStatuses() };
-          },
-        }),
-        inner.commands.register({
-          name: "mcp-diagnose",
-          description: "诊断已启用的 MCP 服务器连接状态（等同 /mcp-status）",
-          source: "mcp",
-          async execute() {
-            await inner.mcp.ready;
-            return { output: formatStatuses() };
-          },
-        }),
-        inner.commands.register({
-          name: "mcp-resources",
-          description: "列出已连接 MCP 服务器提供的只读资源",
-          argsHint: "[serverId]",
-          source: "mcp",
-          async execute(rawArgs) {
-            await inner.mcp.ready;
-            const serverId = rawArgs.trim() || undefined;
-            const resources = await inner.mcp.listAllResources(serverId);
-            if (resources.length === 0) return { output: "### MCP 资源\n\n没有发现可用资源。" };
-            const lines = resources.map((item) => {
-              const title = item.title || item.name || item.uri;
-              const meta = [item.serverName, item.mimeType, item.description].filter(Boolean).join(" · ");
-              return `- **${title}** — \`${item.uri}\`${meta ? `（${meta}）` : ""}`;
-            });
-            return { output: `### MCP 资源列表\n\n${lines.join("\n")}` };
-          },
-        }),
-        inner.commands.register({
-          name: "mcp-read",
-          description: "读取指定 MCP 资源 URI 的内容",
-          argsHint: "[serverId] <uri>",
-          source: "mcp",
-          async execute(rawArgs) {
-            const parts = rawArgs.trim().split(/\s+/).filter(Boolean);
-            if (parts.length === 0) return { output: "用法：`/mcp-read [serverId] <uri>`", isError: true };
-            const [first, second] = parts;
-            const uri = second !== undefined ? second : (first ?? "");
-            const serverId = second !== undefined ? first : undefined;
-            const read = await inner.mcp.readServerResource(serverId, uri);
-            return { output: read.text };
-          },
-        }),
-        inner.commands.register({
-          name: "mcp-prompts",
-          description: "列出或解析 MCP 服务器的提示词模板",
-          argsHint: "[serverId] [promptName]",
-          source: "mcp",
-          async execute(rawArgs) {
-            const parts = rawArgs.trim().split(/\s+/).filter(Boolean);
-            if (parts.length <= 1) {
-              const prompts = await inner.mcp.listAllPrompts(parts[0]);
-              if (prompts.length === 0) return { output: "### MCP 提示词\n\n没有发现可用提示词模板。" };
-              const lines = prompts.map((item) => {
-                const args = (item.arguments ?? []).map((arg) => `${arg.name}${arg.required ? "*" : ""}`).join(", ");
-                return `- **${item.title || item.name}** (\`${item.serverId}\`)${item.description ? `：${item.description}` : ""}${args ? ` — 参数：\`${args}\`` : ""}`;
-              });
-              return { output: `### MCP 提示词模板\n\n${lines.join("\n")}` };
-            }
-            const [serverId, promptName] = parts;
-            const resolved = await inner.mcp.getServerPrompt(serverId, promptName ?? "");
-            return { output: resolved.markdown };
-          },
-        }),
-      ];
-      inner.effect(() => () => {
-        for (const dispose of disposers) dispose();
-      }, "mcp: slash commands");
-    });
   }
 
   private registerRpcMethods(ctx: Context): void {

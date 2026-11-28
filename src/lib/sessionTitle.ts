@@ -1,11 +1,63 @@
 import type { SessionInfo } from "../types";
 
-/** Thread titles only — never show cwd, URLs, or bare paths as labels. */
+const ATTACHED_FILES_TAIL_RE = /(?:^|\r?\n\r?\n)附加的本地文件：\r?\n((?:- .+(?:\r?\n|$))+)\s*$/;
+const LEADING_QUOTE_RE = /^(?:>[ \t]?.*(?:\r?\n|$))+\r?\n/;
+const LEADING_CONN_RE = /^\[已关联连接器上下文:\s*[^\]]+\]\r?\n?/;
+const LEADING_SLASH_RE = /^\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?:\s+([\s\S]*))?$/;
+
+function sanitizeFirstMessageForTitle(input: string): string {
+  let working = input.trim();
+  if (!working) return "";
+
+  const attachMatch = ATTACHED_FILES_TAIL_RE.exec(working);
+  let fallbackFileName = "";
+  if (attachMatch?.[1] !== undefined) {
+    const firstFileLine = attachMatch[1]
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.startsWith("- "));
+    if (firstFileLine) {
+      const sep = firstFileLine.indexOf(": ");
+      if (sep > 2) fallbackFileName = firstFileLine.slice(2, sep).trim();
+    }
+    working = working.slice(0, attachMatch.index).trim();
+  }
+
+  working = working.replace(LEADING_QUOTE_RE, "").trim();
+  working = working.replace(LEADING_CONN_RE, "").trim();
+
+  const slashMatch = LEADING_SLASH_RE.exec(working);
+  if (slashMatch?.[1] !== undefined) {
+    const cmdName = slashMatch[1];
+    const cmdArgs = (slashMatch[2] ?? "").trim();
+    if (cmdArgs !== "") {
+      working = cmdArgs;
+    } else if (cmdName.toLowerCase().startsWith("skill:") && cmdName.length > 6) {
+      working = cmdName.slice(6);
+    } else {
+      working = `/${cmdName}`;
+    }
+  }
+
+  const collapsed = working.replace(/\s+/g, " ").trim();
+  return collapsed || fallbackFileName;
+}
+
+function looksLikeBareFilesystemPath(raw: string): boolean {
+  if (/\s/.test(raw)) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(raw)) return true;
+  if (raw.includes("\\")) return true;
+  if (raw.startsWith("/") && raw.indexOf("/", 1) > 1) return true;
+  return false;
+}
+
+/** Thread titles only — never show cwd, URLs, serialized plumbing, or bare paths as labels. */
 export function sessionTitle(session: SessionInfo): string {
-  const raw = (session.name || session.firstMessage || "").trim().replace(/\s+/g, " ");
+  const explicitName = (session.name ?? "").trim().replace(/\s+/g, " ");
+  const raw = explicitName || sanitizeFirstMessageForTitle(session.firstMessage || "");
   if (!raw) return "未命名对话";
   if (/^https?:\/\//i.test(raw)) return "未命名对话";
-  if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.includes("\\") || raw.startsWith("/")) {
+  if (looksLikeBareFilesystemPath(raw)) {
     const leaf = raw.split(/[\\/]/).filter(Boolean).pop();
     if (leaf && leaf.length < 40 && !/^\d+$/.test(leaf)) return leaf;
     return "未命名对话";

@@ -168,10 +168,25 @@ export class Commands extends Service {
       .sort((left, right) => left.name.localeCompare(right.name));
   }
 
+  private resolveDefinition(
+    all: ReadonlyMap<string, CommandDefinition>,
+    rawName: string,
+  ): { key: string; definition: CommandDefinition } | undefined {
+    const normalized = rawName.trim().replace(/^\/+/, "");
+    const direct = all.get(normalized);
+    if (direct !== undefined) return { key: normalized, definition: direct };
+    if (!normalized.includes(":")) {
+      const skillKey = `skill:${normalized}`;
+      const skillDef = all.get(skillKey);
+      if (skillDef !== undefined) return { key: skillKey, definition: skillDef };
+    }
+    return undefined;
+  }
+
   async has(name: string, cwd?: string): Promise<boolean> {
     const normalized = name.trim().replace(/^\/+/, "");
     if (this.definitions.has(normalized)) return true;
-    return (await this.resolveAll(cwd)).has(normalized);
+    return this.resolveDefinition(await this.resolveAll(cwd), normalized) !== undefined;
   }
 
   async run(
@@ -180,17 +195,16 @@ export class Commands extends Service {
     env: CommandEnv,
   ): Promise<{ handled: boolean } & CommandResult> {
     const normalized = name.trim().replace(/^\/+/, "");
-    const all = await this.resolveAll(env.cwd);
-    const definition = all.get(normalized);
-    if (definition === undefined) return { handled: false };
+    const resolved = this.resolveDefinition(await this.resolveAll(env.cwd), normalized);
+    if (resolved === undefined) return { handled: false };
     try {
-      const result = await definition.execute(rawArgs, env);
+      const result = await resolved.definition.execute(rawArgs, env);
       return { handled: true, ...result };
     } catch (error) {
       return {
         handled: true,
         isError: true,
-        output: `命令 \`/${normalized}\` 执行失败：${error instanceof Error ? error.message : String(error)}`,
+        output: `命令 \`/${resolved.key}\` 执行失败：${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }

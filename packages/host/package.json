@@ -45,9 +45,14 @@
     "@qianji/tool-output": "*",
     "@qianji/tools": "*",
     "@qianji/ui": "*",
+    "imapflow": "^2.12.2",
+    "mailparser": "^3.15.0",
+    "nodemailer": "^10.6.1",
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@qianji/testkit": "*"
+    "@qianji/testkit": "*",
+    "@types/mailparser": "^3.9.0",
+    "@types/nodemailer": "^8.0.2"
   }
 }

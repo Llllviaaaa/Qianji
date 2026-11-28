@@ -5,7 +5,7 @@
  * pills (`≡ 聊天`, model selector, `通话`, `🖥️` Computer toggle), avatar-free `22px`
  * bubbles with `[[options: ...]]` quick-choice buttons, and the bottom docked composer.
  */
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { ArrowDown } from "lucide-react";
 import {
@@ -110,6 +110,18 @@ export function BotChatColumn(props: {
   }, [retained.handle, handlePhase, currentThinkingLevel, currentProvider, currentModelId, desiredProvider, desiredModelId, resolvedBotModel.label]);
 
   const messages = retained.snapshot?.messages ?? [];
+  const availableCommands = useMemo(
+    () => retained.snapshot?.commands ?? sessionSnap?.commands ?? [],
+    [retained.snapshot?.commands, sessionSnap?.commands],
+  );
+  const knownSkills = useMemo(() => {
+    const set = new Set<string>();
+    for (const cmd of availableCommands) {
+      if (cmd.name.startsWith("skill:")) set.add(cmd.name.slice(6).toLowerCase());
+      else if (cmd.source === "skill") set.add(cmd.name.toLowerCase());
+    }
+    return set;
+  }, [availableCommands]);
   const isStreaming = retained.snapshot?.isStreaming === true;
   const runtimeError = retained.snapshot?.error ?? null;
   const visibleMessages = filterVisibleBotMessages(messages, isStreaming);
@@ -320,6 +332,7 @@ export function BotChatColumn(props: {
               isStreaming={isStreaming}
               showTrailingThinking={showTrailingThinking}
               visibleMessages={visibleMessages}
+              knownSkills={knownSkills}
               embeddedTasks={snapshot.embeddedTasks}
               runtimeError={runtimeError}
               reactedIds={reactedIds}
@@ -373,6 +386,7 @@ export function BotChatColumn(props: {
             draft={ui.composerDraft}
             quotedText={ui.quotedText}
             isStreaming={isStreaming}
+            commands={availableCommands}
             availableApps={composerAvailableApps}
             selectedApps={ui.composerApps}
             onToggleApp={toggleComposerApp}

@@ -30,7 +30,6 @@ const OVERSIZED_CEILINGS: Record<string, number> = {
   "packages/protocol/src/self-guard.ts": 849,
   "src/components/SideChatPanel.tsx": 789,
   "packages/mcp/src/index.ts": 622,
-  "packages/mcp/src/client.ts": 682,
   "packages/host/src/client-bundles.ts": 657,
   "src/store/runtime.ts": 625,
   "src/stores/workbenchStore.ts": 581,

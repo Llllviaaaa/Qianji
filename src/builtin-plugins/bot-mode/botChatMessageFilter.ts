@@ -44,15 +44,41 @@ export function extractBotQuickOptions(text: string): {
   return { cleanBody: text, options: [] };
 }
 
+const SKILL_PATH_EXTRACT_RE = /(?:^|[/\\])([^/\\]+)[/\\]SKILL\.md$/i;
+
+function extractUsedSkillsFromGroup(
+  group: ReadonlyArray<{ readonly toolCalls?: readonly unknown[] }>,
+): readonly string[] | undefined {
+  const seen = new Set<string>();
+  for (const msg of group) {
+    for (const rawCall of msg.toolCalls ?? []) {
+      if (typeof rawCall !== "object" || rawCall === null) continue;
+      const rec = rawCall as { name?: unknown; args?: Record<string, unknown> };
+      const args = rec.args;
+      if (!args || typeof args !== "object") continue;
+      for (const key of ["path", "file", "filePath", "target_file"]) {
+        const val = args[key];
+        if (typeof val === "string") {
+          const m = SKILL_PATH_EXTRACT_RE.exec(val.trim());
+          if (m?.[1]) seen.add(m[1]);
+        }
+      }
+    }
+  }
+  return seen.size > 0 ? [...seen] : undefined;
+}
+
 function collapseBotAssistantGroup<
   T extends {
     readonly role: string;
     readonly content: string;
     readonly toolCalls?: readonly unknown[];
+    readonly usedSkills?: readonly string[];
   },
 >(group: readonly T[], groupStreaming: boolean): T | undefined {
   const lastMsg = group[group.length - 1];
   if (lastMsg === undefined) return undefined;
+  const usedSkills = !groupStreaming ? extractUsedSkillsFromGroup(group) : undefined;
 
   for (let i = group.length - 1; i >= 0; i -= 1) {
     const msg = group[i];
@@ -60,7 +86,12 @@ function collapseBotAssistantGroup<
     if ((msg.toolCalls?.length ?? 0) > 0) break;
     const cleaned = stripBotThinking(msg.content);
     if (cleaned.trim() !== "") {
-      return cleaned === msg.content ? msg : { ...msg, content: cleaned };
+      if (cleaned === msg.content && usedSkills === undefined) return msg;
+      return {
+        ...msg,
+        content: cleaned,
+        ...(usedSkills !== undefined ? { usedSkills } : {}),
+      };
     }
   }
 
@@ -73,7 +104,12 @@ function collapseBotAssistantGroup<
     if (msg === undefined) continue;
     const cleaned = stripBotThinking(msg.content);
     if (cleaned.trim() !== "") {
-      return cleaned === msg.content ? msg : { ...msg, content: cleaned };
+      if (cleaned === msg.content && usedSkills === undefined) return msg;
+      return {
+        ...msg,
+        content: cleaned,
+        ...(usedSkills !== undefined ? { usedSkills } : {}),
+      };
     }
   }
   return undefined;

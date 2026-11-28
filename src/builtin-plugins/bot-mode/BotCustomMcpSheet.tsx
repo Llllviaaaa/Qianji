@@ -1,6 +1,6 @@
 /**
  * Grok & ChatGPT-style Custom MCP Server configuration sheet (`BotCustomMcpSheet.tsx`).
- * Supports OAuth 2.1 auto-discovery/PKCE, no-auth, Bearer/Headers, and STDIO.
+ * Supports OAuth 2.1 auto-discovery/PKCE (Keychain-stored), no-auth, Bearer/Headers, and STDIO.
  */
 import { useState, type FormEvent, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
@@ -41,6 +41,8 @@ export function BotCustomMcpSheet({
   const [command, setCommand] = useState(
     existingServer ? [existingServer.command, ...existingServer.args].filter(Boolean).join(" ") : "",
   );
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthClientSecret, setOauthClientSecret] = useState("");
   const [bearerToken, setBearerToken] = useState("");
   const [headers, setHeaders] = useState<HeaderPair[]>(() => {
     if (!existingServer?.headers) return [{ id: "h-0", key: "", value: "" }];
@@ -70,21 +72,26 @@ export function BotCustomMcpSheet({
       const serverId = existingServer?.id ?? `bot-mcp-${Date.now().toString(36)}`;
       const nextHeaders: Record<string, string> = {};
       if (transport === "http" && authType === "oauth" && rpcService) {
-        const res = await rpcService.call<{ ok: boolean; accessToken: string; tokenType: string }>("bot.connector.oauth", {
+        await rpcService.call("bot.connector.oauth", {
           connectorId: serverId,
+          serverId,
+          name: cleanName,
           mcpUrl: url.trim(),
+          trustedReadOnly,
+          ...(oauthClientId.trim() ? { clientId: oauthClientId.trim() } : {}),
+          ...(oauthClientSecret.trim() ? { clientSecret: oauthClientSecret.trim() } : {}),
         });
-        nextHeaders.Authorization = `${res.tokenType || "Bearer"} ${res.accessToken}`;
       } else {
         for (const pair of headers) {
           const k = pair.key.trim();
           const v = pair.value.trim();
           if (k && v) nextHeaders[k] = v;
         }
-        if (bearerToken.trim() !== "") {
-          nextHeaders.Authorization = bearerToken.trim().startsWith("Bearer ")
-            ? bearerToken.trim()
-            : `Bearer ${bearerToken.trim()}`;
+        if (bearerToken.trim() !== "" && rpcService) {
+          await rpcService.call("bot.connector.oauthSaveBearer", {
+            serverId,
+            token: bearerToken.trim(),
+          });
         } else if (authType === "token" && existingServer?.headers?.Authorization) {
           nextHeaders.Authorization = existingServer.headers.Authorization;
         }
@@ -123,6 +130,7 @@ export function BotCustomMcpSheet({
 
   const handleDelete = async () => {
     if (!existingServer || !appSettings) return;
+    await rpcService?.call("bot.connector.oauthDisconnect", { serverId: existingServer.id }).catch(() => undefined);
     await saveAppSettings({
       ...appSettings,
       mcpServers: appSettings.mcpServers.filter((s) => s.id !== existingServer.id),
@@ -148,7 +156,7 @@ export function BotCustomMcpSheet({
                 )}
               </div>
               <p className="qj-conn-hero-desc">
-                支持官方标准 OAuth 2.1 自动网页授权、公开免鉴权 Remote MCP 或自定义 Bearer / Header 与本地 STDIO。
+                支持官方标准 OAuth 2.1 自动网页授权（Keychain 托管与自动续期）、公开免鉴权 Remote MCP 或本地 STDIO。
               </p>
             </div>
           </div>
@@ -170,7 +178,7 @@ export function BotCustomMcpSheet({
 
         <label className="qj-conn-field">
           <span>名称</span>
-          <input type="text" required aria-label="自定义 MCP 名称" placeholder="例如：Supabase / 内部文档" value={name} onChange={(e) => setName(e.target.value)} className="qj-conn-input" />
+          <input type="text" required aria-label="自定义 MCP 名称" placeholder="例如：Supabase / Composio / 内部文档" value={name} onChange={(e) => setName(e.target.value)} className="qj-conn-input" />
         </label>
 
         {transport === "http" ? (
@@ -187,10 +195,16 @@ export function BotCustomMcpSheet({
                 <option value="token">Bearer Token / 自定义请求头</option>
               </select>
             </label>
+            {authType === "oauth" && (
+              <div className="qj-conn-grid-2">
+                <input type="text" aria-label="OAuth Client ID（可选）" placeholder="Client ID（支持 RFC 7591 可留空）" value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} className="qj-conn-input mono" />
+                <input type="password" aria-label="OAuth Client Secret（可选）" placeholder="Client Secret（可选，加密存储）" value={oauthClientSecret} onChange={(e) => setOauthClientSecret(e.target.value)} className="qj-conn-input" />
+              </div>
+            )}
             {authType === "token" && (
               <>
                 <label className="qj-conn-field">
-                  <span>Bearer Token（可选）</span>
+                  <span>Bearer Token（加密存入 Keychain）</span>
                   <input type="password" aria-label="MCP Bearer Token" placeholder="输入 API Key 或 Token" value={bearerToken} onChange={(e) => setBearerToken(e.target.value)} className="qj-conn-input" />
                 </label>
                 <div className="qj-conn-field">

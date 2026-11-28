@@ -3,7 +3,18 @@
  * handle wrapper for `SessionService.retain()`.
  */
 import type { Context } from "@deepseek-ai/cordis";
-import type { RewindExecutionResult, RewindMode } from "../../lib/harnessRuntime";
+import { describeError } from "../../lib/errors";
+import { clientContributions } from "../../lib/clientContributions";
+import {
+  buildPromptPayload,
+  harnessRuntimes,
+  parseLeadingSlashCommand,
+  type PromptInput,
+  type RewindExecutionResult,
+  type RewindMode,
+} from "../../lib/harnessRuntime";
+import { requestOpenSettings } from "../../lib/shellBridge";
+import { appendNotice } from "../../lib/transcript";
 import { useAppStore } from "../../store";
 import type {
   AppSettings,
@@ -111,6 +122,175 @@ export interface SessionPoolEntry {
 
 function describeSessionActionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export type IsolatedSlashOutcome =
+  | { readonly kind: "passthrough"; readonly payload: PromptInput }
+  | { readonly kind: "handled-silent" }
+  | { readonly kind: "clear" }
+  | { readonly kind: "compact" }
+  | {
+      readonly kind: "direct-reply";
+      readonly userMessage: UiMessage;
+      readonly assistantMessage?: UiMessage;
+      readonly noticeMessage?: UiMessage;
+    };
+
+export async function resolveIsolatedSlashCommand(options: {
+  readonly runtimeId: string;
+  readonly cwd: string;
+  readonly sessionFile: string | null;
+  readonly wasStreaming: boolean;
+  readonly payload: PromptInput;
+}): Promise<IsolatedSlashOutcome> {
+  const { runtimeId, cwd, sessionFile, wasStreaming, payload } = options;
+  if (payload.images.length > 0) {
+    return { kind: "passthrough", payload };
+  }
+  const slash = parseLeadingSlashCommand(payload.message);
+  if (slash === null || (wasStreaming && slash.name !== "goal")) {
+    return { kind: "passthrough", payload };
+  }
+  if (slash.rawArgs.trim() === "" && (slash.name === "mcp" || slash.name === "skills")) {
+    if (requestOpenSettings(slash.name)) return { kind: "handled-silent" };
+  }
+  const handledByClient = await clientContributions.tryHandleSlashCommand(slash.name, slash.rawArgs, {
+    cwd,
+    sessionFile,
+  });
+  if (handledByClient) return { kind: "handled-silent" };
+
+  const commandResult = await harnessRuntimes.runCommand(runtimeId, slash.name, slash.rawArgs);
+  if (!commandResult.handled) {
+    return { kind: "passthrough", payload };
+  }
+  if (commandResult.clientAction === "clear") return { kind: "clear" };
+  if (commandResult.clientAction === "compact") return { kind: "compact" };
+  if (commandResult.prompt !== undefined && commandResult.prompt.trim() !== "") {
+    return {
+      kind: "passthrough",
+      payload: {
+        message: payload.message,
+        metaPrompt: commandResult.prompt,
+        images: payload.images,
+      },
+    };
+  }
+  const now = Date.now();
+  const nonce = `${now}-${Math.random().toString(36).slice(2, 7)}`;
+  const outputText = commandResult.output ?? `已执行 \`/${slash.name}\`。`;
+  if (slash.name === "goal") {
+    return {
+      kind: "direct-reply",
+      userMessage: { id: `iso-slash-u-${nonce}`, role: "user", content: payload.message, timestamp: now },
+      noticeMessage: {
+        id: `iso-slash-notice-${nonce}`,
+        role: "notice",
+        content: outputText,
+        ...(commandResult.isError ? { isError: true } : {}),
+        timestamp: now,
+      },
+    };
+  }
+  return {
+    kind: "direct-reply",
+    userMessage: {
+      id: `iso-slash-user-${nonce}`,
+      role: "user",
+      content: payload.message,
+      timestamp: now,
+    },
+    assistantMessage: {
+      id: `iso-slash-assistant-${nonce}`,
+      role: "assistant",
+      content: outputText,
+      ...(commandResult.isError ? { isError: true } : {}),
+      timestamp: now,
+    },
+  };
+}
+
+export async function dispatchIsolatedSessionPrompt(options: {
+  readonly text: string;
+  readonly attachments: AttachmentPayload[];
+  readonly behavior?: "steer" | "followUp";
+  readonly runtimeId: string;
+  readonly snapshot: SessionHandleSnapshot;
+  readonly patch: (next: Partial<SessionHandleSnapshot>) => void;
+  readonly compact: () => Promise<void>;
+  readonly onTurnStart: (ts: number) => void;
+}): Promise<boolean> {
+  const { text, attachments, behavior, runtimeId, snapshot, patch, compact, onTurnStart } = options;
+  const payload = buildPromptPayload(text, attachments);
+  if (!payload.message && payload.images.length === 0) return false;
+
+  const wasStreaming = snapshot.isStreaming;
+  let effectivePayload: typeof payload;
+  try {
+    const slashOutcome = await resolveIsolatedSlashCommand({
+      runtimeId,
+      cwd: snapshot.cwd,
+      sessionFile: snapshot.sessionFile,
+      wasStreaming,
+      payload,
+    });
+    if (slashOutcome.kind === "handled-silent") return true;
+    if (slashOutcome.kind === "clear") {
+      patch({ messages: [], error: null, retryStatus: null });
+      return true;
+    }
+    if (slashOutcome.kind === "compact") {
+      await compact();
+      return true;
+    }
+    if (slashOutcome.kind === "direct-reply") {
+      const nextMsgs = slashOutcome.noticeMessage
+        ? appendNotice([...snapshot.messages], slashOutcome.noticeMessage)
+        : [
+            ...snapshot.messages,
+            slashOutcome.userMessage,
+            ...(slashOutcome.assistantMessage ? [slashOutcome.assistantMessage] : []),
+          ];
+      patch({ messages: nextMsgs });
+      return true;
+    }
+    effectivePayload = slashOutcome.payload;
+  } catch (error) {
+    patch({ error: describeError(error) });
+    return false;
+  }
+
+  if (!wasStreaming) {
+    const now = Date.now();
+    onTurnStart(now);
+    patch({
+      isStreaming: true,
+      messages: [
+        ...snapshot.messages,
+        {
+          id: `iso-user-${now}-${Math.random().toString(36).slice(2, 7)}`,
+          role: "user",
+          content: effectivePayload.message,
+          images:
+            effectivePayload.images.length > 0
+              ? effectivePayload.images.map(({ data, mimeType }) => ({ type: "image", data, mimeType }))
+              : undefined,
+          timestamp: now,
+        },
+      ],
+    });
+  }
+  try {
+    if (wasStreaming) {
+      await harnessRuntimes.queue(runtimeId, behavior === "followUp" ? "followUp" : "steer", effectivePayload);
+    } else {
+      await harnessRuntimes.prompt(runtimeId, effectivePayload);
+    }
+    return true;
+  } catch (error) {
+    patch({ isStreaming: wasStreaming, error: describeError(error) });
+    return false;
+  }
 }
 
 export async function applyMainPermissionMode(mode: AppSettings["permissionMode"]): Promise<void> {

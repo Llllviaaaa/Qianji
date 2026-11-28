@@ -136,5 +136,17 @@ describe("@qianji/commands service", () => {
     expect(skillRun.prompt).toContain("SKILL.md");
     expect(skillRun.prompt).toContain("fix-ci");
     expect(skillRun.prompt).toContain("check build.yml");
+
+    // Bare `/<skill-name>` resolves seamlessly to `skill:<skill-name>` when no static command collides
+    expect(await ctx.commands.has("fix-ci", tempDir)).toBe(true);
+    expect(await ctx.commands.has("/fix-ci", tempDir)).toBe(true);
+    const bareSkillRun = await ctx.commands.run("fix-ci", "check deploy.yml", {
+      sessionId: session.id,
+      cwd: tempDir,
+      signal: new AbortController().signal,
+    });
+    expect(bareSkillRun.handled).toBe(true);
+    expect(bareSkillRun.prompt).toContain("SKILL.md");
+    expect(bareSkillRun.prompt).toContain("check deploy.yml");
   });
 });

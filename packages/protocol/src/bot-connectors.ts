@@ -27,6 +27,8 @@ export interface BotConnectedAppPolicy {
   policy: BotConnectorPolicyTier;
   actionPermissions?: Record<string, BotActionPermissionLevel>;
   backgroundSync?: boolean;
+  lastSyncAt?: number;
+  lastError?: string;
 }
 
 export interface BotMcpDiscoveredTool {
