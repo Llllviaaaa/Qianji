@@ -26,28 +26,42 @@ test("thinking display", async () => {
   assert.equal(foldThinking(""), "");
 });
 
-test("extractInlineThinking strips <think> tags for showThinking control", () => {
+test("extractInlineThinking strips <think> and <thinking> tags for showThinking control", () => {
   assert.deepEqual(
     extractInlineThinking("<think>\n先分析问题根因\n</think>\n\n最终答复正文。"),
     { content: "最终答复正文。", thinking: "先分析问题根因" },
   );
 
-  // Unclosed streaming <think> must be routed into thinking, never leaked into visible content.
+  assert.deepEqual(
+    extractInlineThinking("<thinking>\nThe bash tool is running in PowerShell...\n</thinking>\n\n已执行完成。"),
+    { content: "已执行完成。", thinking: "The bash tool is running in PowerShell..." },
+  );
+
+  assert.deepEqual(
+    extractInlineThinking("<THINKING>大写标签推理</THINKING>\n<think>补充推理</think>\n正文结论"),
+    { content: "正文结论", thinking: "大写标签推理\n\n补充推理" },
+  );
+
+  // Unclosed streaming <think> and <thinking> must be routed into thinking, never leaked into visible content.
   assert.deepEqual(
     extractInlineThinking("<think>正在推导第一步……"),
     { content: "", thinking: "正在推导第一步……" },
   );
-
-  // Mentioning `<think>` in normal prose must stay untouched.
   assert.deepEqual(
-    extractInlineThinking("某些开源模型会输出 `<think>` 标签。"),
-    { content: "某些开源模型会输出 `<think>` 标签。", thinking: undefined },
+    extractInlineThinking("<thinking>正在推导 Grok 内部步骤……"),
+    { content: "", thinking: "正在推导 Grok 内部步骤……" },
+  );
+
+  // Mentioning `<think>` or `<thinking>` in normal prose must stay untouched.
+  assert.deepEqual(
+    extractInlineThinking("某些开源模型会输出 `<think>` 或 `<thinking>` 标签。"),
+    { content: "某些开源模型会输出 `<think>` 或 `<thinking>` 标签。", thinking: undefined },
   );
 
   const inlineMsg = {
     id: "m1",
     role: "assistant" as const,
-    content: "<think>内部推理步骤</think>\n对外可见结论",
+    content: "<thinking>内部推理步骤</thinking>\n对外可见结论",
     timestamp: 1_000,
   };
   const merged = mergeAssistantTurn([inlineMsg]);

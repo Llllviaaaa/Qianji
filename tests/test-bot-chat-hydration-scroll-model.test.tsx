@@ -26,7 +26,8 @@ import { Ui } from "@qianji/ui";
 import { BotCompanionHarness, BotStateStore } from "../packages/host/src/bot/index";
 import { createBotHarnessHost } from "../packages/host/src/bot/harness/bot-tools-host";
 import { botModePlugin } from "../src/builtin-plugins/bot-mode";
-import { BotChatFloatingTopbar } from "../src/builtin-plugins/bot-mode/BotChatThreadWidgets";
+import { BotChatMessageStream } from "../src/builtin-plugins/bot-mode/BotChatMessageStream";
+import { BotChatFloatingTopbar, filterVisibleBotMessages } from "../src/builtin-plugins/bot-mode/BotChatThreadWidgets";
 import {
   botDataStore,
   botUiStore,
@@ -292,5 +293,138 @@ describe("Bot Chat History Hydration, Model Routing Single Source of Truth & Top
     expect(html).toContain('data-testid="bot-models-settings-pane"');
     expect(html).toContain("服务商与 API 密钥");
     expect(html).not.toContain("默认对话模型");
+  });
+
+  it("collapses Grok 4.7 multi-step tool sub-messages and <thinking> blocks from hydrated SessionHandle snapshots", async () => {
+    let streamingState = true;
+    let mockMessages = [
+      { id: "u-grok", role: "user" as const, content: "帮我检查当前目录", timestamp: 1000 },
+      {
+        id: "a-step-1",
+        role: "assistant" as const,
+        content: "<thinking>The bash tool is running in PowerShell...</thinking>\n先跑一下 ls 看看…",
+        model: "grok-4.7",
+        timestamp: 1001,
+        toolCalls: [{ id: "call-1", name: "bash", args: { command: "ls" }, running: true }],
+      },
+      {
+        id: "a-step-2",
+        role: "assistant" as const,
+        content: "<THINKING>Checking output lines...</THINKING>",
+        model: "grok-4.7",
+        timestamp: 1002,
+      },
+    ];
+
+    vi.spyOn(harnessRuntimes, "start").mockResolvedValue({
+      runtimeId: "harness:rt-bot-grok",
+      sessionLoaded: true,
+      sessionForked: false,
+    });
+    vi.spyOn(harnessRuntimes, "state").mockImplementation(async () => ({
+      sessionId: "sess-bot-grok",
+      sessionFile: "harness:sess-bot-grok",
+      isStreaming: streamingState,
+      isCompacting: false,
+      thinkingLevel: "off" as const,
+      model: { id: "grok-4.7", name: "Grok 4.7", provider: "xai" },
+    }));
+    vi.spyOn(harnessRuntimes, "models").mockResolvedValue([
+      { id: "grok-4.7", name: "Grok 4.7", provider: "xai" },
+    ]);
+    vi.spyOn(harnessRuntimes, "commands").mockResolvedValue([]);
+    vi.spyOn(harnessRuntimes, "messages").mockImplementation(async () => mockMessages);
+    vi.spyOn(harnessRuntimes, "setPermission").mockResolvedValue(undefined);
+    vi.spyOn(harnessRuntimes, "stop").mockResolvedValue(undefined);
+
+    const root = new Context();
+    await registerFrontendServices(root, { shortcutTarget: null });
+    cleanups.push(() => root.fiber.dispose());
+
+    const renderFromSnapshot = (snap: NonNullable<ReturnType<typeof chatHandle.getSnapshot>>) => {
+      const visible = filterVisibleBotMessages(snap.messages, snap.isStreaming);
+      const lastVisible = visible[visible.length - 1];
+      const showTrailingThinking =
+        snap.isStreaming && (lastVisible === undefined || lastVisible.role === "user");
+      return renderToStaticMarkup(
+        createElement(BotChatMessageStream, {
+          isMain: true,
+          topTitle: "聊天",
+          isHydratingHistory: false,
+          isEmptyChat: visible.length === 0 && !snap.isStreaming,
+          isStreaming: snap.isStreaming,
+          showTrailingThinking,
+          visibleMessages: visible,
+          embeddedTasks: [],
+          runtimeError: snap.error,
+          reactedIds: {},
+          moreMsgId: null,
+          onToggleReaction: () => undefined,
+          onQuote: () => undefined,
+          onToggleMore: () => undefined,
+          onCloseMore: () => undefined,
+          onCopy: () => undefined,
+          onBranchSideChat: () => undefined,
+          onOpenInWorkbench: () => undefined,
+          onSelectQuickOption: () => undefined,
+          onTriggerHandoff: () => undefined,
+          onOpenModels: () => undefined,
+        }),
+      );
+    };
+
+    const chatHandle = root.sessionService.retain("harness:sess-bot-grok", {
+      isolated: false,
+      autoStart: true,
+      cwd: "D:/bot-ws",
+      permissionMode: "full-access",
+      agentMode: "agent",
+      thinkingLevel: "off",
+    });
+    cleanups.push(() => chatHandle.release());
+
+    await vi.waitFor(() => {
+      expect(chatHandle.getSnapshot().phase).toBe("ready");
+    });
+
+    // 1. Streaming during tool + <thinking>: exactly 1 typing indicator, 0 assistant bubbles, 0 <thinking> leaks
+    const streamingHtml = renderFromSnapshot(chatHandle.getSnapshot());
+    expect(streamingHtml.split('data-testid="bot-live-thinking"').length - 1).toBe(1);
+    expect(streamingHtml.split('class="qj-sanctuary-bubble-bot"').length - 1).toBe(0);
+    expect(streamingHtml).not.toContain("The bash tool is running");
+    expect(streamingHtml).not.toContain("先跑一下 ls 看看");
+
+    // 2. Final answer settles: 1 clean bubble with final prose, 0 typing indicators, 0 pre-tool/thinking leaks
+    streamingState = false;
+    mockMessages = [
+      ...mockMessages,
+      {
+        id: "a-step-3",
+        role: "assistant" as const,
+        content: "<thinking>Final check complete.</thinking>\n当前目录一共包含 3 个文档文件。",
+        model: "grok-4.7",
+        timestamp: 1005,
+      },
+    ];
+    const settledHandle = root.sessionService.retain("harness:sess-bot-grok-settled", {
+      isolated: false,
+      autoStart: true,
+      cwd: "D:/bot-ws",
+      permissionMode: "full-access",
+      agentMode: "agent",
+      thinkingLevel: "off",
+    });
+    cleanups.push(() => settledHandle.release());
+    await vi.waitFor(() => {
+      expect(settledHandle.getSnapshot().phase).toBe("ready");
+    });
+
+    const settledHtml = renderFromSnapshot(settledHandle.getSnapshot());
+    expect(settledHtml.split('data-testid="bot-live-thinking"').length - 1).toBe(0);
+    expect(settledHtml.split('class="qj-sanctuary-bubble-bot"').length - 1).toBe(1);
+    expect(settledHtml).toContain("当前目录一共包含 3 个文档文件。");
+    expect(settledHtml).not.toContain("Final check complete");
+    expect(settledHtml).not.toContain("The bash tool is running");
+    expect(settledHtml).not.toContain("先跑一下 ls 看看");
   });
 });

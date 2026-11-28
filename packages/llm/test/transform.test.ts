@@ -108,11 +108,22 @@ describe("transformMessagesForProvider", () => {
       role: "assistant",
       content: [
         { type: "thinking", text: "claude native", signature: "ant-sig", signatureProvider: "anthropic" },
-        { type: "text", text: "<thinking>\ngemini native\n</thinking>" },
         { type: "thinking", text: "legacy signed", signature: "legacy-sig" },
         { type: "text", text: "final answer" },
       ],
     });
+    expect(
+      transformMessagesForProvider(
+        [
+          { role: "user", content: [{ type: "text", text: "hi" }] },
+          {
+            role: "assistant",
+            content: [{ type: "thinking", text: "gemini only", signature: "gem-sig", signatureProvider: "gemini" }],
+          },
+        ],
+        "anthropic",
+      ),
+    ).toEqual([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
 
     const forGemini = transformMessagesForProvider(mixed, "gemini");
     expect(forGemini[1]).toEqual({

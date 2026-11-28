@@ -82,8 +82,7 @@ function transformThinkingBlock(block: ThinkingBlock, target: TargetWireProtocol
   if (target === "anthropic") {
     const isForeign = block.signatureProvider !== undefined && block.signatureProvider !== "anthropic";
     if (isForeign) {
-      if (block.text.trim() === "") return [];
-      return [{ type: "text", text: `<thinking>\n${block.text}\n</thinking>` }];
+      return [];
     }
     if (block.redacted !== undefined || block.signature !== undefined) {
       return [cloneThinking(block, true)];

@@ -22,48 +22,15 @@ import {
 } from "lucide-react";
 import type { SessionServiceSnapshot } from "@qianji/client";
 import { Markdown } from "@qianji/client-primitives";
+import {
+  extractBotQuickOptions,
+  filterVisibleBotMessages,
+  stripBotThinking,
+} from "./botChatMessageFilter";
+
+export { extractBotQuickOptions, filterVisibleBotMessages, stripBotThinking };
 
 type BotCatalogModel = SessionServiceSnapshot["availableModels"][number];
-
-export function stripBotThinking(raw: string): string {
-  if (!raw.includes("<think>")) return raw;
-  return raw
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/<think>[\s\S]*$/i, "")
-    .trimStart();
-}
-
-export function extractBotQuickOptions(text: string): {
-  readonly cleanBody: string;
-  readonly options: readonly string[];
-} {
-  const closedMatch = /\[\[\s*options\s*:\s*([\s\S]*?)\]\]\s*$/i.exec(text);
-  if (closedMatch !== null) {
-    const rawList = closedMatch[1] ?? "";
-    const options = rawList
-      .split(/\||｜/)
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0);
-    const cleanBody = text.slice(0, closedMatch.index).trimEnd();
-    return { cleanBody, options };
-  }
-  const openIdx = text.search(/\[\[\s*options\s*:/i);
-  if (openIdx >= 0) {
-    return { cleanBody: text.slice(0, openIdx).trimEnd(), options: [] };
-  }
-  return { cleanBody: text, options: [] };
-}
-
-export function filterVisibleBotMessages<
-  T extends { readonly role: string; readonly content: string },
->(messages: readonly T[], isStreaming: boolean): readonly T[] {
-  const lastRawIdx = messages.length - 1;
-  return messages.filter((msg, idx) => {
-    if (msg.role === "user") return true;
-    if (stripBotThinking(msg.content).trim() !== "") return true;
-    return isStreaming && idx === lastRawIdx;
-  });
-}
 
 export function BotLiveThinkingRow(): ReactElement {
   return (

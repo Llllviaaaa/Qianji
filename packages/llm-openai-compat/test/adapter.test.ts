@@ -491,7 +491,7 @@ describe("openai-compat adapter", () => {
     expect(unconfiguredBody).not.toHaveProperty("max_completion_tokens");
   });
 
-  it("extracts streaming inline <think>...</think> across split SSE chunks, consecutive blocks, and thinking-only turns", async () => {
+  it("extracts streaming inline <think> and <thinking> across split SSE chunks, consecutive blocks, and thinking-only turns", async () => {
     const { ctx, server } = await setup();
 
     // Split <think> and </think> across chunk boundaries with CRLF after <think> and false partial closing tags inside.
@@ -514,10 +514,28 @@ describe("openai-compat adapter", () => {
       { type: "text", text: "Final answer with <think>literal</think>." },
     ]);
 
-    // Consecutive leading <think> blocks share thinkingIndex; thinking-only turn with trailing whitespace produces no text block.
+    // Split <thinking>...</thinking> (e.g. Grok 4.7) across chunk boundaries, ignoring nested </think> until </thinking>.
     server.reply({
       sse: [
-        'data: {"choices":[{"delta":{"content":"<THINK>First. </THINK>\\n<think>Second.</think>\\n  "},"finish_reason":"stop"}]}',
+        'data: {"choices":[{"delta":{"content":"  <th"}}]}',
+        'data: {"choices":[{"delta":{"content":"inking>\\nThe bash tool is running in PowerShell; </think> is not the close tag"}}]}',
+        'data: {"choices":[{"delta":{"content":"</ThInKi"}}]}',
+        'data: {"choices":[{"delta":{"content":"Ng>\\nClean visible reply."},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+    const splitThinkingRes = await assemble(ctx.llm.stream(request));
+    expect(splitThinkingRes.reason).toBe("stop");
+    expect(splitThinkingRes.message.content).toEqual([
+      { type: "thinking", text: "The bash tool is running in PowerShell; </think> is not the close tag" },
+      { type: "text", text: "Clean visible reply." },
+    ]);
+
+    // Consecutive leading <think> and <thinking> blocks share thinkingIndex; thinking-only turn produces no text block.
+    server.reply({
+      sse: [
+        'data: {"choices":[{"delta":{"content":"<THINK>First. </THINK>\\n<thinking>Second.</thinking>\\n  "},"finish_reason":"stop"}]}',
         "data: [DONE]",
         "",
       ].join("\n\n"),
@@ -529,7 +547,7 @@ describe("openai-compat adapter", () => {
     ]);
   });
 
-  it("handles unclosed <think>, empty <think></think>, and immediate flushing of non-<think> tags", async () => {
+  it("handles unclosed <think>/<thinking>, empty tags, and immediate flushing of non-thinking tags", async () => {
     async function collectChunks(payloads: string[]) {
       async function* gen() {
         for (const data of payloads) yield { data };
@@ -541,7 +559,7 @@ describe("openai-compat adapter", () => {
       return out;
     }
 
-    // Unclosed <think> with partial closing tag at stream end flushes everything as thinking-delta.
+    // Unclosed <think> and <thinking> with partial closing tag at stream end flush everything as thinking-delta.
     const unclosed = await collectChunks([
       '{"choices":[{"delta":{"content":"<think>\\nTruncated thought</th"},"finish_reason":"length"}]}',
       "[DONE]",
@@ -552,16 +570,28 @@ describe("openai-compat adapter", () => {
       { type: "finish", reason: "length" },
     ]);
 
-    // Empty <think></think> at EOF finishes cleanly without emitting empty thinking/text blocks or throwing 0-token error.
-    const emptyThinkOnly = await collectChunks([
-      '{"choices":[{"delta":{"content":"<think></think>"},"finish_reason":"stop"}]}',
+    const unclosedThinking = await collectChunks([
+      '{"choices":[{"delta":{"content":"<thinking>\\nGrok truncated monologue</thinkin"},"finish_reason":"length"}]}',
       "[DONE]",
     ]);
-    expect(emptyThinkOnly).toEqual([{ type: "finish", reason: "stop" }]);
+    expect(unclosedThinking).toEqual([
+      { type: "thinking-delta", index: 0, text: "Grok truncated monologue" },
+      { type: "thinking-delta", index: 0, text: "</thinkin" },
+      { type: "finish", reason: "length" },
+    ]);
 
-    // Empty <think></think> followed by prose emits only text-delta.
+    // Empty <think></think> or <thinking></thinking> at EOF finishes cleanly without emitting empty blocks or 0-token error.
+    for (const emptyTag of ["<think></think>", "<thinking></thinking>"]) {
+      const emptyThinkOnly = await collectChunks([
+        JSON.stringify({ choices: [{ delta: { content: emptyTag }, finish_reason: "stop" }] }),
+        "[DONE]",
+      ]);
+      expect(emptyThinkOnly).toEqual([{ type: "finish", reason: "stop" }]);
+    }
+
+    // Empty <thinking></thinking> followed by prose emits only text-delta.
     const emptyThinkWithProse = await collectChunks([
-      '{"choices":[{"delta":{"content":"<think></think>Hello!"},"finish_reason":"stop"}]}',
+      '{"choices":[{"delta":{"content":"<thinking></thinking>Hello!"},"finish_reason":"stop"}]}',
       "[DONE]",
     ]);
     expect(emptyThinkWithProse).toEqual([
@@ -569,8 +599,8 @@ describe("openai-compat adapter", () => {
       { type: "finish", reason: "stop" },
     ]);
 
-    // Non-<think> tags (<div>, <table, <thinking>) flush immediately on the diverging chunk, not buffered until EOF.
-    for (const sample of ["<div>card</div>", "<table border='1'>", "<thinking>not think</thinking>", "  indented", "a < b"]) {
+    // Non-thinking tags (<div>, <table, <thinkpad>, <section>) flush immediately on the diverging chunk, not buffered until EOF.
+    for (const sample of ["<div>card</div>", "<table border='1'>", "<thinkpad>model</thinkpad>", "<section>body</section>", "  indented", "a < b"]) {
       const stepLog: string[] = [];
       async function* trackedEvents() {
         stepLog.push("yield-1");

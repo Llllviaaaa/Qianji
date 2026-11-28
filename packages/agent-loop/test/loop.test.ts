@@ -1098,8 +1098,17 @@ describe("agent loop", () => {
       isError: false,
     });
 
-    // 3. Non-<think> XML/HTML tags (<thinking>, <div>) count as visible text and finish without retry
-    const xmlVisible = await setup([textReply("<thinking>custom xml output</thinking>")]);
+    // 3. <thinking>...</thinking> is also treated as inline thinking (retries instead of finishing with raw <thinking>),
+    // while non-thinking XML/HTML tags (<custom>, <div>) count as visible text and finish without retry.
+    const inlineThinkingTurn = await setup([
+      textReply("<thinking>The bash tool is running in PowerShell...</thinking>"),
+      textReply("<thinking>done</thinking>\nClean final output."),
+    ]);
+    await run(inlineThinkingTurn, "Run check");
+    expect(inlineThinkingTurn.provider.requests).toHaveLength(2);
+    expect(inlineThinkingTurn.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
+
+    const xmlVisible = await setup([textReply("<custom>custom xml output</custom>")]);
     await run(xmlVisible, "Emit XML");
     expect(xmlVisible.provider.requests).toHaveLength(1);
     expect(xmlVisible.deltas.at(-1)).toEqual({ type: "agent-end", outcome: "done" });
