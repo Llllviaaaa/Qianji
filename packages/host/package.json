@@ -8,8 +8,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/schemastery": "^3.19.0",
     "@qianji/agent": "*",
     "@qianji/agent-loop": "*",
     "@qianji/browser": "*",
@@ -48,7 +48,7 @@
     "imapflow": "^2.12.2",
     "mailparser": "^3.15.0",
     "nodemailer": "^10.6.1",
-    "ws": "^8.18.3"
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "@qianji/testkit": "*",
