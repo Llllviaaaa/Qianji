@@ -49,6 +49,13 @@ This product includes software developed at Vetta (https://www.openvetta.com).
 - Copyright: 2017-present Jon Schlinkert
 - Used for: build/test/lint glob matching via `vite`, `vitest`, `fdir`, and `tinyglobby` (vendored locally with the `CVE-2026-112366` / `GHSA-fc5q-39xc-vjpf` single-branch repeated extglob ReDoS fix while upstream `picomatch <= 4.0.7` remains unpatched on npm).
 
+## Ray-Desktop
+
+- Upstream: https://github.com/raydoomed/Ray-Desktop
+- License: MIT
+- Copyright: 2026 raydoomed
+- Used for: Windows Child Session isolated desktop viewer and setup helper (`src-tauri/win-child-desktop/`), including `MsRdpClient` `ConnectToChildSession` loopback hosting, `WTSEnableChildSessions` administrator setup flow, letterbox and dynamic session resolution scaling, and the collapsible floating desktop toolbar.
+
 ## Fonts
 
 - Inter (`@fontsource-variable/inter`) — SIL Open Font License 1.1, Copyright The Inter Project Authors

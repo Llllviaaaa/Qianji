@@ -1643,7 +1643,7 @@ mod tests {
             Response::Json(val) => {
                 assert_eq!(val["ok"], true);
                 assert_eq!(val["accountMode"], "current-user");
-                assert_eq!(val["desktopName"], "QianjiBotDesktop");
+                assert_eq!(val["desktopName"], crate::win_virtual_desktop::BOT_DESKTOP_NAME);
             }
             _ => panic!("expected Response::Json for win_desktop_status"),
         }
