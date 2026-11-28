@@ -15,7 +15,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
 import { ClientSlotsService, SlotRegistry, SlotRoot } from "@qianji/client-slots";
-import type { BotComputerStudioSnapshot } from "@qianji/protocol";
+import type {
+  BotComputerStudioSnapshot,
+  BotLocalLinuxDesktopStatus,
+  BotLocalWinPipStatus,
+} from "@qianji/protocol";
 import { botModePlugin } from "../src/builtin-plugins/bot-mode";
 import {
   botDataStore, botUiStore, FALLBACK_BOT_SNAPSHOT, INITIAL_BOT_UI_STATE, openBotLiveView, openBotModal,
@@ -26,7 +30,7 @@ import {
   clampStudioWidth, closeComputerStudio, computerStudioSnapshotStore, DEFAULT_STUDIO_WIDTH,
   FALLBACK_COMPUTER_STUDIO_SNAPSHOT, openComputerStudio, openDesktopRfb, pasteOnDesktop,
   patchComputerStudioUi, resetComputerStudioStores, setComputerScrubIndex, toggleComputerStudio,
-  typeOnDesktop, useComputerStudio, type ExtendedLinuxDesktopStatus, type ExtendedWinPipStatus,
+  typeOnDesktop, useComputerStudio,
 } from "../src/builtin-plugins/bot-mode/computer-studio";
 import { coreShellPlugin } from "../src/builtin-plugins/core-shell";
 import { registerFrontendServices } from "../src/kernel/services";
@@ -153,7 +157,7 @@ describe("OpenMausBot-Style Computer Panel (3-Column Layout, VNC, Child Session,
     expect(unprovHtml).toContain("运行位置");
     expect(unprovHtml).not.toContain('data-testid="remote-node-lease-bar"');
 
-    const vncLinux: ExtendedLinuxDesktopStatus = {
+    const vncLinux: BotLocalLinuxDesktopStatus = {
       distro: "Ubuntu-24.04", guiReady: true, display: ":99", resolution: "1280x800", chromiumReady: true,
       vncReady: true, vncWsUrl: "ws://127.0.0.1:49152/vnc/test-placeholder",
     };
@@ -202,9 +206,9 @@ describe("OpenMausBot-Style Computer Panel (3-Column Layout, VNC, Child Session,
     await studio.selectStudio({ engine: "local-win-pip" });
     expect(harness.renderHtml()).toContain('data-testid="computer-enable-win-desktop-btn"');
 
-    const signOutWin: ExtendedWinPipStatus = {
+    const signOutWin: BotLocalWinPipStatus = {
       accountMode: "current-user", backend: "rdp-child-session", proSupported: true,
-      childSessionEnabled: true, signOutRequired: true, desktopName: "QianjiBotDesktop", fencedRoots: [], openWindows: [],
+      childSessionEnabled: true, signOutRequired: true, desktopName: "QianjiChildSession", fencedRoots: [], openWindows: [],
     };
     computerStudioSnapshotStore.set((prev) => ({ ...prev, localWinPip: signOutWin }));
     expect(harness.renderHtml()).toContain("请注销并重新登录一次 Windows 以激活免密独立桌面");
@@ -330,8 +334,14 @@ describe("OpenMausBot-Style Computer Panel (3-Column Layout, VNC, Child Session,
 
     const triggerData = onDataCb as ((d: string) => void) | null;
     triggerData?.("pwd\r");
+    triggerData?.("l");
+    triggerData?.("x");
+    triggerData?.("\x7f");
+    triggerData?.("s");
+    triggerData?.("\r");
     await studio.resizePty(120, 36);
     expect(harness.rpcCalls).toContainEqual({ method: "bot.computer.pty.write", params: { engine: "local-linux", sessionId: "pty-x1", data: "pwd\r" } });
+    expect(harness.rpcCalls).toContainEqual({ method: "bot.computer.pty.write", params: { engine: "local-linux", sessionId: "pty-x1", data: "ls\r" } });
     expect(harness.rpcCalls).toContainEqual({ method: "bot.computer.pty.resize", params: { engine: "local-linux", sessionId: "pty-x1", cols: 120, rows: 36 } });
     detachXterm();
 

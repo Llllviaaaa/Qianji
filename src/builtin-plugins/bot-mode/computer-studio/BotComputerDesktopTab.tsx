@@ -29,9 +29,6 @@ import {
   COMPUTER_ENGINE_CARDS,
   getEngineCardMeta,
   patchComputerStudioUi,
-  type ExtendedLinuxDesktopStatus,
-  type ExtendedRemoteComputerNode,
-  type ExtendedWinPipStatus,
 } from "./computerStudioStore";
 import { useComputerStudio } from "./useComputerStudio";
 
@@ -43,18 +40,20 @@ export function BotComputerDesktopTab({ ctx }: { readonly ctx?: Context }): Reac
   const isTakeoverActive = snap.takeover.status === "active";
   const isTakeoverRequested = snap.takeover.status === "requested";
 
-  const linuxStatus = snap.localLinux as ExtendedLinuxDesktopStatus | undefined;
-  const winStatus = snap.localWinPip as ExtendedWinPipStatus | undefined;
+  const linuxStatus = snap.localLinux;
+  const winStatus = snap.localWinPip;
 
   const isRemoteEngine = snap.activeEngine === "remote-vm" || snap.activeEngine === "remote-pc";
   const expectedRemoteKind = snap.activeEngine === "remote-vm" ? "ssh-vm" : "companion-pc";
   const matchingRemoteNodes = snap.remoteNodes.filter((n) => n.kind === expectedRemoteKind);
-  const activeRemoteNode = (matchingRemoteNodes.find((n) => n.id === snap.activeRemoteNodeId) ??
-    matchingRemoteNodes[0]) as ExtendedRemoteComputerNode | undefined;
+  const activeRemoteNode =
+    matchingRemoteNodes.find((n) => n.id === snap.activeRemoteNodeId) ?? matchingRemoteNodes[0];
 
   const vncWsUrl =
     snap.activeEngine === "local-linux"
-      ? linuxStatus?.vncWsUrl
+      ? linuxStatus?.vncReady !== false
+        ? linuxStatus?.vncWsUrl
+        : undefined
       : isRemoteEngine
         ? activeRemoteNode?.vncWsUrl
         : undefined;
@@ -215,7 +214,13 @@ export function BotComputerDesktopTab({ ctx }: { readonly ctx?: Context }): Reac
               ) : (
                 <div className="qj-cs-win-ready-backdrop">
                   <Monitor size={22} strokeWidth={1.7} />
-                  <span>Windows 11 独立子会话已就绪（与当前桌面完全隔离、互不抢鼠标）</span>
+                  <span>
+                    {winStatus.viewerOpen
+                      ? "Windows 11 独立桌面窗口已打开（与当前桌面完全隔离、互不抢鼠标）"
+                      : winStatus.childSessionActive
+                        ? "Windows 11 独立子会话运行中（与当前桌面完全隔离、互不抢鼠标）"
+                        : "Windows 11 独立子会话已就绪（与当前桌面完全隔离、互不抢鼠标）"}
+                  </span>
                 </div>
               )}
               <button

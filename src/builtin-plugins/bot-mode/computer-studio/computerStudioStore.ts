@@ -9,8 +9,6 @@
  */
 import { createReactiveStore, useStoreValue } from "@qianji/client-store";
 import type {
-  BotComputerEngineActionKind,
-  BotComputerEngineActionParams,
   BotComputerEngineId,
   BotComputerEventNotification,
   BotComputerFileEntry,
@@ -19,9 +17,6 @@ import type {
   BotComputerStudioSnapshot,
   BotComputerTimelineStep,
   BotComputerViewTab,
-  BotLocalLinuxDesktopStatus,
-  BotLocalWinPipStatus,
-  BotRemoteComputerNode,
   BotSnapshotResult,
 } from "@qianji/protocol";
 import { FALLBACK_BOT_SNAPSHOT } from "../botFallbackData";
@@ -35,29 +30,6 @@ const MAX_PTY_BUFFER_CHARS = 32_768;
 export function clampStudioWidth(width: number): number {
   if (!Number.isFinite(width)) return DEFAULT_STUDIO_WIDTH;
   return Math.max(MIN_STUDIO_WIDTH, Math.min(MAX_STUDIO_WIDTH, Math.round(width)));
-}
-
-/** Protocol forward-compatible extensions for VNC WebSocket URL & Child Session states. */
-export type ExtendedLinuxDesktopStatus = BotLocalLinuxDesktopStatus & {
-  readonly vncWsUrl?: string;
-  readonly vncReady?: boolean;
-  readonly provisioningStep?: string;
-};
-
-export type ExtendedWinPipStatus = BotLocalWinPipStatus & {
-  readonly childSessionActive?: boolean;
-  readonly signOutRequired?: boolean;
-  readonly viewerOpen?: boolean;
-};
-
-export type ExtendedRemoteComputerNode = BotRemoteComputerNode & {
-  readonly vncWsUrl?: string;
-};
-
-export type ExtendedEngineActionKind = BotComputerEngineActionKind | "open-native-desktop";
-
-export interface ExtendedEngineActionParams extends Omit<BotComputerEngineActionParams, "action"> {
-  readonly action: ExtendedEngineActionKind;
 }
 
 export interface ComputerEngineCardMeta {
@@ -88,6 +60,7 @@ export const FALLBACK_COMPUTER_STUDIO_SNAPSHOT: BotComputerStudioSnapshot = {
   localLinux: {
     distro: "qianji-ubuntu-vm",
     guiReady: false,
+    vncReady: false,
     display: ":99",
     resolution: "1280x800",
     chromiumReady: false,
@@ -97,7 +70,10 @@ export const FALLBACK_COMPUTER_STUDIO_SNAPSHOT: BotComputerStudioSnapshot = {
     backend: "rdp-child-session",
     proSupported: true,
     childSessionEnabled: false,
-    desktopName: "QianjiBotDesktop",
+    childSessionActive: false,
+    signOutRequired: false,
+    viewerOpen: false,
+    desktopName: "QianjiChildSession",
     fencedRoots: [],
     openWindows: [],
     resolution: "1280x800",

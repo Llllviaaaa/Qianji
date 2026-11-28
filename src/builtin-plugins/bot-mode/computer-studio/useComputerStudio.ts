@@ -5,6 +5,7 @@ import { useCallback, useEffect } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { useFrontendService } from "@qianji/client";
 import type {
+  BotComputerEngineActionParams,
   BotComputerEngineActionResult,
   BotComputerEngineId,
   BotComputerEventNotification,
@@ -32,7 +33,6 @@ import {
   syncComputerStudioFromBotSnapshot,
   useComputerStudioSnapshot,
   useComputerStudioUi,
-  type ExtendedEngineActionParams,
 } from "./computerStudioStore";
 
 function syncPtyInfoToStores(pty: BotComputerPtySessionInfo): void {
@@ -138,7 +138,7 @@ export function useComputerStudio(ctx?: Context) {
   );
 
   const runEngineAction = useCallback(
-    async (params: ExtendedEngineActionParams): Promise<BotComputerEngineActionResult | null> => {
+    async (params: BotComputerEngineActionParams): Promise<BotComputerEngineActionResult | null> => {
       patchComputerStudioUi({ busyAction: params.action, feedbackMessage: null });
       try {
         const res = await rpcService?.call<BotComputerEngineActionResult>("bot.computer.action", { ...params });

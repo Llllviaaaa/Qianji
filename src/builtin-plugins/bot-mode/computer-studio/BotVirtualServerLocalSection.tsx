@@ -58,11 +58,15 @@ export function BotVirtualServerLocalSection({ ctx }: { readonly ctx?: Context }
   const cpuPct = Math.min(100, Math.round((vs.local.cpuCores / 8) * 100));
 
   const winBackendText =
-    localWinPip?.backend === "rdp-child-session" || localWinPip?.childSessionEnabled
-      ? `RDP 子会话 (Session #${localWinPip?.childSessionId ?? 2})`
-      : localWinPip?.backend === "unavailable"
-        ? "仅在 Windows 宿主机可用"
-        : `Win32 第二桌面 (${localWinPip?.desktopName ?? "QianjiBotDesktop"})`;
+    localWinPip?.backend === "unavailable"
+      ? "仅在 Windows 宿主机可用"
+      : localWinPip?.signOutRequired
+        ? "RDP 子会话（已开启，待注销重登激活）"
+        : localWinPip?.childSessionActive
+          ? `RDP 子会话运行中 (Session #${localWinPip.childSessionId ?? 2}${localWinPip.viewerOpen ? " · 独立窗口已打开" : ""})`
+          : localWinPip?.childSessionEnabled
+            ? `RDP 子会话已就绪 (${localWinPip.desktopName})`
+            : "RDP 子会话（尚未启用，首次需管理员开启）";
 
   const quotaItems = [
     {
@@ -119,7 +123,13 @@ export function BotVirtualServerLocalSection({ ctx }: { readonly ctx?: Context }
                   {needsProvision ? "尚未初始化" : isSleeping ? "休眠待命" : "运行中"}（{vs.uptimeLabel}）
                 </span>
                 <span className="qj-bset-tag">
-                  {localLinux?.guiReady ? `GUI ${localLinux.display} · ${localLinux.resolution}` : "CLI 模式"}
+                  {localLinux?.provisioningStep
+                    ? `部署中 (${localLinux.provisioningStep})`
+                    : localLinux?.vncReady
+                      ? `GUI ${localLinux.display} · ${localLinux.resolution} · VNC`
+                      : localLinux?.guiReady
+                        ? `GUI ${localLinux.display} · ${localLinux.resolution}`
+                        : "CLI 模式"}
                 </span>
               </div>
               <div className="qj-bset-row-desc qj-bset-mono-sub">
@@ -245,22 +255,39 @@ export function BotVirtualServerLocalSection({ ctx }: { readonly ctx?: Context }
           <div className="qj-bset-row">
             <div className="qj-bset-row-copy">
               <div className="qj-bset-row-title">
-                <span className="qj-bset-status-dot" data-tone="success" />
+                <span
+                  className="qj-bset-status-dot"
+                  data-tone={!localWinPip?.childSessionEnabled ? "muted" : localWinPip.signOutRequired ? "warning" : "success"}
+                />
                 <span>{winBackendText}</span>
                 <span className="qj-bset-tag">当前账号派生 · 零锁屏免改密</span>
               </div>
               <div className="qj-bset-row-desc">
-                复用当前登录 Windows 用户（非新建隐藏账号），后台消息投递键鼠与打印窗口位图，不抢占物理鼠标与前台输入焦点。
+                复用当前登录 Windows 用户（非新建隐藏账号），独立子会话内执行键鼠与浏览器隔离，不抢占物理鼠标与前台输入焦点。
               </div>
             </div>
             <button
               type="button"
               data-testid="enable-win-child-session-btn"
               className="qj-bset-btn soft sm"
-              disabled={studio.ui.busyAction === "enable-win-child-session"}
-              onClick={() => void studio.runEngineAction({ engine: "local-win-pip", action: "enable-win-child-session" })}
+              disabled={studio.ui.busyAction === "enable-win-child-session" || studio.ui.busyAction === "open-native-desktop"}
+              onClick={() =>
+                void studio.runEngineAction({
+                  engine: "local-win-pip",
+                  action:
+                    localWinPip?.childSessionEnabled && !localWinPip.signOutRequired
+                      ? "open-native-desktop"
+                      : "enable-win-child-session",
+                })
+              }
             >
-              {localWinPip?.childSessionEnabled ? "已启用 RDP 子会话" : "启用 RDP 子会话"}
+              {localWinPip?.signOutRequired
+                ? "待注销重登生效"
+                : localWinPip?.childSessionEnabled
+                  ? localWinPip.viewerOpen
+                    ? "聚焦独立桌面窗口"
+                    : "打开独立桌面窗口"
+                  : "启用 RDP 子会话"}
             </button>
           </div>
 

@@ -77,9 +77,11 @@ pub fn locate_bundled_helper_exe(file_name: &str) -> Option<PathBuf> {
     if let Ok(executable) = std::env::current_exe() {
         if let Some(dir) = executable.parent() {
             candidates.push(dir.join("harness").join(file_name));
+            candidates.push(dir.join("resources").join("harness").join(file_name));
             candidates.push(dir.join(file_name));
         }
     }
+    #[cfg(any(debug_assertions, test))]
     candidates.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")

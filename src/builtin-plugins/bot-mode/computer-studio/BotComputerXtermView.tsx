@@ -80,8 +80,34 @@ export function attachPtyXtermSession(options: {
     }
   });
 
+  let lineBuffer = "";
   const dataSub = term.onData((data) => {
-    void writePty(data);
+    if (data === "\x03" || data === "\x04") {
+      lineBuffer = "";
+      term.write(data === "\x03" ? "^C\r\n" : "^D\r\n");
+      void writePty(data);
+      return;
+    }
+    if (lineBuffer === "" && data.length > 1 && /[\r\n]$/.test(data)) {
+      void writePty(data);
+      return;
+    }
+    for (const ch of data) {
+      if (ch === "\r" || ch === "\n") {
+        term.write("\r\n");
+        const cmd = lineBuffer;
+        lineBuffer = "";
+        void writePty(`${cmd}\r`);
+      } else if (ch === "\x7f" || ch === "\b") {
+        if (lineBuffer.length > 0) {
+          lineBuffer = lineBuffer.slice(0, -1);
+          term.write("\b \b");
+        }
+      } else if (ch >= " " || ch === "\t") {
+        lineBuffer += ch;
+        term.write(ch);
+      }
+    }
   });
 
   void openPty(undefined, Math.max(20, term.cols || 80), Math.max(6, term.rows || 24));

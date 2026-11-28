@@ -111,7 +111,14 @@ export class WinPipComputerEngine {
     status: BotLocalWinPipStatus;
   }> {
     try {
-      const res = await this.deps.invokeHelper({ action: "win_desktop_enable_child_session" }, 60_000);
+      const res = await this.deps.invokeHelper(
+        {
+          action: "win_desktop_enable_child_session",
+          isolatedProfileDir: this.isolatedProfileDir,
+          workspaceDir: this.deps.getBotWorkspaceDir(),
+        },
+        60_000,
+      );
       const enabled = Boolean(res.enabled ?? res.childSessionEnabled);
       const signOutRequired = Boolean(res.signOutRequired);
       const elevationRequired = Boolean(res.requiresElevation ?? res.elevationRequired);
@@ -245,6 +252,33 @@ export class WinPipComputerEngine {
       // Helper unavailable in headless unit tests.
     }
     return this.inspectStatus();
+  }
+
+  async sleepDesktop(): Promise<BotLocalWinPipStatus> {
+    try {
+      await this.deps.invokeHelper({
+        action: "win_desktop_close_window",
+        closeAll: true,
+      });
+    } catch {
+      // Ignore if Child Session agent is not running.
+    }
+    let closedViewer = false;
+    try {
+      const res = await this.deps.invokeHelper({
+        action: "win_desktop_open_viewer",
+        mode: "close",
+        isolatedProfileDir: this.isolatedProfileDir,
+        workspaceDir: this.deps.getBotWorkspaceDir(),
+      });
+      if (res.viewerOpen === false || res.ok !== false) {
+        closedViewer = true;
+      }
+    } catch {
+      // Ignore if viewer control endpoint is not running.
+    }
+    const status = await this.inspectStatus();
+    return closedViewer ? { ...status, viewerOpen: false } : status;
   }
 
   async captureFrame(seq: number, cursor?: BotComputerPointerTelemetry): Promise<BotComputerStreamFrame> {

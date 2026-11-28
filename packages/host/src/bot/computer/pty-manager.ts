@@ -254,7 +254,7 @@ export class PtySessionManager {
       return toInfo(entry);
     }
 
-    const cmdLine = params.data.replace(/\r?\n$/, "");
+    const cmdLine = params.data.replace(/[\r\n]+$/, "");
     const tok = randomBytes(4).toString("hex");
     const donePromise = new Promise<void>((resolveDone) => {
       const timer = setTimeout(() => { entry.waiters.delete(tok); resolveDone(); }, 2_500);
@@ -278,7 +278,7 @@ export class PtySessionManager {
   }
 
   private async writeRemote(entry: RemoteSshPtyEntry, rawData: string): Promise<BotComputerPtySessionInfo> {
-    const cmd = rawData.replace(/\r?\n$/, "").trim();
+    const cmd = rawData.replace(/[\r\n]+$/, "").trim();
     const node = this.deps.resolveRemoteNode(entry.engine);
     if (!node || node.host.trim() === "") {
       const errChunk = `[Remote PTY] 请先配置并连接 ${entry.engine === "remote-pc" ? "远程个人电脑" : "远程 Linux 虚拟机"} 节点。\n`;

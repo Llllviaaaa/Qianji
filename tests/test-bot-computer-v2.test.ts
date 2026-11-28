@@ -252,11 +252,11 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
       expect(rejectedCode).toBe(1008);
       expect(tcpConnections).toBe(0);
 
-      // Valid noVNC client exchanges binary RFB handshake + framebuffer bytes seamlessly
+      // Case A: Client offering `Sec-WebSocket-Protocol: binary` negotiates `binary` and streams RFB frames
       const wsClient = new WebSocket(proxy.wsUrl, ["binary"]);
       const incomingFrames: Buffer[] = [];
       const gotTwoFrames = new Promise<void>((res, rej) => {
-        const timer = setTimeout(() => rej(new Error("Timed out waiting for RFB frames")), 5_000);
+        const timer = setTimeout(() => rej(new Error("Timed out waiting for RFB frames (binary subprotocol)")), 5_000);
         wsClient.on("message", (data, isBinary) => {
           expect(isBinary).toBe(true);
           const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
@@ -276,6 +276,35 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
       expect(Buffer.concat(receivedByTcp).toString("hex")).toBe("01aa55ff");
       expect(incomingFrames[1]?.toString("hex")).toBe("00000001deadbeef");
       wsClient.close();
+
+      // Case B: `@novnc/novnc` 1.7.x default (`wsProtocols: []` -> no `Sec-WebSocket-Protocol` header)
+      // connects cleanly with empty protocol and exchanges raw Uint8Array/ArrayBuffer binary frames
+      receivedByTcp.length = 0;
+      const plainWsClient = new WebSocket(proxy.wsUrl);
+      plainWsClient.binaryType = "arraybuffer";
+      const plainFrames: Buffer[] = [];
+      const gotPlainFrames = new Promise<void>((res, rej) => {
+        const timer = setTimeout(() => rej(new Error("Timed out waiting for RFB frames (no subprotocol)")), 5_000);
+        plainWsClient.on("message", (data, isBinary) => {
+          expect(isBinary).toBe(true);
+          expect(data).toBeInstanceOf(ArrayBuffer);
+          const buf = Buffer.from(data as ArrayBuffer);
+          plainFrames.push(buf);
+          if (plainFrames.length === 1) {
+            plainWsClient.send(new Uint8Array([0x06, 0x11, 0x22, 0x33]));
+          } else if (plainFrames.length >= 2) {
+            clearTimeout(timer);
+            res();
+          }
+        });
+      });
+
+      await gotPlainFrames;
+      expect(plainWsClient.protocol).toBe("");
+      expect(plainFrames[0]?.toString("ascii")).toBe("RFB 003.008\n");
+      expect(Buffer.concat(receivedByTcp).toString("hex")).toBe("06112233");
+      expect(plainFrames[1]?.toString("hex")).toBe("00000001deadbeef");
+      plainWsClient.close();
     } finally {
       await proxy.close();
       await new Promise<void>((res) => tcpServer.close(() => res()));
@@ -550,6 +579,10 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
           };
         }
         if (payload.action === "win_desktop_open_viewer") {
+          if (payload.mode === "close") {
+            viewerOpen = false;
+            return { ok: true, viewerOpen: false, action: "close" };
+          }
           if (signOutRequired) {
             return { ok: false, signOutRequired: true };
           }
@@ -568,8 +601,12 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
           return { ok: true, dispatched: true };
         }
         if (payload.action === "win_desktop_close_window") {
-          const idx = openWins.findIndex((w) => w.hwnd === payload.hwnd);
-          if (idx >= 0) openWins.splice(idx, 1);
+          if (payload.closeAll === true) {
+            openWins.length = 0;
+          } else {
+            const idx = openWins.findIndex((w) => w.hwnd === payload.hwnd);
+            if (idx >= 0) openWins.splice(idx, 1);
+          }
           return { ok: true, openWindows: openWins };
         }
         return { ok: true };
@@ -646,6 +683,16 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
     });
     const inputCall = helperPayloads.find((p) => p.action === "win_desktop_input");
     expect(inputCall?.inputAction).toBe("double_click");
+
+    // Sleeping (`action: "stop"`) on `local-win-pip` closes child windows AND closes the native viewer window
+    const sleepWinRes = await rpc.invoke<{ ok: boolean; snapshot: BotComputerStudioSnapshot }>("bot.computer.action", {
+      engine: "local-win-pip",
+      action: "stop",
+    });
+    expect(sleepWinRes.ok).toBe(true);
+    expect(sleepWinRes.snapshot.localWinPip?.viewerOpen).toBe(false);
+    expect(sleepWinRes.snapshot.localWinPip?.openWindows).toEqual([]);
+    expect(helperPayloads.some((p) => p.action === "win_desktop_open_viewer" && p.mode === "close")).toBe(true);
     expect(resolveWinInputAction({ kind: "mouse", mouseAction: "down", button: "left", x: 10, y: 20 })).toBe("down");
     expect(resolveWinInputAction({ kind: "key", key: "@", text: "@", modifiers: ["shift"] })).toBe("text");
     expect(resolveWinInputAction({ kind: "key", key: "a", text: "a", modifiers: ["ctrl"] })).toBe("key");

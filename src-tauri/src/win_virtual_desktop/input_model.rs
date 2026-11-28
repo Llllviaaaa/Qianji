@@ -213,6 +213,10 @@ pub fn parse_virtual_key_combo(
         key_part.trim().to_ascii_uppercase()
     };
     let named = match upper.as_str() {
+        "SHIFT" => Some(0x10),
+        "CTRL" | "CONTROL" => Some(0x11),
+        "ALT" => Some(0x12),
+        "META" | "WIN" | "SUPER" | "COMMAND" => Some(0x5B),
         "ENTER" | "RETURN" => Some(0x0D),
         "TAB" => Some(0x09),
         "ESC" | "ESCAPE" => Some(0x1B),

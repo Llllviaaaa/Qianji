@@ -161,6 +161,10 @@ export async function runComputerEngineAction(
     return { ok: res.ok, message: res.message, snapshot };
   }
 
+  if (action === "stop" && cs.takeover.status !== "idle") {
+    ctx.tracker.transitionTakeover(st, { action: "release", engine });
+  }
+
   if (engine === "local-linux") {
     if (action === "stop") {
       await ctx.localLinux.stop(ctx.wsl);
@@ -184,8 +188,9 @@ export async function runComputerEngineAction(
 
   if (engine === "local-win-pip") {
     ctx.setWinPipStatus(
-      action === "stop" ? await ctx.winPip.closeWindow(undefined, true) : await ctx.winPip.inspectStatus(),
+      action === "stop" ? await ctx.winPip.sleepDesktop() : await ctx.winPip.inspectStatus(),
     );
+    ctx.persist();
     const snapshot = await ctx.getSnapshot({ engine: "local-win-pip" });
     ctx.emitComputerEvent({ kind: "snapshot", snapshot });
     return { ok: true, message: `Windows 独立子会话桌面已执行 ${action}`, snapshot };
@@ -203,6 +208,10 @@ export async function runComputerEngineAction(
     return { ok: res.ok, message: res.message, snapshot };
   }
   const snapshot = await ctx.getSnapshot({ engine });
+  if (action === "stop") {
+    ctx.emitComputerEvent({ kind: "snapshot", snapshot });
+    return { ok: true, message: "远程电脑当前处于休眠待命状态", snapshot };
+  }
   return { ok: false, message: "未找到可用的远程节点配置", snapshot };
 }
 
