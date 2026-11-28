@@ -1,0 +1,77 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "Rice.moc3",
+    "Textures": [
+      "Rice.2048/texture_00.png",
+      "Rice.2048/texture_01.png"
+    ],
+    "Physics": "Rice.physics3.json",
+    "DisplayInfo": "Rice.cdi3.json",
+    "Motions": {
+      "Idle": [
+        {
+          "File": "motions/idle.motion3.json"
+        }
+      ],
+      "TapBody": [
+        {
+          "File": "motions/mtn_01.motion3.json"
+        },
+        {
+          "File": "motions/mtn_02.motion3.json"
+        },
+        {
+          "File": "motions/mtn_03.motion3.json"
+        }
+      ]
+    },
+    "Expressions": [
+      {
+        "Name": "exp_calm",
+        "File": "expressions/exp_calm.exp3.json"
+      },
+      {
+        "Name": "exp_arcane_circle",
+        "File": "expressions/exp_arcane_circle.exp3.json"
+      },
+      {
+        "Name": "exp_mystic_flame",
+        "File": "expressions/exp_mystic_flame.exp3.json"
+      },
+      {
+        "Name": "exp_grand_sigil",
+        "File": "expressions/exp_grand_sigil.exp3.json"
+      },
+      {
+        "Name": "exp_wink",
+        "File": "expressions/exp_wink.exp3.json"
+      },
+      {
+        "Name": "exp_meditate",
+        "File": "expressions/exp_meditate.exp3.json"
+      }
+    ]
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": [
+        "ParamEyeLOpen",
+        "ParamEyeROpen"
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": []
+    }
+  ],
+  "HitAreas": [
+    {
+      "Id": "HitAreaBody",
+      "Name": "Body"
+    }
+  ]
+}

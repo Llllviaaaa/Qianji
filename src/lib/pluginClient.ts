@@ -15,6 +15,7 @@ import type {
   PluginReloadParams,
   PluginRemoveParams,
   PluginReportClientErrorParams,
+  PluginSetScopeParams,
   PluginToggleParams,
   PluginUpdateParams,
   WorkspaceTrustChangedNotification,
@@ -49,6 +50,10 @@ export const pluginClient = {
 
   disable(params: PluginToggleParams): Promise<PluginMutationResult> {
     return harnessRuntimes.call<PluginMutationResult>("plugin.disable", withWorkspace({ ...params }));
+  },
+
+  setScope(params: PluginSetScopeParams): Promise<PluginMutationResult> {
+    return harnessRuntimes.call<PluginMutationResult>("plugin.setScope", withWorkspace({ ...params }));
   },
 
   configure(params: PluginConfigureParams): Promise<PluginMutationResult> {

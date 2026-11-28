@@ -1,0 +1,1339 @@
+/*
+ * Qianji Bot Mode — Muse Scheduled Tasks Modal, Cadence Editor & 2-Column Activity Trace
+ * (`src/styles/bot-scheduled-trace.css`, imported inside `@layer components`).
+ *
+ * Uses authoritative `--qj-*` and `--muse-*` semantic tokens for 100% Dark/Light parity.
+ */
+
+.qj-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 1. Companion Right Sheet Scheduled & Activity Interactive Upgrades ── */
+
+.qj-sheet-section-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.qj-sheet-section-head .qj-sheet-collapse-btn {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.qj-sheet-sched-add-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.qj-sheet-sched-add-btn:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.qj-sheet-sched-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 12px;
+  padding-right: 4px;
+  transition: background-color 140ms ease;
+}
+
+.qj-sheet-sched-item:hover {
+  background: var(--qj-bg-hover);
+}
+
+.qj-sheet-sched-item .qj-sheet-patrol-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.qj-sheet-sched-item .qj-sheet-patrol-toggle:hover {
+  background: transparent;
+}
+
+.qj-sheet-patrol-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.qj-sheet-patrol-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-sheet-routine-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.qj-sheet-routine-badge.paused,
+.qj-sheet-heart-badge:not(.active) {
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-muted);
+}
+
+.qj-sheet-quick-run-btn,
+.qj-sheet-handoff-quick-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--qj-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.qj-sheet-sched-item:hover .qj-sheet-quick-run-btn,
+.qj-sheet-sched-item:focus-within .qj-sheet-quick-run-btn,
+.qj-sheet-activity-item-wrap:hover .qj-sheet-handoff-quick-btn,
+.qj-sheet-activity-item-wrap:focus-within .qj-sheet-handoff-quick-btn {
+  opacity: 1;
+}
+
+.qj-sheet-quick-run-btn:hover:not(:disabled),
+.qj-sheet-handoff-quick-btn:hover {
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+}
+
+.qj-sheet-quick-run-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.qj-sheet-activity-item-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 12px;
+  padding-right: 4px;
+  transition: background-color 140ms ease;
+}
+
+.qj-sheet-activity-item-wrap:hover {
+  background: var(--qj-bg-hover);
+}
+
+button.qj-sheet-activity-row {
+  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.qj-sheet-activity-item-wrap button.qj-sheet-activity-row.interactive:hover {
+  background: transparent;
+}
+
+.qj-sheet-activity-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ── 2. Muse `预定任务` Dialog (`560px`, `24px` radius) ── */
+
+.qj-bot-sched-modal {
+  width: 560px;
+  max-width: 94vw;
+  max-height: 86vh;
+  border-radius: 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.qj-sched-head {
+  padding: 20px 22px 14px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.qj-sched-editor-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qj-sched-head-titles {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.qj-sched-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 620;
+  letter-spacing: -0.015em;
+  color: var(--qj-text-primary);
+}
+
+.qj-sched-title-compact {
+  font-size: 16.5px;
+}
+
+.qj-sched-subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--qj-text-secondary);
+}
+
+.qj-sched-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.qj-sched-new-pill {
+  height: 32px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--muse-primary-pill-bg);
+  color: var(--muse-primary-pill-fg);
+  font-size: 12.5px;
+  font-weight: 560;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: opacity 140ms ease, transform 120ms ease;
+}
+
+.qj-sched-new-pill:hover {
+  opacity: 0.9;
+}
+
+.qj-sched-new-pill:active {
+  transform: scale(0.97);
+}
+
+.qj-sched-body {
+  padding: 0 22px 22px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Natural-Language Smart Quick-Create Bar */
+.qj-sched-nl-card {
+  padding: 11px 13px;
+  border-radius: 18px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.qj-sched-nl-card:focus-within {
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 55%, var(--qj-border-strong));
+  background: color-mix(in srgb, var(--qj-bg-subtle) 85%, var(--qj-bg-surface));
+}
+
+.qj-sched-nl-input-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.qj-sched-nl-sparkle {
+  color: var(--qj-brand-primary);
+  flex-shrink: 0;
+}
+
+.qj-sched-nl-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--qj-text-primary);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.qj-sched-nl-input::placeholder {
+  color: var(--qj-text-muted);
+}
+
+.qj-sched-nl-recog-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 7px;
+  border-top: 1px solid var(--qj-border-subtle);
+}
+
+.qj-sched-nl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+  font-size: 11.5px;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+}
+
+.qj-sched-nl-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.qj-sched-ghost-pill {
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--qj-border-default);
+  border-radius: 9999px;
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  font-size: 12px;
+  font-weight: 520;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.qj-sched-ghost-pill:hover:not(:disabled) {
+  background: var(--qj-bg-hover);
+}
+
+.qj-sched-create-pill {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--qj-brand-primary);
+  color: var(--qj-brand-contrast);
+  font-size: 12px;
+  font-weight: 560;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.qj-sched-create-pill:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+.qj-sched-create-pill:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Grouped Routine List */
+.qj-sched-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.qj-sched-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.qj-sched-group-head {
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 560;
+  color: var(--qj-text-muted);
+}
+
+.qj-sched-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qj-sched-row-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-subtle);
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.qj-sched-row-card:hover {
+  background: var(--qj-bg-hover);
+}
+
+.qj-sched-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.qj-sched-icon-circle {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.qj-sched-icon-circle.heartbeat {
+  background: rgba(244, 63, 94, 0.14);
+  color: #f43f5e;
+}
+
+.qj-sched-icon-circle.routine {
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+}
+
+.qj-sched-icon-circle.paused {
+  background: var(--qj-bg-elevated);
+  color: var(--qj-text-muted);
+}
+
+.qj-sched-row-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qj-sched-row-title-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.qj-sched-row-title {
+  font-size: 13.5px;
+  font-weight: 580;
+  color: var(--qj-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-sched-running-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--qj-brand-primary);
+  flex-shrink: 0;
+}
+
+.qj-sched-row-meta {
+  font-size: 12px;
+  color: var(--qj-text-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-sched-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.qj-sched-play-btn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.qj-sched-play-btn:hover:not(:disabled) {
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+}
+
+.qj-sched-play-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Accessible Muse Toggle Switch */
+.qj-sched-switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  padding: 2px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--qj-bg-elevated);
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.qj-sched-switch[aria-checked="true"] {
+  background: var(--qj-brand-primary);
+}
+
+.qj-sched-switch-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+  transform: translateX(0);
+  transition: transform 160ms var(--qj-morph-ease);
+  pointer-events: none;
+}
+
+.qj-sched-switch[aria-checked="true"] .qj-sched-switch-thumb {
+  transform: translateX(16px);
+}
+
+/* ── 3. Single Task Detail & `运行记录` Inspector ────────────────────── */
+
+.qj-sched-detail-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.qj-sched-detail-topbar {
+  padding: 16px 22px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.qj-sched-back-btn {
+  height: 30px;
+  padding: 0 11px 0 8px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--muse-soft-fill);
+  color: var(--qj-text-primary);
+  font-size: 12.5px;
+  font-weight: 540;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.qj-sched-back-btn:hover {
+  background: var(--qj-bg-hover);
+}
+
+.qj-sched-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.qj-sched-status-pill {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 580;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.qj-sched-status-pill.enabled {
+  background: var(--muse-primary-pill-bg);
+  color: var(--muse-primary-pill-fg);
+}
+
+.qj-sched-status-pill.paused {
+  background: var(--qj-bg-elevated);
+  color: var(--qj-text-secondary);
+}
+
+.qj-sched-status-pill.running {
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+}
+
+.qj-sched-detail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.qj-sched-detail-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.qj-sched-detail-hero-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.qj-sched-detail-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 640;
+  letter-spacing: -0.015em;
+  color: var(--qj-text-primary);
+}
+
+.qj-sched-detail-cadence {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--qj-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.qj-sched-detail-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.qj-sched-prompt-box {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-subtle);
+  font-size: 13px;
+  line-height: 1.58;
+  color: var(--qj-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.qj-sched-runs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qj-sched-runs-head {
+  width: 100%;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--qj-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.qj-sched-runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qj-sched-runs-empty {
+  padding: 20px 14px;
+  border-radius: 14px;
+  background: var(--muse-soft-fill);
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--qj-text-muted);
+}
+
+.qj-sched-run-card {
+  border-radius: 14px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-subtle);
+  overflow: hidden;
+}
+
+.qj-sched-run-row {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--qj-text-primary);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.qj-sched-run-row:hover {
+  background: var(--qj-bg-hover);
+}
+
+.qj-sched-run-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.qj-sched-run-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.qj-sched-run-dot.ok {
+  background: var(--qj-status-success);
+}
+
+.qj-sched-run-dot.err {
+  background: var(--qj-status-danger);
+}
+
+.qj-sched-run-dot.run {
+  background: var(--qj-brand-primary);
+}
+
+.qj-sched-run-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--qj-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.qj-sched-run-expand {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--qj-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.qj-sched-run-output {
+  margin: 0;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--qj-bg-app);
+  font-family: var(--qj-font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--qj-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.qj-sched-run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.qj-sched-detail-foot {
+  padding: 12px 22px 18px;
+  border-top: 1px solid var(--qj-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.qj-sched-danger-pill {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--qj-status-danger) 30%, transparent);
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--qj-status-danger) 12%, transparent);
+  color: var(--qj-status-danger);
+  font-size: 12.5px;
+  font-weight: 560;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.qj-sched-danger-pill:hover {
+  background: color-mix(in srgb, var(--qj-status-danger) 20%, transparent);
+}
+
+/* ── 4. Structured Cadence Editor ─────────────────────────────────────── */
+
+.qj-sched-editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.qj-sched-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qj-sched-label {
+  font-size: 12px;
+  font-weight: 580;
+  color: var(--qj-text-secondary);
+}
+
+.qj-sched-input,
+.qj-sched-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--muse-soft-fill);
+  color: var(--qj-text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.qj-sched-textarea {
+  resize: vertical;
+  min-height: 82px;
+  line-height: 1.55;
+}
+
+.qj-sched-input:focus,
+.qj-sched-textarea:focus {
+  border-color: var(--qj-brand-primary);
+}
+
+.qj-sched-pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.qj-sched-choice-pill {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--qj-border-subtle);
+  border-radius: 9999px;
+  background: var(--muse-soft-fill);
+  color: var(--qj-text-secondary);
+  font-size: 12px;
+  font-weight: 530;
+  cursor: pointer;
+}
+
+.qj-sched-choice-pill:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.qj-sched-choice-pill.active {
+  background: var(--qj-brand-primary);
+  border-color: var(--qj-brand-primary);
+  color: var(--qj-brand-contrast);
+  font-weight: 580;
+}
+
+.qj-sched-cadence-params {
+  padding: 11px 13px;
+  border-radius: 14px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-subtle);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.qj-sched-time-input {
+  width: 72px;
+  padding: 6px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.qj-sched-weekday-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--qj-border-subtle);
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-secondary);
+  font-size: 12px;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.qj-sched-weekday-btn.active {
+  background: var(--qj-brand-primary);
+  border-color: var(--qj-brand-primary);
+  color: var(--qj-brand-contrast);
+}
+
+/* ── 5. Muse Two-Column `活动详情` Step-by-Step Trace Modal (`760px × 500px`) ── */
+
+.qj-bot-trace-modal {
+  width: 800px;
+  max-width: 95vw;
+  height: 540px;
+  max-height: 88vh;
+  border-radius: 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.qj-trace-head {
+  min-height: 62px;
+  padding: 15px 20px 14px;
+  border-bottom: 1px solid var(--qj-border-default);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.qj-trace-head-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.qj-trace-head-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qj-trace-head-clock {
+  font-size: 11.5px;
+  color: var(--qj-text-muted);
+}
+
+.qj-trace-status-pill {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.qj-trace-status-pill.completed {
+  background: color-mix(in srgb, var(--qj-status-success) 15%, transparent);
+  color: var(--qj-status-success);
+}
+
+.qj-trace-status-pill.running {
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+}
+
+.qj-trace-status-pill.waiting {
+  background: color-mix(in srgb, var(--qj-status-warning) 16%, transparent);
+  color: var(--qj-status-warning);
+}
+
+.qj-trace-status-pill.error {
+  background: color-mix(in srgb, var(--qj-status-danger) 15%, transparent);
+  color: var(--qj-status-danger);
+}
+
+.qj-trace-head-title {
+  margin: 0;
+  font-size: 16.5px;
+  font-weight: 630;
+  line-height: 1.3;
+  color: var(--qj-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-trace-head-subtitle {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--qj-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-trace-columns {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.qj-trace-step-list {
+  width: 268px;
+  flex: 0 0 268px;
+  border-right: 1px solid var(--qj-border-default);
+  padding: 12px 10px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: color-mix(in srgb, var(--qj-bg-app) 55%, var(--muse-dialog-bg));
+  box-sizing: border-box;
+}
+
+.qj-trace-group-label {
+  padding: 8px 10px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--qj-text-muted);
+}
+
+.qj-trace-step-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.qj-trace-step-sub {
+  font-size: 11px;
+  font-weight: 450;
+  color: var(--qj-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-trace-step-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--qj-text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  transition: background-color 130ms ease, color 130ms ease;
+}
+
+.qj-trace-step-btn:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.qj-trace-step-btn.active {
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-primary);
+  font-weight: 580;
+}
+
+.qj-trace-step-glyph {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.qj-trace-step-glyph.start {
+  color: var(--qj-brand-primary);
+}
+
+.qj-trace-step-glyph.tool {
+  color: var(--qj-status-success);
+}
+
+.qj-trace-step-glyph.done {
+  background: color-mix(in srgb, var(--qj-status-success) 16%, transparent);
+  color: var(--qj-status-success);
+}
+
+.qj-trace-step-glyph.error {
+  background: color-mix(in srgb, var(--qj-status-danger) 16%, transparent);
+  color: var(--qj-status-danger);
+}
+
+.qj-trace-step-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-trace-step-dur {
+  font-size: 11px;
+  color: var(--qj-text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.qj-trace-inspector {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.qj-trace-inspector-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.qj-trace-inspector-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.qj-trace-inspector-h {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 620;
+  color: var(--qj-text-primary);
+}
+
+.qj-trace-inspector-time {
+  font-size: 12px;
+  color: var(--qj-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.qj-trace-summary-box,
+.qj-trace-markdown-box {
+  padding: 15px 18px;
+  border-radius: 16px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-subtle);
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--qj-text-primary);
+  word-break: break-word;
+}
+
+.qj-trace-summary-box {
+  white-space: pre-wrap;
+}
+
+.qj-trace-step-outcome-banner {
+  padding: 9px 13px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--qj-brand-primary) 8%, var(--muse-soft-fill));
+  border: 1px solid var(--qj-border-subtle);
+  font-size: 12.5px;
+  color: var(--qj-text-primary);
+}
+
+.qj-trace-meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.qj-trace-meta-chip {
+  padding: 3px 9px;
+  border-radius: 9999px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-subtle);
+  font-size: 11.5px;
+  color: var(--qj-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.qj-bset-embedded-providers {
+  border-radius: 18px;
+  background: var(--qj-bg-surface);
+  border: 1px solid var(--qj-border-subtle);
+  padding: 14px;
+}
+
+.qj-trace-code-card {
+  border-radius: 14px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--dsh-claude-code-block-bg);
+  overflow: hidden;
+}
+
+.qj-trace-code-head {
+  padding: 7px 12px;
+  background: var(--qj-bg-subtle);
+  border-bottom: 1px solid var(--qj-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--qj-font-mono);
+  font-size: 11.5px;
+  color: var(--qj-text-secondary);
+}
+
+.qj-trace-copy-btn {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  font-family: var(--qj-font-sans);
+  font-size: 11px;
+  font-weight: 540;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.qj-trace-copy-btn:hover {
+  background: var(--qj-bg-hover);
+}
+
+.qj-trace-code-pre,
+.qj-trace-output-pre {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 150px;
+  overflow: auto;
+  font-family: var(--qj-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--qj-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.qj-trace-output-pre {
+  border-radius: 12px;
+  background: var(--muse-soft-fill);
+  border: 1px solid var(--qj-border-subtle);
+  color: var(--qj-text-secondary);
+}
+
+.qj-trace-meta-line {
+  font-family: var(--qj-font-mono);
+  font-size: 11.5px;
+  color: var(--qj-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.qj-trace-foot {
+  padding: 12px 20px;
+  border-top: 1px solid var(--qj-border-default);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}

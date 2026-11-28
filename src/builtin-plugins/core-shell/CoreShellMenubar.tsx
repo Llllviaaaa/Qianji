@@ -422,6 +422,10 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
         )}
       </div>
 
+      <div className="window-menubar-center" data-tauri-drag-region="">
+        <CoreShellModeSwitch ctx={props.ctx} />
+      </div>
+
       <div className="window-menubar-right" data-tauri-drag-region="">
         {hasWorkbenchControls && (
           <div
@@ -438,7 +442,6 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
             {props.renderSlot("workbench.topbarControls", { cwd, sessionFile })}
           </div>
         )}
-        <CoreShellModeSwitch ctx={props.ctx} />
         <div className="window-controls">
           <button
             type="button"

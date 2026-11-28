@@ -5,6 +5,15 @@
  * feed/ideas/goals/spaces/library/inbox, Local & Remote Virtual Server management,
  * and cross-mode Agent Workbench handoff.
  */
+import type { BotConnectorItem, BotConnectorsConfig } from "./bot-connectors.ts";
+import type {
+  BotFeedItem,
+  BotGoalItem,
+  BotGoalViewPrefs,
+  BotIdeaSection,
+} from "./bot-discovery.ts";
+export * from "./bot-connectors.ts";
+export * from "./bot-discovery.ts";
 
 export type UiShellMode = "agent" | "bot";
 
@@ -20,6 +29,10 @@ export interface BotProfile {
   customAvatarDataUrl?: string;
 }
 
+export type BotSideThreadStatus = "idle" | "running" | "awaiting-approval" | "error";
+
+export type BotSideThreadSource = "chat" | "scheduled" | "space" | "handoff";
+
 export interface BotSideThreadInfo {
   id: string;
   sessionId: string;
@@ -27,6 +40,14 @@ export interface BotSideThreadInfo {
   title: string;
   updatedAt: number;
   snippet?: string;
+  createdAt?: number;
+  pinned?: boolean;
+  archived?: boolean;
+  userRenamed?: boolean;
+  messageCount?: number;
+  status?: BotSideThreadStatus;
+  source?: BotSideThreadSource;
+  scheduledTaskId?: string;
 }
 
 export interface BotTaskHandoffPayload {
@@ -40,53 +61,62 @@ export interface BotTaskHandoffPayload {
   highlightLine?: number;
 }
 
+export type BotActivityTraceStepIconKind =
+  | "start"
+  | "tool"
+  | "browser"
+  | "mail"
+  | "file"
+  | "schedule"
+  | "goal"
+  | "space"
+  | "subagent"
+  | "done"
+  | "error";
+
+export interface BotActivityTraceStep {
+  id: string;
+  kind: "start" | "tool" | "summary" | "done";
+  title: string;
+  subtitle?: string;
+  status: "completed" | "running" | "error";
+  iconKind?: BotActivityTraceStepIconKind;
+  groupLabel?: string;
+  reportMarkdown?: string;
+  toolName?: string;
+  commandOrInput?: string;
+  cwd?: string;
+  exitCode?: number;
+  durationMs?: number;
+  output?: string;
+}
+
+export type BotActivityStatus = "completed" | "running" | "error" | "interrupted";
+
+export type BotActivityKind = "patrol" | "scheduled" | "browser" | "mail" | "chat" | "goal" | "space" | "system";
+
 export interface BotActivityEntry {
   id: string;
   dateGroup: string;
   title: string;
+  subtitle?: string;
   description: string;
+  statusTitle?: string;
+  finishMessage?: string;
   timeLabel: string;
   createdAt: number;
   sessionId?: string;
+  turnStartSeq?: number;
+  turnEndSeq?: number;
   handoff?: BotTaskHandoffPayload;
+  status?: BotActivityStatus;
+  kind?: BotActivityKind;
+  steps?: BotActivityTraceStep[];
 }
 
 export interface BotActivityGroup {
   date: string;
   items: BotActivityEntry[];
-}
-
-export interface BotFeedItem {
-  id: string;
-  title: string;
-  timeLabel: string;
-  body: string;
-  actionLabel: string;
-  seedPrompt: string;
-  createdAt: number;
-}
-
-export interface BotIdeaItem {
-  id: string;
-  icon: string;
-  title: string;
-  description: string;
-  seedPrompt: string;
-}
-
-export interface BotIdeaSection {
-  category: string | null;
-  items: BotIdeaItem[];
-}
-
-export interface BotGoalItem {
-  id: string;
-  title: string;
-  category: string;
-  summary: string;
-  status: "active" | "paused" | "completed";
-  updatedAt: number;
-  handoff?: BotTaskHandoffPayload;
 }
 
 export interface BotSpaceSummary {
@@ -119,7 +149,7 @@ export interface BotMediaItem {
 
 export interface BotInboxItem {
   id: string;
-  source?: "email" | "telegram" | "meeting";
+  source?: "email" | "telegram" | "meeting" | "github" | "notion";
   sender: string;
   subject: string;
   preview: string;
@@ -132,7 +162,15 @@ export interface BotInboxItem {
 
 export interface PendingBotApproval {
   id: string;
-  kind?: "shell" | "send-email" | "send-telegram" | "send-feishu";
+  kind?:
+    | "shell"
+    | "send-email"
+    | "send-telegram"
+    | "send-feishu"
+    | "send-slack"
+    | "github-comment"
+    | "notion-page"
+    | "trigger-webhook";
   title: string;
   commandSignature: string;
   summary: string;
@@ -184,6 +222,8 @@ export interface BotVirtualServerStatus {
     distroName?: string;
     kernelVersion?: string;
     vhdxPath?: string;
+    storageDir?: string;
+    customStorageDir?: string;
     isolationSummary?: string;
   };
   remote: {
@@ -204,13 +244,6 @@ export interface BotVirtualServerStatus {
   takeoverRequired?: boolean;
 }
 
-export interface BotConnectorItem {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-}
-
 export interface BotModelRef {
   provider: string;
   model: string;
@@ -227,58 +260,6 @@ export interface BotPacingConfig {
   quietHoursEnabled: boolean;
   quietHoursStart: string;
   quietHoursEnd: string;
-}
-
-export type BotEmailPreset = "qq" | "163" | "gmail" | "outlook" | "custom";
-
-export interface BotEmailConnectorConfig {
-  enabled: boolean;
-  preset: BotEmailPreset;
-  emailAddress: string;
-  imapHost: string;
-  imapPort: number;
-  imapTls: boolean;
-  smtpHost: string;
-  smtpPort: number;
-  smtpTls: boolean;
-  hasPassword?: boolean;
-  lastSyncAt?: number;
-  lastError?: string;
-}
-
-export interface BotCalendarConnectorConfig {
-  enabled: boolean;
-  icsUrl: string;
-  localIcsPath: string;
-  leadMinutes: number;
-  lastSyncAt?: number;
-  lastError?: string;
-}
-
-export interface BotProcessSensorConfig {
-  enabled: boolean;
-  watchedProcesses: string[];
-  lateNightCareEnabled: boolean;
-}
-
-export interface BotMeetingsImConfig {
-  meetingNotesEnabled: boolean;
-  meetingNotesDir: string;
-  telegramEnabled: boolean;
-  telegramChatId: string;
-  telegramApiBase?: string;
-  hasTelegramToken?: boolean;
-  feishuEnabled: boolean;
-  hasFeishuWebhook?: boolean;
-  lastSyncAt?: number;
-  lastError?: string;
-}
-
-export interface BotConnectorsConfig {
-  email: BotEmailConnectorConfig;
-  calendar: BotCalendarConnectorConfig;
-  processSensor: BotProcessSensorConfig;
-  meetingsIm: BotMeetingsImConfig;
 }
 
 export interface BotCalendarEventSummary {
@@ -316,6 +297,7 @@ export interface BotSnapshotResult {
   mainSessionId: string;
   mainSessionFile: string;
   botCwd: string;
+  customBotCwd?: string;
   profile: BotProfile;
   sideThreads: BotSideThreadInfo[];
   soulContent: string;
@@ -326,8 +308,10 @@ export interface BotSnapshotResult {
   pendingApprovals: PendingBotApproval[];
   recentApprovals: ResolvedBotApproval[];
   feed: BotFeedItem[];
+  feedInstructions?: string;
   ideaSections: BotIdeaSection[];
   goals: BotGoalItem[];
+  goalViewPrefs?: BotGoalViewPrefs;
   spaces: BotSpaceSummary[];
   documents: BotDocumentItem[];
   media: BotMediaItem[];
@@ -387,6 +371,34 @@ export interface BotHandoffCompleteParams {
 export interface BotHandoffCompleteResult {
   ok: true;
   activity: BotActivityEntry;
+}
+
+export interface BotSideChatUpdateParams {
+  id: string;
+  title?: string;
+  pinned?: boolean;
+  archived?: boolean;
+}
+
+export interface BotSideChatUpdateResult {
+  thread: BotSideThreadInfo | null;
+}
+
+export interface BotActivityGetTraceParams {
+  activityId?: string;
+  sessionId?: string;
+}
+
+export interface BotActivityGetTraceResult {
+  entry: BotActivityEntry | null;
+  steps: BotActivityTraceStep[];
+  summary: string;
+  sessionId?: string;
+}
+
+export interface BotThreadsRpcMethodMap {
+  "bot.sideChat.update": { params: BotSideChatUpdateParams; result: BotSideChatUpdateResult };
+  "bot.activity.getTrace": { params: BotActivityGetTraceParams; result: BotActivityGetTraceResult };
 }
 
 /** Namespace used inside session `custom` events for embedded Bot task reminder widgets. */

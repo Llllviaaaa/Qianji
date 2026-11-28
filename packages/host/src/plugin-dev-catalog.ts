@@ -50,6 +50,13 @@ export const HOST_SERVICE_CATALOG: readonly HostServiceCatalogEntry[] = [
     autoDispose: true,
   },
   {
+    name: "connectors",
+    plane: "host",
+    methods: ["register({ id, name?, tagline?, connect?, disconnect?, status?, patrol? })"],
+    autoDispose: true,
+    notes: ["Registers a Bot Mode Connector backed by this plugin; tools registered by the plugin inherit 4-tier & per-tool permission controls automatically."],
+  },
+  {
     name: "webServer",
     plane: "host",
     methods: ["register({ kind, path, handler })", "registerUpgrade({ path, handler })"],

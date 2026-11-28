@@ -1,16 +1,12 @@
 import {
   Check,
   ChevronDown,
-  ChevronUp,
-  CornerUpRight,
   File,
   Folder,
   GitBranch,
   Image as ImageIcon,
-  ListOrdered,
   Monitor,
   Search,
-  Trash2,
   X,
 } from "lucide-react";
 import type {
@@ -210,15 +206,7 @@ export function ComposerAttachmentStrip({
   );
 }
 
-export function ComposerQueuedDrawer({
-  pendingCount,
-  queuedMessages,
-  queueOpen,
-  setQueueOpen,
-  onMoveQueuedMessage,
-  onSteerQueuedMessage,
-  onRemoveQueuedMessage,
-}: {
+export function ComposerQueuedDrawer(_props: {
   pendingCount: number;
   queuedMessages: ManagedQueuedMessage[];
   queueOpen: boolean;
@@ -227,46 +215,7 @@ export function ComposerQueuedDrawer({
   onSteerQueuedMessage?: (id: string) => void | Promise<void>;
   onRemoveQueuedMessage?: (id: string) => void;
 }) {
-  if (pendingCount <= 0) return null;
-  return (
-    <div className={`composer-queue ${queueOpen ? "open" : ""}`}>
-      <button
-        type="button"
-        className="composer-queue-summary"
-        onClick={() => queuedMessages.length > 0 && setQueueOpen((value) => !value)}
-        aria-expanded={queuedMessages.length > 0 ? queueOpen : undefined}
-        title={queuedMessages.length > 0 ? "查看待处理消息" : "Agent 内部待处理消息"}
-      >
-        <ListOrdered size={14} />
-        <strong>{pendingCount} 条待处理</strong>
-        {queuedMessages.length > 0 && (queueOpen ? <ChevronDown size={14} /> : <ChevronUp size={14} />)}
-      </button>
-      {queueOpen && queuedMessages.length > 0 && (
-        <ol className="composer-queue-list" aria-label="待处理消息">
-          {queuedMessages.map((item, index) => (
-            <li key={item.id}>
-              <span className="composer-queue-order">{index + 1}</span>
-              <span className="composer-queue-copy" title={item.text || item.attachments.map((file) => file.fileName).join(", ")}>
-                {item.text || item.attachments.map((file) => file.fileName).join(", ")}
-              </span>
-              <span className="composer-queue-actions">
-                <button type="button" disabled={index === 0} onClick={() => onMoveQueuedMessage?.(item.id, -1)} title="上移">
-                  <ChevronUp size={14} />
-                </button>
-                <button type="button" disabled={index === queuedMessages.length - 1} onClick={() => onMoveQueuedMessage?.(item.id, 1)} title="下移">
-                  <ChevronDown size={14} />
-                </button>
-                <button type="button" onClick={() => void onSteerQueuedMessage?.(item.id)} title="立即作为调整发送">
-                  <CornerUpRight size={14} />
-                </button>
-                <button type="button" onClick={() => onRemoveQueuedMessage?.(item.id)} title="删除">
-                  <Trash2 size={14} />
-                </button>
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
+  return null;
 }
+
+export const ComposerQueue = ComposerQueuedDrawer;

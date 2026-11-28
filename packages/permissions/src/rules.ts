@@ -118,6 +118,14 @@ export function evaluateToolPermission(options: {
   const isMcpTool = tool.startsWith("mcp__");
   const isSubagent = tool === "delegate_task" || tool === "spawn_agent";
   const isSubagentControl = tool === "send_input" || tool === "wait_agent" || tool === "close_agent";
+  const isSwarmControl = tool === "swarm" || tool === "post_message" || tool === "swarm_tasks";
+  const isSwarmWorktreeMerge = tool === "swarm"
+    && (
+      ["merge", "merge_worktree", "mergeworktree", "merge-worktree", "apply", "apply_worktree"].includes(action)
+      || input.applyChanges === true
+      || input.mergeWorktree === true
+      || input.merge === true
+    );
   const isMemoryRead = tool === "desktop_memory" && (action === "read" || action === "list" || action === "search");
   const isMemoryWrite = tool === "desktop_memory" && !isMemoryRead;
   const isBgProcess = tool === "bg_process";
@@ -154,6 +162,8 @@ export function evaluateToolPermission(options: {
     "question",
     "ask_question",
     "request_permission",
+    "read_board",
+    "swarm_wait",
     "mcp_list_resources",
     "mcp_read_resource",
     "mcp_subscribe_resource",
@@ -168,7 +178,8 @@ export function evaluateToolPermission(options: {
     && !isInteractiveComputer
     && !isMemoryWrite
     && !isPluginManagerWrite
-    && !isBgProcessStop;
+    && !isBgProcessStop
+    && !isSwarmWorktreeMerge;
   const isKnownTool = isWrite
     || isShell
     || isBrowserTool
@@ -176,17 +187,18 @@ export function evaluateToolPermission(options: {
     || isMcpTool
     || isSubagent
     || isSubagentControl
+    || isSwarmControl
     || tool === "desktop_memory"
     || tool === "plugin_manager"
     || isBgProcess
     || isDeclaredReadOnly
     || knownReadOnlyTools.has(tool);
 
-  if (options.quickChat && (["read", "write", "edit", "apply_patch", "grep", "find", "diagnostics", "bash", "powershell", "shell", "exec", "bg_process", "plugin_manager"].includes(tool) || isSubagent || isSubagentControl)) {
+  if (options.quickChat && (["read", "write", "edit", "apply_patch", "grep", "find", "diagnostics", "bash", "powershell", "shell", "exec", "bg_process", "plugin_manager", "read_board", "swarm_wait"].includes(tool) || isSubagent || isSubagentControl || isSwarmControl)) {
     return { action: "block", reason: "Quick chat does not use local project files or shell commands" };
   }
 
-  if (mode === "read-only" && (isWrite || isShell || isInteractiveBrowser || isInteractiveComputer || (isMcpTool && !isDeclaredReadOnly) || isMemoryWrite || isPluginManagerWrite || isBgProcessStop)) {
+  if (mode === "read-only" && (isWrite || isShell || isInteractiveBrowser || isInteractiveComputer || (isMcpTool && !isDeclaredReadOnly) || isMemoryWrite || isPluginManagerWrite || isBgProcessStop || isSwarmWorktreeMerge)) {
     return { action: "block", reason: "Qianji is in read-only mode" };
   }
 

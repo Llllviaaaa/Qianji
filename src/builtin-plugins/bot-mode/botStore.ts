@@ -6,7 +6,9 @@ import type { Context } from "@deepseek-ai/cordis";
 import { useFrontendService } from "@qianji/client";
 import type {
   BotAvatarPresetId,
+  BotConnectorTestKind,
   BotDesktopNotificationPayload,
+  BotPluginConnectorCatalogItem,
   BotRemoteAuthMethod,
   BotServerActionKind,
   BotServerActionResult,
@@ -14,41 +16,57 @@ import type {
   BotSnapshotResult,
   BotSpaceSummary,
   BotTaskHandoffPayload,
+  McpStatusResult,
+  ScheduleListResult,
 } from "@qianji/protocol";
-import { FALLBACK_BOT_SNAPSHOT } from "./botFallbackData";
 import {
-  botDataStore,
-  botUiStore,
-  INITIAL_BOT_UI_STATE,
-  openBotModal,
-  patchBotUi,
-  useBotSnapshot,
-  useBotUiState,
-  type BotCompanionTab,
-  type BotLibrarySection,
-  type BotModalKind,
-  type BotRailView,
-  type BotScheduledSummary,
-  type BotSettingsTab,
-  type BotUiState,
-} from "./botUiAtoms";
+  applyScheduleRunNotification,
+  applyScheduleTaskNotification,
+  syncBotScheduledTasks,
+} from "./botScheduleStore";
+import { useBotDiscoveryActions } from "./botDiscoveryActions";
+import { botDataStore, botUiStore, patchBotUi } from "./botUiAtoms";
 
+export { DEFAULT_FEED_INSTRUCTIONS, FALLBACK_BOT_SNAPSHOT } from "./botFallbackData";
+export * from "./botUiAtoms";
 export {
-  botDataStore,
-  botUiStore,
-  FALLBACK_BOT_SNAPSHOT,
-  INITIAL_BOT_UI_STATE,
-  openBotModal,
-  patchBotUi,
-  useBotSnapshot,
-  useBotUiState,
-  type BotCompanionTab,
-  type BotLibrarySection,
-  type BotModalKind,
-  type BotRailView,
-  type BotScheduledSummary,
-  type BotSettingsTab,
-  type BotUiState,
+  discussInBot,
+  formatFeedEditionLabel,
+  formatFeedExactTimestamp,
+  formatFeedRelativeTime,
+  formatIdeaCapabilitiesBadge,
+  groupCompletedGoalsByMonth,
+  groupGoalTimelineByDate,
+  isDiscoverySplitEligible,
+  sortActiveGoals,
+  startInBotNow,
+} from "./botDiscoveryActions";
+export {
+  formatBotScheduleCadence,
+  formatRelativeNextRun,
+  parseNaturalScheduleInput,
+  useBotScheduleManager,
+  type BotScheduleFrequency,
+  type BotScheduleSaveDraft,
+  type NaturalScheduleParseResult,
+} from "./botScheduleStore";
+
+export type BotServerConfigPatch = {
+  mode?: BotServerMode;
+  cpuCores?: number;
+  memoryLimitGb?: number;
+  diskLimitGb?: number;
+  autoSleepIdle?: boolean;
+  storageDir?: string;
+  remoteHost?: string;
+  remotePort?: number;
+  remoteUser?: string;
+  remoteWorkDir?: string;
+  remoteAuthMethod?: BotRemoteAuthMethod;
+  remotePrivateKeyPath?: string;
+  remotePassword?: string;
+  sharedFolderAdd?: { path: string; access: "read-only" | "isolated-copy" };
+  sharedFolderRemove?: string;
 };
 
 export function useBotController(ctx?: Context) {
@@ -60,35 +78,24 @@ export function useBotController(ctx?: Context) {
   const refresh = useCallback(async () => {
     if (rpcService === undefined) return;
     try {
-      const [snap, memRes, schedRes] = await Promise.all([
+      const [snap, memRes, schedRes, pluginCatRes, mcpRes] = await Promise.all([
         rpcService.call<BotSnapshotResult>("bot.getSnapshot", {}),
         rpcService.call<{ content?: string }>("memory.get", {}).catch(() => null),
+        rpcService.call<ScheduleListResult>("schedule.list", {}).catch(() => null),
         rpcService
-          .call<{ tasks?: Array<{ id: string; name: string; schedule?: { kind?: string; minutes?: number; expr?: string }; enabled?: boolean }> }>(
-            "schedule.list",
-            {},
-          )
+          .call<{ items?: BotPluginConnectorCatalogItem[] }>("bot.connector.pluginCatalog", {})
           .catch(() => null),
+        rpcService.call<McpStatusResult>("mcp.status", {}).catch(() => null),
       ]);
       if (snap && typeof snap.mainSessionId === "string") {
         botDataStore.set(snap);
       }
-      if (memRes && typeof memRes.content === "string") {
-        patchBotUi({ memoryContent: memRes.content });
-      }
-      if (schedRes && Array.isArray(schedRes.tasks) && schedRes.tasks.length > 0) {
-        patchBotUi({
-          scheduledTasks: schedRes.tasks.map((t) => ({
-            id: t.id,
-            name: t.name,
-            cronOrInterval:
-              t.schedule?.kind === "interval" && t.schedule.minutes
-                ? `每${t.schedule.minutes}分钟`
-                : (t.schedule?.expr ?? "定时巡检"),
-            enabled: t.enabled !== false,
-          })),
-        });
-      }
+      patchBotUi({
+        ...(memRes && typeof memRes.content === "string" ? { memoryContent: memRes.content } : {}),
+        ...(Array.isArray(pluginCatRes?.items) ? { pluginConnectors: pluginCatRes.items } : {}),
+        ...(Array.isArray(mcpRes?.servers) ? { mcpStatus: mcpRes.servers } : {}),
+      });
+      syncBotScheduledTasks(schedRes?.tasks ?? null, snap?.pacing ?? botDataStore.get().pacing);
     } catch {
       // Offline before Host finishes connecting.
     }
@@ -97,13 +104,25 @@ export function useBotController(ctx?: Context) {
   useEffect(() => {
     void refresh();
     if (rpcService === undefined) return undefined;
-    const offUpdated = rpcService.onNotification("bot/updated", () => {
-      void refresh();
+    const offUpdated = rpcService.onNotification("bot/updated", () => void refresh());
+    const offPluginChanged = rpcService.onNotification("plugin/changed", () => void refresh());
+    const offMcpChanged = rpcService.onNotification("mcp/changed", (raw) => {
+      const payload = raw as McpStatusResult | undefined;
+      if (Array.isArray(payload?.servers)) {
+        patchBotUi({ mcpStatus: payload.servers });
+      } else {
+        void refresh();
+      }
     });
+    const offSchedTask = rpcService.onNotification("schedule/task", applyScheduleTaskNotification);
+    const offSchedRun = rpcService.onNotification("schedule/run", applyScheduleRunNotification);
     const offNotif = rpcService.onNotification("bot/desktopNotification", (raw) => {
       const payload = raw as BotDesktopNotificationPayload | undefined;
       if (!payload?.title) return;
-      navigationService?.showToast(`${payload.title}：${payload.body}`, payload.urgency === "urgent" ? "warning" : "info");
+      navigationService?.showToast(
+        `${payload.title}：${payload.body}`,
+        payload.urgency === "urgent" ? "warning" : "info",
+      );
       if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
         const note = new Notification(payload.title, { body: payload.body });
         note.onclick = () => window.focus?.();
@@ -112,6 +131,10 @@ export function useBotController(ctx?: Context) {
     });
     return () => {
       offUpdated();
+      offPluginChanged();
+      offMcpChanged();
+      offSchedTask();
+      offSchedRun();
       offNotif();
     };
   }, [navigationService, refresh, rpcService]);
@@ -127,12 +150,8 @@ export function useBotController(ctx?: Context) {
           ...(input.customAvatarDataUrl !== undefined ? { customAvatarDataUrl: input.customAvatarDataUrl } : {}),
         },
       }));
-      try {
-        await rpcService?.call("bot.updateProfile", input);
-        await refresh();
-      } catch {
-        // Optimistic update preserved.
-      }
+      await rpcService?.call("bot.updateProfile", input).catch(() => undefined);
+      await refresh();
     },
     [refresh, rpcService],
   );
@@ -148,7 +167,6 @@ export function useBotController(ctx?: Context) {
         await refresh();
         if (res?.thread?.sessionId) {
           patchBotUi({ activeSessionId: res.thread.sessionId, activeView: "chat", chatDrawerOpen: true });
-          return;
         }
       } catch {
         navigationService?.showToast("创建旁聊失败，请确认后台服务已连接", "error");
@@ -157,15 +175,29 @@ export function useBotController(ctx?: Context) {
     [navigationService, refresh, rpcService],
   );
 
+  const updateSideChat = useCallback(
+    async (id: string, patch: { title?: string; pinned?: boolean; archived?: boolean }) => {
+      botDataStore.set((prev) => ({
+        ...prev,
+        sideThreads: prev.sideThreads.map((th) => (th.id === id ? ({ ...th, ...patch } as typeof th) : th)),
+      }));
+      await rpcService?.call("bot.sideChat.update", { id, ...patch }).catch(() => undefined);
+      await refresh();
+    },
+    [refresh, rpcService],
+  );
+
   const deleteSideChat = useCallback(
     async (id: string) => {
-      try {
-        await rpcService?.call("bot.sideChat.delete", { id });
-        await refresh();
-        patchBotUi({ activeSessionId: null });
-      } catch {
-        // Ignore
-      }
+      const target = botDataStore.get().sideThreads.find((t) => t.id === id);
+      const wasActive = target !== undefined && botUiStore.get().activeSessionId === target.sessionId;
+      botDataStore.set((prev) => ({
+        ...prev,
+        sideThreads: prev.sideThreads.filter((t) => t.id !== id),
+      }));
+      if (wasActive) patchBotUi({ activeSessionId: null });
+      await rpcService?.call("bot.sideChat.delete", { id }).catch(() => undefined);
+      await refresh();
     },
     [refresh, rpcService],
   );
@@ -189,12 +221,8 @@ export function useBotController(ctx?: Context) {
   const saveSoul = useCallback(
     async (content: string) => {
       botDataStore.set((prev) => ({ ...prev, soulContent: content, soulUpdatedAt: "刚刚" }));
-      try {
-        await rpcService?.call("bot.soul.save", { content });
-        await refresh();
-      } catch {
-        // Keep local update
-      }
+      await rpcService?.call("bot.soul.save", { content }).catch(() => undefined);
+      await refresh();
       navigationService?.showToast("已保存 SOUL.md", "info");
     },
     [navigationService, refresh, rpcService],
@@ -203,12 +231,8 @@ export function useBotController(ctx?: Context) {
   const saveMemory = useCallback(
     async (content: string) => {
       patchBotUi({ memoryContent: content });
-      try {
-        await rpcService?.call("memory.save", { content });
-        await refresh();
-      } catch {
-        // Keep local update
-      }
+      await rpcService?.call("memory.save", { content }).catch(() => undefined);
+      await refresh();
       navigationService?.showToast("已保存长期记忆", "info");
     },
     [navigationService, refresh, rpcService],
@@ -241,32 +265,7 @@ export function useBotController(ctx?: Context) {
     [refresh, rpcService],
   );
 
-  const createGoal = useCallback(
-    async (title: string, category: string) => {
-      const trimmed = title.trim();
-      if (trimmed === "") return;
-      await rpcService?.call("bot.goals.create", { title: trimmed, category }).catch(() => undefined);
-      await refresh();
-      navigationService?.showToast(`已添加目标：${trimmed}`, "info");
-    },
-    [navigationService, refresh, rpcService],
-  );
-
-  const deleteGoal = useCallback(
-    async (id: string) => {
-      await rpcService?.call("bot.goals.delete", { id }).catch(() => undefined);
-      await refresh();
-    },
-    [refresh, rpcService],
-  );
-
-  const createFeedItem = useCallback(
-    async (title: string, body: string, seedPrompt?: string) => {
-      await rpcService?.call("bot.feed.create", { title, body, seedPrompt }).catch(() => undefined);
-      await refresh();
-    },
-    [refresh, rpcService],
-  );
+  const discoveryActions = useBotDiscoveryActions({ rpcService, navigationService, refresh });
 
   const enableInbox = useCallback(async () => {
     await rpcService?.call("bot.inbox.enable", {}).catch(() => undefined);
@@ -287,6 +286,7 @@ export function useBotController(ctx?: Context) {
       const res = await rpcService?.call<{ snapshot: BotSnapshotResult }>("bot.configure", patch).catch(() => null);
       if (res?.snapshot) {
         botDataStore.set(res.snapshot);
+        syncBotScheduledTasks(null, res.snapshot.pacing);
       } else {
         await refresh();
       }
@@ -295,7 +295,7 @@ export function useBotController(ctx?: Context) {
   );
 
   const testConnector = useCallback(
-    async (kind: "email" | "calendar" | "processes" | "meetings_im") => {
+    async (kind: BotConnectorTestKind) => {
       patchBotUi({ serverBusy: true });
       try {
         const res = await rpcService?.call<{ ok: boolean; message: string; snapshot: BotSnapshotResult }>(
@@ -331,9 +331,7 @@ export function useBotController(ctx?: Context) {
         { force: true },
       );
       if (res?.snapshot) botDataStore.set(res.snapshot);
-      if (res?.summary) {
-        navigationService?.showToast("主动贴心巡检完成，已整理简报与建议", "info");
-      }
+      if (res?.summary) navigationService?.showToast("主动贴心巡检完成，已整理简报与建议", "info");
       return res ?? null;
     } finally {
       patchBotUi({ serverBusy: false });
@@ -341,22 +339,7 @@ export function useBotController(ctx?: Context) {
   }, [navigationService, rpcService]);
 
   const configureServer = useCallback(
-    async (patch: {
-      mode?: BotServerMode;
-      cpuCores?: number;
-      memoryLimitGb?: number;
-      diskLimitGb?: number;
-      autoSleepIdle?: boolean;
-      remoteHost?: string;
-      remotePort?: number;
-      remoteUser?: string;
-      remoteWorkDir?: string;
-      remoteAuthMethod?: BotRemoteAuthMethod;
-      remotePrivateKeyPath?: string;
-      remotePassword?: string;
-      sharedFolderAdd?: { path: string; access: "read-only" | "isolated-copy" };
-      sharedFolderRemove?: string;
-    }) => {
+    async (patch: BotServerConfigPatch) => {
       await rpcService?.call("bot.server.configure", patch).catch(() => undefined);
       await refresh();
     },
@@ -365,7 +348,13 @@ export function useBotController(ctx?: Context) {
 
   const runServerAction = useCallback(
     async (action: BotServerActionKind) => {
-      patchBotUi({ serverBusy: true, serverFeedback: action === "provision-local" ? "正在拉取 Alpine rootfs 并初始化独立 WSL2 虚拟机（首次约 10–30 秒）…" : null });
+      patchBotUi({
+        serverBusy: true,
+        serverFeedback:
+          action === "provision-local"
+            ? "正在拉取 Alpine rootfs 并初始化独立 WSL2 虚拟机（首次约 10–30 秒）…"
+            : null,
+      });
       try {
         const res = await rpcService?.call<BotServerActionResult>("bot.server.action", { action });
         if (res) {
@@ -409,27 +398,21 @@ export function useBotController(ctx?: Context) {
   );
 
   const jumpToChatWithPrompt = useCallback((prompt: string) => {
-    patchBotUi({
-      activeView: "chat",
-      activeSessionId: null,
-      composerDraft: prompt,
-      modal: null,
-    });
+    patchBotUi({ activeView: "chat", activeSessionId: null, composerDraft: prompt, modal: null });
   }, []);
 
   return {
     refresh,
     updateProfile,
     createSideChat,
+    updateSideChat,
     deleteSideChat,
     resolveApproval,
     saveSoul,
     saveMemory,
     createSpace,
     deleteSpace,
-    createGoal,
-    deleteGoal,
-    createFeedItem,
+    ...discoveryActions,
     enableInbox,
     toggleConnector,
     configureBot,

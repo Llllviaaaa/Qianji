@@ -23,6 +23,7 @@ export interface VirtualServerPatch {
   memoryLimitGb?: number;
   diskLimitGb?: number;
   autoSleepIdle?: boolean;
+  storageDir?: string;
   remoteHost?: string;
   remotePort?: number;
   remoteUser?: string;
@@ -35,6 +36,8 @@ export interface VirtualServerPatch {
 
 export interface ServerRuntimeDeps {
   botDir: string;
+  botStorageDir: string;
+  customStorageDir?: string;
   botWorkspaceDir: string;
   wsl: WslContainerRuntime;
   ssh: SshRemoteRuntime;
@@ -89,6 +92,8 @@ export async function refreshLiveLocalMetrics(
   st.virtualServer.local.distroName = wslSnap.distroName;
   st.virtualServer.local.kernelVersion = wslSnap.kernelVersion;
   st.virtualServer.local.vhdxPath = wslSnap.vhdxPath;
+  st.virtualServer.local.storageDir = deps.botStorageDir;
+  st.virtualServer.local.customStorageDir = deps.customStorageDir ?? "";
   st.virtualServer.local.isolationSummary = wslSnap.isolationSummary;
   st.virtualServer.remote.hasStoredSecret = await deps.hasRemotePassword();
 
@@ -196,6 +201,10 @@ export function applyVirtualServerPatch(
   if (typeof patch.memoryLimitGb === "number") st.virtualServer.local.memoryLimitGb = Math.max(1, patch.memoryLimitGb);
   if (typeof patch.diskLimitGb === "number") st.virtualServer.local.diskLimitGb = Math.max(8, patch.diskLimitGb);
   if (typeof patch.autoSleepIdle === "boolean") st.virtualServer.local.autoSleepIdle = patch.autoSleepIdle;
+  if (typeof patch.storageDir === "string") {
+    const trimmed = patch.storageDir.trim();
+    st.virtualServer.local.customStorageDir = trimmed !== "" ? trimmed : undefined;
+  }
   if (typeof patch.remoteHost === "string") st.virtualServer.remote.host = patch.remoteHost.trim();
   if (typeof patch.remotePort === "number") st.virtualServer.remote.port = Math.max(1, patch.remotePort);
   if (typeof patch.remoteUser === "string") st.virtualServer.remote.username = patch.remoteUser.trim();

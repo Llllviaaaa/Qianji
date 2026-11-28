@@ -26,6 +26,8 @@ export const botModePlugin: Plugin.Object = {
     "rpcService",
   ],
   apply(ctx: Context) {
+    ctx.slots.defineSlot("bot.connector.sections", { kind: "keyed", scope: "root" });
+
     ctx.slots.registerFactory("bot.rail", {
       id: `${BOT_MODE_PLUGIN_ID}:rail`,
       pluginId: BOT_MODE_PLUGIN_ID,

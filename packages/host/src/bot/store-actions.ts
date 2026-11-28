@@ -5,11 +5,12 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type {
-  BotActivityEntry,
+  BotConnectorItem,
+  BotConnectorsConfig,
   BotFeedItem,
   BotGoalItem,
+  BotSideThreadInfo,
   BotSnapshotResult,
-  BotSpaceSummary,
   PendingBotApproval,
   ResolvedBotApproval,
 } from "@qianji/protocol";
@@ -18,18 +19,29 @@ import {
   buildDefaultAwareness,
   buildDefaultBotState,
   buildDefaultConnectorsConfig,
+  buildDefaultGoalViewPrefs,
   buildDefaultPacingConfig,
+  DEFAULT_FEED_INSTRUCTIONS,
   formatClock,
-  STARTER_IDEA_SECTIONS,
   type PersistedBotState,
 } from "./defaults.ts";
+import {
+  appendActivityRecord,
+  createRichFeedRecord,
+  createRichGoalRecord,
+  createSpaceRecord,
+  formatRelativeFeedTime,
+} from "./store-discovery.ts";
+import { regroupAndSanitizeActivities } from "./store-activity-helpers.ts";
+import { reconcileBotDiscoveryState } from "./store-ideas.ts";
 import type { SshRemoteRuntime } from "./ssh-runtime.ts";
+
+export { appendActivityRecord, createSpaceRecord };
 import {
   applyBotConfigOverlay,
   executeApprovedShellCommand,
   extractLearnedPreferencesFromMemory,
   scanBotWorkspaceArtifacts,
-  writeFileAtomic,
   type BotStoreConfig,
 } from "./workspace-scanner.ts";
 import type { WslContainerRuntime } from "./wsl-runtime.ts";
@@ -39,6 +51,7 @@ export async function ensureMainBotSession(
   botWorkspaceDir: string,
   botSessionIds: Set<string>,
   existingId?: string,
+  defaultModel?: () => { provider: string; model: string } | undefined,
 ): Promise<Session> {
   let sess = existingId ? await sessions.get(existingId) : undefined;
   if (sess === undefined) {
@@ -47,6 +60,12 @@ export async function ensureMainBotSession(
   }
   botSessionIds.add(sess.id);
   ensureBotFullAccessPermission(sess);
+  if (sess.state().model === undefined) {
+    const chosen = defaultModel?.();
+    if (chosen && chosen.provider && chosen.model) {
+      sess.setModel({ provider: chosen.provider, model: chosen.model });
+    }
+  }
   return sess;
 }
 
@@ -58,20 +77,30 @@ export async function loadOrCreatePersistedBotState(params: {
   config: BotStoreConfig;
 }): Promise<PersistedBotState> {
   const { stateFile, sessions, botWorkspaceDir, botSessionIds, config } = params;
+  const fallbackModel = () => config.defaultModel?.();
   if (existsSync(stateFile)) {
     try {
       const parsed = JSON.parse(readFileSync(stateFile, "utf8")) as PersistedBotState;
       if (parsed && parsed.version === 2 && typeof parsed.mainSessionId === "string") {
-        const mainSession = await ensureMainBotSession(sessions, botWorkspaceDir, botSessionIds, parsed.mainSessionId);
+        const resolveModel = () => parsed.modelConfig?.primary ?? fallbackModel();
+        parsed.connectorConfigs = ensureBotWorkspaceDefaults(parsed.connectorConfigs ?? buildDefaultConnectorsConfig());
+        const mainSession = await ensureMainBotSession(sessions, botWorkspaceDir, botSessionIds, parsed.mainSessionId, resolveModel);
         parsed.mainSessionId = mainSession.id;
-        parsed.ideaSections = STARTER_IDEA_SECTIONS;
+        reconcileBotDiscoveryState(parsed);
+        parsed.activityGroups = regroupAndSanitizeActivities(parsed.activityGroups ?? []);
         parsed.virtualServer.local.sharedFolders = (parsed.virtualServer.local.sharedFolders ?? []).filter(
           (f) => f.path.toLowerCase() !== botWorkspaceDir.toLowerCase(),
         );
         for (const side of parsed.sideThreads ?? []) {
           botSessionIds.add(side.sessionId);
           const s = await sessions.get(side.sessionId).catch(() => undefined);
-          if (s !== undefined) ensureBotFullAccessPermission(s);
+          if (s !== undefined) {
+            ensureBotFullAccessPermission(s);
+            if (s.state().model === undefined) {
+              const chosen = resolveModel();
+              if (chosen && chosen.provider && chosen.model) s.setModel({ provider: chosen.provider, model: chosen.model });
+            }
+          }
         }
         applyBotConfigOverlay(parsed, config);
         return parsed;
@@ -80,7 +109,7 @@ export async function loadOrCreatePersistedBotState(params: {
       // Fall through to clean initialization.
     }
   }
-  const mainSession = await ensureMainBotSession(sessions, botWorkspaceDir, botSessionIds);
+  const mainSession = await ensureMainBotSession(sessions, botWorkspaceDir, botSessionIds, undefined, fallbackModel);
   const fresh = buildDefaultBotState({
     mainSessionId: mainSession.id,
     defaultCwd: botWorkspaceDir,
@@ -103,51 +132,46 @@ export function ensureBotFullAccessPermission(session: Session): void {
   session.append("custom", { ns: "qianji-permissions", data: { permission: "full-access", agentMode: "agent" } });
 }
 
-export function appendActivityRecord(
-  st: PersistedBotState,
-  input: { title: string; description: string },
-): BotActivityEntry {
-  const now = Date.now();
-  const entry: BotActivityEntry = {
-    id: `act-${randomUUID().slice(0, 8)}`,
-    dateGroup: "今天",
-    title: input.title,
-    description: input.description,
-    timeLabel: formatClock(now),
-    createdAt: now,
-  };
-  let todayGroup = st.activityGroups.find((g) => g.date === "今天");
-  if (todayGroup === undefined) {
-    todayGroup = { date: "今天", items: [] };
-    st.activityGroups.unshift(todayGroup);
+export function createSideChatRecord(params: {
+  sessions: Sessions;
+  st: PersistedBotState;
+  botWorkspaceDir: string;
+  botSessionIds: Set<string>;
+  defaultModel?: { provider: string; model: string };
+  title?: string;
+}): BotSideThreadInfo {
+  const { sessions, st, botWorkspaceDir, botSessionIds, defaultModel, title } = params;
+  const session = sessions.create({ cwd: botWorkspaceDir, side: true });
+  ensureBotFullAccessPermission(session);
+  if (defaultModel?.provider && defaultModel?.model) {
+    session.setModel({ provider: defaultModel.provider, model: defaultModel.model });
   }
-  todayGroup.items.unshift(entry);
-  todayGroup.items = todayGroup.items.slice(0, 40);
-  return entry;
+  botSessionIds.add(session.id);
+  const resolvedTitle = title?.trim() || `新旁聊 · ${formatClock()}`;
+  session.append("label", { title: resolvedTitle });
+  const info: BotSideThreadInfo = {
+    id: `side-${randomUUID().slice(0, 8)}`,
+    sessionId: session.id,
+    sessionFile: `harness:${session.id}`,
+    title: resolvedTitle,
+    updatedAt: Date.now(),
+  };
+  st.sideThreads.unshift(info);
+  return info;
 }
 
-export function createSpaceRecord(
+export async function deleteSideChatRecord(
+  sessions: Sessions,
   st: PersistedBotState,
-  botWorkspaceDir: string,
-  title: string,
-  description?: string,
-): BotSpaceSummary {
-  const cleanTitle = title.replace(/^我想创建一个空间，关于\s*/, "").trim() || "新建自定义空间";
-  const id = `space-${randomUUID().slice(0, 8)}`;
-  const desc = description?.trim() || "由千机在专属虚拟服务器内持续维护的常驻追踪空间";
-  const created: BotSpaceSummary = {
-    id,
-    title: cleanTitle,
-    description: desc,
-    metricBadge: "实时同步",
-    updatedLabel: "刚刚",
-    updatedAt: Date.now(),
-    handoff: { id: `handoff-${id}`, title: cleanTitle, kindLabel: "常驻空间", summary: desc, targetCwd: botWorkspaceDir },
-  };
-  writeFileAtomic(join(botWorkspaceDir, "spaces", `${id}.md`), `# ${cleanTitle}\n\n${desc}\n`);
-  st.spaces.unshift(created);
-  appendActivityRecord(st, { title: `创建常驻空间：${cleanTitle}`, description: desc });
-  return created;
+  botSessionIds: Set<string>,
+  id: string,
+): Promise<void> {
+  const target = st.sideThreads.find((item) => item.id === id || item.sessionId === id);
+  st.sideThreads = st.sideThreads.filter((item) => item.id !== id && item.sessionId !== id);
+  if (target !== undefined) {
+    botSessionIds.delete(target.sessionId);
+    await sessions.delete(target.sessionId).catch(() => false);
+  }
 }
 
 export function deleteSpaceRecord(st: PersistedBotState, botWorkspaceDir: string, id: string): void {
@@ -165,26 +189,7 @@ export function createGoalRecord(
   title: string,
   category: string,
 ): BotGoalItem {
-  const cleanTitle = title.trim();
-  const id = `goal-${randomUUID().slice(0, 8)}`;
-  const created: BotGoalItem = {
-    id,
-    title: cleanTitle,
-    category: category.trim() || "通用",
-    summary: "正在后台持续追踪，有重要进展会主动汇报。",
-    status: "active",
-    updatedAt: Date.now(),
-    handoff: {
-      id: `handoff-${id}`,
-      title: cleanTitle,
-      kindLabel: category.trim() || "长期目标",
-      summary: `围绕目标「${cleanTitle}」在 Agent 工作台执行深度分析`,
-      targetCwd: botWorkspaceDir,
-    },
-  };
-  st.goals.unshift(created);
-  appendActivityRecord(st, { title: `设定长期目标：${cleanTitle}`, description: created.category });
-  return created;
+  return createRichGoalRecord(st, botWorkspaceDir, { title, category });
 }
 
 export function createFeedRecord(
@@ -193,18 +198,39 @@ export function createFeedRecord(
   body: string,
   seedPrompt?: string,
 ): BotFeedItem {
-  const item: BotFeedItem = {
-    id: `feed-${randomUUID().slice(0, 8)}`,
-    title: title.trim(),
-    timeLabel: "刚刚",
-    body: body.trim(),
-    actionLabel: "讨论",
-    seedPrompt: seedPrompt?.trim() || `我们来深入聊聊：${title.trim()}`,
-    createdAt: Date.now(),
+  return createRichFeedRecord(st, { title, body, seedPrompt });
+}
+
+export function ensureBotWorkspaceDefaults(cfg: BotConnectorsConfig): BotConnectorsConfig {
+  const defaults = buildDefaultConnectorsConfig();
+  return {
+    ...defaults,
+    ...cfg,
+    email: { ...defaults.email, ...cfg.email },
+    calendar: { ...defaults.calendar, ...cfg.calendar },
+    processSensor: { ...defaults.processSensor, ...cfg.processSensor },
+    meetingsIm: { ...defaults.meetingsIm, ...cfg.meetingsIm },
+    github: { ...(defaults.github ?? { enabled: false, permission: "read-only", watchedRepos: [] }), ...cfg.github },
+    notion: { ...(defaults.notion ?? { enabled: false, permission: "read-only", parentPageId: "" }), ...cfg.notion },
+    slack: { ...(defaults.slack ?? { enabled: false, permission: "ask-write", channelLabel: "" }), ...cfg.slack },
+    customWebhook: {
+      ...(defaults.customWebhook ?? { enabled: false, permission: "ask-write", label: "Zapier / 自定义 Webhook", endpointUrl: "" }),
+      ...cfg.customWebhook,
+    },
   };
-  st.feed.unshift(item);
-  st.feed = st.feed.slice(0, 30);
-  return item;
+}
+
+function buildConnectorSummaryItems(cfg: BotConnectorsConfig): BotConnectorItem[] {
+  return [
+    { id: "email", name: "邮箱贴身管家", description: "IMAP 收信与 SMTP 草稿投递", enabled: cfg.email.enabled, permission: cfg.email.permission ?? "ask-write" },
+    { id: "calendar", name: "日历与会议参谋", description: "ICS 日程同步与冲突预警", enabled: cfg.calendar.enabled, permission: "read-only" },
+    { id: "processes", name: "进程与专注感知", description: "本机窗口/会议/长任务监听", enabled: cfg.processSensor.enabled, permission: "read-only" },
+    { id: "github", name: "GitHub", description: "仓库 Issues / PR 监听与受控评论", enabled: cfg.github?.enabled === true, permission: cfg.github?.permission ?? "read-only" },
+    { id: "notion", name: "Notion", description: "知识库页面检索与受控归档", enabled: cfg.notion?.enabled === true, permission: cfg.notion?.permission ?? "read-only" },
+    { id: "slack", name: "Slack", description: "频道 Webhook 通知推送", enabled: cfg.slack?.enabled === true, permission: cfg.slack?.permission ?? "ask-write" },
+    { id: "telegram-feishu", name: "Telegram / 飞书", description: "即时消息收发与会议纪要目录", enabled: cfg.meetingsIm.telegramEnabled || cfg.meetingsIm.feishuEnabled || cfg.meetingsIm.meetingNotesEnabled, permission: cfg.meetingsIm.permission ?? "ask-write" },
+    { id: "custom-webhook", name: "Zapier / 自定义 Webhook", description: "通用自动化工作流触发器", enabled: cfg.customWebhook?.enabled === true, permission: cfg.customWebhook?.permission ?? "ask-write" },
+  ];
 }
 
 export function buildBotSnapshotResult(params: {
@@ -217,32 +243,39 @@ export function buildBotSnapshotResult(params: {
   const { st, botWorkspaceDir, memoryFile, soulContent, memoryUpdatedAt } = params;
   const scanned = scanBotWorkspaceArtifacts(botWorkspaceDir);
   const memPrefs = extractLearnedPreferencesFromMemory(memoryFile);
+  const normalizedCfg = ensureBotWorkspaceDefaults(st.connectorConfigs ?? buildDefaultConnectorsConfig());
   return {
     mainSessionId: st.mainSessionId,
     mainSessionFile: `harness:${st.mainSessionId}`,
     botCwd: botWorkspaceDir,
+    customBotCwd: st.customWorkspaceDir ?? "",
     profile: st.profile,
     sideThreads: st.sideThreads,
     soulContent,
     soulUpdatedAt: st.soulUpdatedAt,
     memoryUpdatedAt,
     learnedPreferences: memPrefs.length > 0 ? memPrefs : st.learnedPreferences,
-    activityGroups: st.activityGroups,
+    activityGroups: regroupAndSanitizeActivities(st.activityGroups ?? []),
     pendingApprovals: st.pendingApprovals,
     recentApprovals: st.recentApprovals,
-    feed: st.feed,
+    feed: st.feed.map((item) => ({
+      ...item,
+      timeLabel: formatRelativeFeedTime(item.createdAt),
+    })),
+    feedInstructions: st.feedInstructions ?? DEFAULT_FEED_INSTRUCTIONS,
     ideaSections: st.ideaSections,
     goals: st.goals,
+    goalViewPrefs: st.goalViewPrefs ?? buildDefaultGoalViewPrefs(),
     spaces: st.spaces,
     documents: scanned.documents,
     media: scanned.media,
     inboxEnabled: st.inboxEnabled,
     inboxAddress: st.inboxAddress,
     inboxItems: st.inboxItems,
-    connectors: st.connectors,
+    connectors: buildConnectorSummaryItems(normalizedCfg),
     modelConfig: st.modelConfig ?? {},
     pacing: st.pacing ?? buildDefaultPacingConfig(),
-    connectorConfigs: st.connectorConfigs ?? buildDefaultConnectorsConfig(),
+    connectorConfigs: normalizedCfg,
     awareness: st.awareness ?? buildDefaultAwareness(),
     virtualServer: st.virtualServer,
     embeddedTasks: st.embeddedTasks,
@@ -269,7 +302,13 @@ export async function resolveBotApprovalRecord(params: {
     decision === "approved" &&
     found &&
     executeOutbound &&
-    (found.kind === "send-email" || found.kind === "send-telegram" || found.kind === "send-feishu")
+    (found.kind === "send-email" ||
+      found.kind === "send-telegram" ||
+      found.kind === "send-feishu" ||
+      found.kind === "send-slack" ||
+      found.kind === "github-comment" ||
+      found.kind === "notion-page" ||
+      found.kind === "trigger-webhook")
   ) {
     summary = await executeOutbound(found);
   }

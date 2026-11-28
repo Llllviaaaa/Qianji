@@ -1,0 +1,22 @@
+{
+  "Type": "Live2D Expression",
+  "FadeInTime": 0.4,
+  "FadeOutTime": 0.4,
+  "Parameters": [
+    {
+      "Id": "ParamMagicAOn",
+      "Value": 1,
+      "Blend": "Add"
+    },
+    {
+      "Id": "ParamMagicALight",
+      "Value": 1,
+      "Blend": "Add"
+    },
+    {
+      "Id": "ParamHandLightAOn",
+      "Value": 1,
+      "Blend": "Add"
+    }
+  ]
+}

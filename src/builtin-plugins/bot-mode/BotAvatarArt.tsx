@@ -1,23 +1,31 @@
 /**
- * High-fidelity 3D tactile felt companion avatars (`素白毛毡` / `暖米毛毡` / `绒耳伙伴`),
- * Qianji gradient brand mark, and precision stroke icon set from the approved v7 prototype.
+ * 4K Live2D Character Labels (`云白·虹彩绘师` / `暖珀·晴空学妹` / `星黛·秘境司书`),
+ * Companion Crest Avatar Badges (`BotCompanionAvatar`), Qianji gradient brand mark,
+ * and precision stroke icon set.
  */
 import type { ReactElement } from "react";
 import type { BotAvatarPresetId } from "@qianji/protocol";
 import { FELT_AVATAR_URIS, QIANJI_BRAND_FAVICON_URI } from "./botAvatarAssets";
+import type { BotExpressionId } from "./botUiAtoms";
+import { resolveLive2DPresetMeta } from "./live2d/types";
 
 export { FELT_AVATAR_URIS, QIANJI_BRAND_FAVICON_URI };
 
 export const AVATAR_PRESET_LABELS: Readonly<Record<Exclude<BotAvatarPresetId, "custom">, string>> = {
-  "alabaster-felt": "素白毛毡",
-  "warm-felt": "暖米毛毡",
-  "plush-ears": "绒耳伙伴",
+  "alabaster-felt": "云白·虹彩绘师",
+  "warm-felt": "暖珀·晴空学妹",
+  "plush-ears": "星黛·秘境司书",
 };
+
+export function resolvePlushPrefix(preset: BotAvatarPresetId): "alabaster" | "warm" | "plush" {
+  if (preset === "warm-felt") return "warm";
+  if (preset === "plush-ears") return "plush";
+  return "alabaster";
+}
 
 export function resolveAvatarUri(preset: BotAvatarPresetId, customDataUrl?: string): string {
   if (preset === "custom" && customDataUrl) return customDataUrl;
-  if (preset === "warm-felt" || preset === "plush-ears") return FELT_AVATAR_URIS[preset];
-  return FELT_AVATAR_URIS["alabaster-felt"];
+  return `/bot-plush/${resolvePlushPrefix(preset)}-head.webp`;
 }
 
 export function BotBrandOrbIcon({ size = 20 }: { readonly size?: number }): ReactElement {
@@ -36,29 +44,83 @@ export function BotCompanionAvatar({
   preset,
   customDataUrl,
   size = 124,
+  shape = "squircle",
+  expression = "calm",
 }: {
   readonly preset: BotAvatarPresetId;
   readonly customDataUrl?: string;
   readonly size?: number;
+  readonly shape?: "squircle" | "circle";
+  readonly expression?: BotExpressionId;
 }): ReactElement {
-  const src = resolveAvatarUri(preset, customDataUrl);
+  const borderRadius = shape === "circle" ? "9999px" : `${Math.max(8, Math.round(size * 0.24))}px`;
+  const isCustomImage =
+    preset === "custom" &&
+    typeof customDataUrl === "string" &&
+    customDataUrl.startsWith("data:image/");
+  const meta = resolveLive2DPresetMeta(preset);
+
   return (
     <div
+      data-expression={expression}
       style={{
+        position: "relative",
         width: size,
         height: size,
-        borderRadius: "9999px",
+        borderRadius,
         overflow: "hidden",
-        background: "#f0efed",
+        background: `radial-gradient(circle at 50% 28%, ${meta.accentHex}38 0%, var(--qj-bg-subtle) 80%)`,
+        border: "1px solid var(--qj-border-default)",
+        flexShrink: 0,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
       }}
     >
-      <img
-        src={src}
-        alt="千机"
-        width={size}
-        height={size}
-        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-      />
+      {isCustomImage ? (
+        <img
+          src={customDataUrl}
+          alt="千机"
+          width={size}
+          height={size}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        />
+      ) : (
+        <svg
+          width={Math.round(size * 0.86)}
+          height={Math.round(size * 0.86)}
+          viewBox="0 0 40 40"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle cx="20" cy="14.5" r="7.2" fill="#f8fafc" />
+          <path
+            d="M12.6 13.8c0-4.6 3.3-7.8 7.4-7.8s7.4 3.2 7.4 7.8c-1.8-1.9-4.3-2.9-7.4-2.9s-5.6 1-7.4 2.9Z"
+            fill={meta.accentHex}
+          />
+          <path
+            d="M8.5 34.5c1.6-6.5 5.8-10.2 11.5-10.2s9.9 3.7 11.5 10.2"
+            fill={meta.accentHex}
+            fillOpacity="0.88"
+          />
+          <circle cx="30.5" cy="10" r="2.2" fill={meta.glowHex} />
+        </svg>
+      )}
+      {expression === "focused" && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            right: 2,
+            bottom: 2,
+            width: Math.max(6, Math.round(size * 0.24)),
+            height: Math.max(6, Math.round(size * 0.24)),
+            borderRadius: "9999px",
+            background: "var(--qj-brand-primary)",
+            border: "1.5px solid var(--bot-sheet-bg, #fff)",
+          }}
+        />
+      )}
     </div>
   );
 }

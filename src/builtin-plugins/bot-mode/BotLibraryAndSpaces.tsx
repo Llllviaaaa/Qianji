@@ -1,10 +1,21 @@
 /**
- * 1:1 High-Fidelity `资源库 (Library)` & `空间 (Spaces Canvas)` matching `qj-v6-4-library-spaces.png`.
- * Surfaces real workspace files from `<dataDir>/bot-workspace/` and real persisted Spaces.
+ * 1:1 Meta Muse `资源库 (Library)` View (`BotLibraryView`):
+ * `240px` left sub-sidebar (`搜索`, `文件` -> `空间/文档`, `影音内容` -> `图片/视频/播客`,
+ * bottom `系统文件`) + clean 4-column table / space grid canvas.
  */
 import { useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import { Trash2 } from "lucide-react";
+import {
+  ArrowUpRight,
+  AudioLines,
+  FileText,
+  Folder,
+  Globe,
+  Image,
+  Search,
+  Trash2,
+  Video,
+} from "lucide-react";
 import {
   openBotModal,
   patchBotUi,
@@ -14,121 +25,190 @@ import {
   type BotLibrarySection,
 } from "./botStore";
 
-export function BotSpacesCanvas({
-  ctx,
-  inSplit,
-}: {
-  readonly ctx?: Context;
-  readonly inSplit: boolean;
-}): ReactElement {
+const FILE_NAV: ReadonlyArray<{ readonly id: BotLibrarySection; readonly name: string; readonly Icon: typeof Globe }> = [
+  { id: "spaces", name: "空间", Icon: Globe },
+  { id: "docs", name: "文档", Icon: FileText },
+];
+
+const MEDIA_NAV: ReadonlyArray<{ readonly id: BotLibrarySection; readonly name: string; readonly Icon: typeof Image }> = [
+  { id: "images", name: "图片", Icon: Image },
+  { id: "videos", name: "视频", Icon: Video },
+  { id: "podcasts", name: "播客", Icon: AudioLines },
+];
+
+const SYSTEM_DIRS: ReadonlyArray<string> = ["docs", "memory", "side-chats", "workspace"];
+
+function formatBytes(len: number): string {
+  if (len >= 1024) return `${(len / 1024).toFixed(1)} KB`;
+  return `${len} B`;
+}
+
+export function BotLibraryView({ ctx }: { readonly ctx?: Context }): ReactElement {
+  const ui = useBotUiState();
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
-  const [selecting, setSelecting] = useState(false);
+  const [filterText, setFilterText] = useState("");
+  const [managingSpaces, setManagingSpaces] = useState(false);
+
+  const q = filterText.trim().toLowerCase();
+  const matches = (text: string) => q === "" || text.toLowerCase().includes(q);
+  const filteredSpaces = snapshot.spaces.filter((sp) => matches(`${sp.title} ${sp.description}`));
+  const filteredDocs = snapshot.documents.filter((doc) => matches(doc.name));
+  const filteredMedia = snapshot.media.filter((m) => m.kind === ui.libSection && matches(m.title));
+
+  const titleMap: Record<BotLibrarySection, string> = {
+    spaces: "空间",
+    docs: "文档",
+    images: "图片",
+    videos: "视频",
+    podcasts: "播客",
+    sysfiles: "系统文件",
+  };
 
   return (
-    <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", flexDirection: "column", background: "var(--qj-bg-app)" }}>
-      <div style={{ height: 42, flexShrink: 0 }} data-tauri-drag-region="" />
-      <div style={{ flex: "1 1 auto", overflowY: "auto", padding: "0 32px 48px" }}>
-        <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <h1 style={{ fontSize: 30, fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>空间</h1>
-            {!inSplit ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {snapshot.spaces.length > 0 && (
-                  <button
-                    type="button"
-                    className="qj-soft-btn"
-                    style={{ height: 36, padding: "0 16px", fontSize: 13.5, fontWeight: 500 }}
-                    onClick={() => setSelecting((v) => !v)}
-                  >
-                    {selecting ? "完成" : "选择"}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="qj-primary-pill-btn"
-                  style={{ height: 36, padding: "0 16px", fontSize: 13.5, fontWeight: 500 }}
-                  onClick={() =>
-                    patchBotUi({ activeView: "spaces", composerDraft: "我想创建一个空间，关于 " })
-                  }
-                >
-                  ＋ 创建空间
-                </button>
+    <div className="qj-animate-page-in qj-muse-library-shell">
+      <aside className="qj-muse-lib-sidebar" aria-label="资源库导航">
+        <div className="qj-muse-drawer-search">
+          <Search size={15} strokeWidth={1.8} aria-hidden="true" />
+          <input
+            type="text"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            placeholder="搜索"
+            aria-label="搜索资源库"
+          />
+        </div>
+
+        <div className="qj-muse-lib-group">
+          <div className="qj-muse-lib-group-label">文件</div>
+          {FILE_NAV.map(({ id, name, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              className={`qj-muse-lib-item${ui.libSection === id ? " active" : ""}`}
+              onClick={() => patchBotUi({ libSection: id })}
+            >
+              <Icon size={16} strokeWidth={1.8} />
+              <span>{name}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="qj-muse-lib-group">
+          <div className="qj-muse-lib-group-label">影音内容</div>
+          {MEDIA_NAV.map(({ id, name, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              className={`qj-muse-lib-item${ui.libSection === id ? " active" : ""}`}
+              onClick={() => patchBotUi({ libSection: id })}
+            >
+              <Icon size={16} strokeWidth={1.8} />
+              <span>{name}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="qj-muse-lib-bottom">
+          <button
+            type="button"
+            className={`qj-muse-lib-item${ui.libSection === "sysfiles" ? " active" : ""}`}
+            onClick={() => patchBotUi({ libSection: "sysfiles" })}
+          >
+            <Folder size={16} strokeWidth={1.8} />
+            <span>系统文件</span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="qj-muse-lib-main">
+        <div className="qj-muse-lib-head">
+          <h1 className="qj-muse-doc-title">{titleMap[ui.libSection]}</h1>
+          {ui.libSection === "spaces" && snapshot.spaces.length > 0 && (
+            <button
+              type="button"
+              className="qj-soft-btn qj-sheet-pill-xs"
+              onClick={() => setManagingSpaces((v) => !v)}
+            >
+              {managingSpaces ? "完成" : "管理"}
+            </button>
+          )}
+        </div>
+
+        {ui.libSection === "sysfiles" && (
+          <div className="qj-muse-table" role="table" aria-label="系统文件列表">
+            <div className="qj-muse-table-head" role="row">
+              <span>名称</span>
+              <span>类型</span>
+              <span>上次修改</span>
+              <span>大小</span>
+            </div>
+
+            {SYSTEM_DIRS.filter(matches).map((dir) => (
+              <div key={dir} className="qj-muse-table-row static" role="row">
+                <span className="qj-muse-table-name">
+                  <Folder size={16} className="qj-muse-folder-icon" />
+                  <span>{dir}</span>
+                </span>
+                <span className="qj-muse-table-cell">文件夹</span>
+                <span className="qj-muse-table-cell">—</span>
+                <span className="qj-muse-table-cell">—</span>
               </div>
-            ) : (
-              <span
-                style={{
-                  fontSize: 12,
-                  padding: "4px 12px",
-                  borderRadius: 9999,
-                  background: "var(--muse-soft-fill)",
-                  color: "var(--qj-text-secondary)",
-                }}
-              >
-                在左侧对话输入主题即可实时生成空间
-              </span>
+            ))}
+
+            {matches("SOUL.md") && (
+              <button type="button" className="qj-muse-table-row" onClick={() => openBotModal("soul")}>
+                <span className="qj-muse-table-name">
+                  <FileText size={16} className="qj-muse-file-icon" />
+                  <span>SOUL.md</span>
+                </span>
+                <span className="qj-muse-table-cell">Text</span>
+                <span className="qj-muse-table-cell">{snapshot.soulUpdatedAt}</span>
+                <span className="qj-muse-table-cell">{formatBytes(snapshot.soulContent.length)}</span>
+              </button>
+            )}
+
+            {matches("MEMORY.md") && (
+              <button type="button" className="qj-muse-table-row" onClick={() => openBotModal("memory")}>
+                <span className="qj-muse-table-name">
+                  <FileText size={16} className="qj-muse-file-icon" />
+                  <span>MEMORY.md</span>
+                </span>
+                <span className="qj-muse-table-cell">Text</span>
+                <span className="qj-muse-table-cell">{snapshot.memoryUpdatedAt}</span>
+                <span className="qj-muse-table-cell">
+                  {formatBytes(ui.memoryContent.length || 256)}
+                </span>
+              </button>
             )}
           </div>
+        )}
 
-          {snapshot.spaces.length === 0 ? (
-            <div
-              style={{
-                padding: "56px 24px",
-                borderRadius: 22,
-                background: "var(--muse-soft-fill)",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                textAlign: "center",
-                gap: 12,
-              }}
-            >
-              <div style={{ fontSize: 16, fontWeight: 500 }}>还没有创建常驻空间</div>
-              <div style={{ fontSize: 13.5, color: "var(--qj-text-secondary)", maxWidth: 400, lineHeight: 1.6 }}>
-                空间是可以持续更新的主题看板、资料馆或追踪工具。在左侧输入一句描述即可创建你的第一个空间。
-              </div>
-              {!inSplit && (
-                <button
-                  type="button"
-                  className="qj-primary-pill-btn"
-                  style={{ height: 36, padding: "0 18px", fontSize: 13.5, fontWeight: 500, marginTop: 4 }}
-                  onClick={() =>
-                    patchBotUi({ activeView: "spaces", composerDraft: "我想创建一个空间，关于 " })
-                  }
-                >
-                  ＋ 创建第一个空间
-                </button>
-              )}
-            </div>
+        {ui.libSection === "spaces" && (
+          filteredSpaces.length === 0 ? (
+            <div className="qj-muse-doc-empty">还没有常驻空间</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(310px, 1fr))", gap: 16 }}>
-              {snapshot.spaces.map((sp) => (
+            <div className="qj-sanctuary-bento-grid">
+              {filteredSpaces.map((sp) => (
                 <div
                   key={sp.id}
                   onClick={() => {
-                    if (selecting) return;
+                    if (managingSpaces) return;
                     patchBotUi({ activeSpace: sp });
                     openBotModal("space-detail");
                   }}
-                  style={{
-                    padding: 20,
-                    borderRadius: 20,
-                    background: "var(--muse-soft-fill)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 12,
-                    cursor: selecting ? "default" : "pointer",
-                  }}
+                  className={`qj-soft-card qj-sanctuary-space-card${managingSpaces ? " managing" : ""}`}
                 >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "var(--qj-text-muted)" }}>
+                  <div className="qj-sanctuary-space-meta">
                     <span>常驻空间</span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div className="qj-sanctuary-space-right">
                       <span>{sp.updatedLabel}</span>
-                      {selecting && (
+                      {managingSpaces && (
                         <button
                           type="button"
-                          className="qj-msg-action-btn"
+                          className="qj-sanctuary-micro-btn danger"
                           title="删除空间"
+                          aria-label="删除空间"
                           onClick={(e) => {
                             e.stopPropagation();
                             void ctrl.deleteSpace(sp.id);
@@ -139,283 +219,72 @@ export function BotSpacesCanvas({
                       )}
                     </div>
                   </div>
-                  <div style={{ fontSize: 16.5, fontWeight: 600 }}>{sp.title}</div>
-                  <div style={{ fontSize: 13.5, lineHeight: 1.58, color: "var(--qj-text-secondary)" }}>
-                    {sp.description}
-                  </div>
-                  <div style={{ paddingTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span
-                      style={{
-                        padding: "4px 10px",
-                        borderRadius: 9999,
-                        fontSize: 12,
-                        fontWeight: 500,
-                        background: "var(--qj-bg-surface)",
-                      }}
-                    >
-                      {sp.metricBadge}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 500, color: "var(--qj-brand-primary)" }}>
-                      打开看板 ↗
+                  <div className="qj-sanctuary-idea-title">{sp.title}</div>
+                  <div className="qj-sanctuary-idea-desc">{sp.description}</div>
+                  <div className="qj-sanctuary-space-foot">
+                    <span className="qj-sanctuary-space-metric">{sp.metricBadge}</span>
+                    <span className="qj-sanctuary-space-link">
+                      <span>打开</span>
+                      <ArrowUpRight size={13} />
                     </span>
                   </div>
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+          )
+        )}
 
-const NAV_GROUPS: ReadonlyArray<{
-  readonly label: string;
-  readonly items: ReadonlyArray<{ readonly id: BotLibrarySection; readonly name: string }>;
-}> = [
-  {
-    label: "文件",
-    items: [
-      { id: "spaces", name: "空间" },
-      { id: "docs", name: "文档" },
-    ],
-  },
-  {
-    label: "影音内容",
-    items: [
-      { id: "images", name: "图片" },
-      { id: "videos", name: "视频" },
-      { id: "podcasts", name: "播客" },
-    ],
-  },
-];
-
-export function BotLibraryView({ ctx }: { readonly ctx?: Context }): ReactElement {
-  const ui = useBotUiState();
-  const snapshot = useBotSnapshot();
-
-  const mediaList = snapshot.media.filter((m) => m.kind === ui.libSection);
-  const mediaTitleMap: Record<string, string> = { images: "图片", videos: "视频", podcasts: "播客" };
-
-  return (
-    <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", background: "var(--qj-bg-app)" }}>
-      <aside
-        style={{
-          width: 224,
-          flexShrink: 0,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "space-between",
-          padding: "16px 12px",
-          borderRight: "1px solid var(--qj-border-default)",
-          fontSize: 13.5,
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 20, paddingTop: 4 }}>
-          {NAV_GROUPS.map((group) => (
-            <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ padding: "4px 12px", fontSize: 12, fontWeight: 500, color: "var(--qj-text-muted)" }}>
-                {group.label}
+        {ui.libSection === "docs" && (
+          filteredDocs.length === 0 ? (
+            <div className="qj-muse-doc-empty">还没有归档文档</div>
+          ) : (
+            <div className="qj-muse-table" role="table" aria-label="文档列表">
+              <div className="qj-muse-table-head" role="row">
+                <span>名称</span>
+                <span>类型</span>
+                <span>上次修改</span>
+                <span>大小</span>
               </div>
-              {group.items.map((it) => {
-                const active = ui.libSection === it.id;
-                return (
-                  <button
-                    key={it.id}
-                    type="button"
-                    onClick={() => patchBotUi({ libSection: it.id })}
-                    style={{
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "8px 12px",
-                      border: 0,
-                      borderRadius: 12,
-                      cursor: "pointer",
-                      background: active ? "var(--muse-soft-fill)" : "transparent",
-                      fontWeight: active ? 550 : 400,
-                      color: "var(--qj-text-primary)",
-                      fontSize: 13.5,
-                    }}
-                  >
-                    {it.name}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-
-        <button
-          type="button"
-          onClick={() => patchBotUi({ libSection: "sysfiles" })}
-          style={{
-            width: "100%",
-            textAlign: "left",
-            padding: "8px 12px",
-            border: 0,
-            borderRadius: 12,
-            cursor: "pointer",
-            background: ui.libSection === "sysfiles" ? "var(--muse-soft-fill)" : "transparent",
-            fontWeight: ui.libSection === "sysfiles" ? 550 : 400,
-            color: "var(--qj-text-primary)",
-            fontSize: 13.5,
-          }}
-        >
-          系统文件
-        </button>
-      </aside>
-
-      {ui.libSection === "spaces" && <BotSpacesCanvas ctx={ctx} inSplit={false} />}
-
-      {ui.libSection === "docs" && (
-        <div className="qj-animate-page-in" style={{ flex: "1 1 auto", display: "flex", flexDirection: "column" }}>
-          <div style={{ height: 42, flexShrink: 0 }} data-tauri-drag-region="" />
-          <div style={{ flex: "1 1 auto", overflowY: "auto", padding: "0 32px 48px" }}>
-            <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
-              <h1 style={{ fontSize: 30, fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>文档</h1>
-              {snapshot.documents.length === 0 ? (
-                <div style={{ padding: "56px 24px", textAlign: "center", color: "var(--qj-text-secondary)" }}>
-                  <div style={{ fontSize: 15, fontWeight: 500, color: "var(--qj-text-primary)" }}>还没有归档文档</div>
-                  <div style={{ fontSize: 12.5, marginTop: 6 }}>
-                    分身在虚拟服务器工作目录中生成的报告与笔记会自动呈现在这里
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {snapshot.documents.map((doc) => (
-                    <div
-                      key={doc.id}
-                      onClick={() => {
-                        patchBotUi({ activeDoc: doc });
-                        openBotModal("doc-preview");
-                      }}
-                      style={{
-                        padding: 16,
-                        borderRadius: 16,
-                        background: "var(--muse-soft-fill)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: 14.5, fontWeight: 500 }}>{doc.name}</div>
-                        <div style={{ fontSize: 12, color: "var(--qj-text-muted)", marginTop: 2 }}>
-                          更新于 {doc.updatedLabel} · {doc.sizeLabel}
-                        </div>
-                      </div>
-                      <span
-                        style={{
-                          fontSize: 12,
-                          fontWeight: 500,
-                          padding: "6px 12px",
-                          borderRadius: 9999,
-                          background: "var(--qj-bg-surface)",
-                        }}
-                      >
-                        查看文档
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {ui.libSection === "sysfiles" && (
-        <div className="qj-animate-page-in" style={{ flex: "1 1 auto", display: "flex", flexDirection: "column" }}>
-          <div style={{ height: 42, flexShrink: 0 }} data-tauri-drag-region="" />
-          <div style={{ flex: "1 1 auto", overflowY: "auto", padding: "0 32px 48px" }}>
-            <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
-              <h1 style={{ fontSize: 30, fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>系统文件</h1>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+              {filteredDocs.map((doc) => (
                 <button
+                  key={doc.id}
                   type="button"
-                  onClick={() => openBotModal("soul")}
-                  style={{
-                    padding: 20,
-                    borderRadius: 20,
-                    border: 0,
-                    background: "var(--muse-soft-fill)",
-                    color: "var(--qj-text-primary)",
-                    textAlign: "left",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    cursor: "pointer",
+                  className="qj-muse-table-row"
+                  onClick={() => {
+                    patchBotUi({ activeDoc: doc });
+                    openBotModal("doc-preview");
                   }}
                 >
-                  <div style={{ fontSize: 16, fontWeight: 600 }}>SOUL.md</div>
-                  <div style={{ fontSize: 12.5, color: "var(--qj-text-secondary)" }}>
-                    核心人格、语气边界与安全准则 · 请谨慎访问
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--qj-text-muted)", paddingTop: 8 }}>
-                    {snapshot.soulUpdatedAt}
-                  </div>
+                  <span className="qj-muse-table-name">
+                    <FileText size={16} className="qj-muse-file-icon" />
+                    <span>{doc.name}</span>
+                  </span>
+                  <span className="qj-muse-table-cell">Markdown</span>
+                  <span className="qj-muse-table-cell">{doc.updatedLabel}</span>
+                  <span className="qj-muse-table-cell">{doc.sizeLabel}</span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => openBotModal("memory")}
-                  style={{
-                    padding: 20,
-                    borderRadius: 20,
-                    border: 0,
-                    background: "var(--muse-soft-fill)",
-                    color: "var(--qj-text-primary)",
-                    textAlign: "left",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    cursor: "pointer",
-                  }}
-                >
-                  <div style={{ fontSize: 16, fontWeight: 600 }}>MEMORY.md</div>
-                  <div style={{ fontSize: 12.5, color: "var(--qj-text-secondary)" }}>
-                    长期工作习惯、关注偏好与事实档案 · 请谨慎访问
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--qj-text-muted)", paddingTop: 8 }}>
-                    {snapshot.memoryUpdatedAt}
-                  </div>
-                </button>
-              </div>
+              ))}
             </div>
-          </div>
-        </div>
-      )}
+          )
+        )}
 
-      {(ui.libSection === "images" || ui.libSection === "videos" || ui.libSection === "podcasts") && (
-        <div className="qj-animate-page-in" style={{ flex: "1 1 auto", display: "flex", flexDirection: "column" }}>
-          <div style={{ height: 42, flexShrink: 0 }} data-tauri-drag-region="" />
-          <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", padding: "0 32px 48px" }}>
-            <h1 style={{ fontSize: 30, fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>
-              {mediaTitleMap[ui.libSection]}
-            </h1>
-            {mediaList.length === 0 ? (
-              <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, color: "var(--qj-text-secondary)" }}>
-                <div style={{ fontSize: 15, fontWeight: 500, color: "var(--qj-text-primary)" }}>
-                  还没有{mediaTitleMap[ui.libSection]}
+        {(ui.libSection === "images" ||
+          ui.libSection === "videos" ||
+          ui.libSection === "podcasts") && (
+          filteredMedia.length === 0 ? (
+            <div className="qj-muse-doc-empty">还没有{titleMap[ui.libSection]}</div>
+          ) : (
+            <div className="qj-sanctuary-bento-grid">
+              {filteredMedia.map((m) => (
+                <div key={m.id} className="qj-soft-card qj-sanctuary-space-card">
+                  <div className="qj-sanctuary-idea-title">{m.title}</div>
+                  <div className="qj-sheet-card-sub">{m.updatedLabel}</div>
                 </div>
-                <div style={{ fontSize: 12.5 }}>
-                  在聊天中生成或收藏的{mediaTitleMap[ui.libSection]}会自动归档在这里
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14, marginTop: 24 }}>
-                {mediaList.map((m) => (
-                  <div key={m.id} style={{ padding: 16, borderRadius: 16, background: "var(--muse-soft-fill)" }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{m.title}</div>
-                    <div style={{ fontSize: 12, color: "var(--qj-text-muted)", marginTop: 4 }}>{m.updatedLabel}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+              ))}
+            </div>
+          )
+        )}
+      </main>
     </div>
   );
 }

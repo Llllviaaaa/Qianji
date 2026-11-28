@@ -3,7 +3,7 @@
  * parallel `workspace-write` subagents, with dirty working-tree inheritance.
  */
 import { spawn } from "node:child_process";
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
@@ -109,7 +109,7 @@ async function syncDirtyParentState(
     const relPaths = untracked.stdout.toString("utf8").split("\0").filter(Boolean);
     for (const relPath of relPaths) {
       const normalized = relPath.replace(/\\/g, "/");
-      if (normalized.startsWith(".qianji/subagent-patches/")) continue;
+      if (normalized.startsWith(".qianji/subagent-patches/") || normalized.startsWith(".qianji/swarms/")) continue;
       const src = join(repoRoot, relPath);
       try {
         const stat = lstatSync(src);
@@ -153,6 +153,7 @@ export async function prepareIsolatedWorktree(
   cwd: string,
   id: string,
   signal?: AbortSignal,
+  targetDir?: string,
 ): Promise<{ ok: true; worktree: PreparedWorktree } | { ok: false; error: string }> {
   const top = await runGit(cwd, ["rev-parse", "--show-toplevel"], { signal });
   if (!top.ok) {
@@ -166,7 +167,17 @@ export async function prepareIsolatedWorktree(
   const headSha = head.stdout.toString("utf8").trim();
   const relSubdir = relative(repoRoot, resolve(cwd));
   const safeId = sanitizeLabel(id).slice(-12);
-  const wtRoot = mkdtempSync(join(tmpdir(), `qianji-subagent-${safeId}-`));
+  let wtRoot: string;
+  if (targetDir !== undefined && targetDir.trim() !== "") {
+    wtRoot = resolve(targetDir);
+    if (existsSync(wtRoot)) {
+      await runGit(repoRoot, ["worktree", "remove", "--force", wtRoot], { signal });
+      rmSync(wtRoot, { recursive: true, force: true });
+    }
+    mkdirSync(dirname(wtRoot), { recursive: true });
+  } else {
+    wtRoot = mkdtempSync(join(tmpdir(), `qianji-subagent-${safeId}-`));
+  }
   const added = await runGit(repoRoot, ["worktree", "add", "--detach", wtRoot, headSha], { signal });
   if (!added.ok) {
     rmSync(wtRoot, { recursive: true, force: true });

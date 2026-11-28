@@ -38,7 +38,8 @@ h1{margin:0 0 8px;font-size:20px}p{margin:0;font-size:14px;line-height:1.65;colo
 </style></head><body><div class="card"><h1>千机分身 · 隔离浏览器实时画面</h1><p>此浏览器实例使用独立的持久化会话目录（与你本机日常浏览器完全隔离）。当分身需要网页检索、登录授权或处理安全验证时，可直接在顶部地址栏输入网址或在画面中点击、输入完成人工接管。</p></div></body></html>`)}`;
 
 export class BotLiveViewController {
-  private readonly profileDir: string;
+  private profileDir: string;
+  private botWorkspaceDir: string;
   private browser: BrowserSession | null = null;
   private initializedBlank = false;
 
@@ -52,13 +53,24 @@ export class BotLiveViewController {
     },
   ) {
     this.profileDir = join(options.botDir, "browser-profile");
+    this.botWorkspaceDir = options.botWorkspaceDir;
     mkdirSync(this.profileDir, { recursive: true });
+  }
+
+  async setPaths(next: { storageDir: string; botWorkspaceDir: string }): Promise<void> {
+    const nextProfile = join(next.storageDir, "browser-profile");
+    if (nextProfile !== this.profileDir || next.botWorkspaceDir !== this.botWorkspaceDir) {
+      await this.close();
+      this.profileDir = nextProfile;
+      this.botWorkspaceDir = next.botWorkspaceDir;
+      mkdirSync(this.profileDir, { recursive: true });
+    }
   }
 
   private ensureBrowser(): BrowserSession {
     if (this.browser === null) {
       this.browser = new BrowserSession({
-        workspace: this.options.botWorkspaceDir,
+        workspace: this.botWorkspaceDir,
         profileDir: this.profileDir,
       });
     }
@@ -79,7 +91,7 @@ export class BotLiveViewController {
     }
 
     const mounts = [
-      "/workspace -> bot-workspace (rw)",
+      `/workspace -> ${this.botWorkspaceDir} (rw)`,
       ...vs.local.sharedFolders.map(
         (sf, idx) => `/shared/${sharedFolderSlug(sf.path, idx)} -> ${sf.path} (${sf.access})`,
       ),

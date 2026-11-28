@@ -1,5 +1,6 @@
 import { useCallback, useState, useSyncExternalStore, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
+import { Terminal } from "lucide-react";
 import type { BotHandoffCompleteResult } from "@qianji/protocol";
 import {
   useClientContributions,
@@ -28,8 +29,8 @@ export function useBotStageAvailable(ctx?: Context): boolean {
 }
 
 /**
- * Top-right `[ Agent | Bot ]` spring-gliding capsule switcher (`#mode-pill`).
- * Stays anchored at identical coordinates across Agent & Bot modes.
+ * Center `( Agent | ● Bot )` liquid-glass capsule switcher (`#mode-pill`).
+ * Stays anchored at identical top-center coordinates across Agent & Bot modes.
  */
 export function CoreShellModeSwitch({ ctx }: { readonly ctx?: Context }): ReactElement | null {
   const botAvailable = useBotStageAvailable(ctx);
@@ -43,12 +44,14 @@ export function CoreShellModeSwitch({ ctx }: { readonly ctx?: Context }): ReactE
 
   const mode = navSnap?.shellMode === "bot" ? "bot" : "agent";
   const shortcut = themeSnap?.shortcutToggleShellMode || "Ctrl+Shift+M";
+  const handoffActive = (navSnap?.activeBotHandoff ?? null) !== null;
 
   return (
     <div
       id="mode-pill"
       className="qj-mode-pill"
       data-mode={mode}
+      data-handoff-active={handoffActive ? "true" : undefined}
       role="tablist"
       aria-label={`切换 Agent 与 Bot 形态 (${shortcut})`}
       title={`切换 Agent / Bot 形态 (${shortcut})`}
@@ -62,7 +65,8 @@ export function CoreShellModeSwitch({ ctx }: { readonly ctx?: Context }): ReactE
         className={`qj-mode-pill-btn${mode === "agent" ? " active" : ""}`}
         onClick={() => navigationService?.setShellMode("agent")}
       >
-        Agent
+        <Terminal size={12} strokeWidth={1.85} aria-hidden="true" />
+        <span>Agent</span>
       </button>
       <button
         type="button"
@@ -72,7 +76,8 @@ export function CoreShellModeSwitch({ ctx }: { readonly ctx?: Context }): ReactE
         className={`qj-mode-pill-btn${mode === "bot" ? " active" : ""}`}
         onClick={() => navigationService?.setShellMode("bot")}
       >
-        Bot
+        <span className="qj-mode-bot-dot" aria-hidden="true" />
+        <span>Bot</span>
       </button>
     </div>
   );

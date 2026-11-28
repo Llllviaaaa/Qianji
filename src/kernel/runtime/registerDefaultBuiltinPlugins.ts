@@ -20,6 +20,7 @@ import { CORE_WORKBENCH_PLUGIN_ID, coreWorkbenchPlugin } from "../../builtin-plu
 import { DIAGRAM_VIEWER_PLUGIN_ID, diagramViewerPlugin } from "../../builtin-plugins/diagram-viewer";
 import { INTELLIGENT_UI_PLUGIN_ID, intelligentUiPlugin } from "../../builtin-plugins/intelligent-ui";
 import { SIDE_CHAT_PLUGIN_ID, sideChatPlugin } from "../../builtin-plugins/side-chat";
+import { SWARM_PLUGIN_ID, swarmBuiltinPlugin } from "../../builtin-plugins/swarm";
 import { WEB_PREVIEW_PLUGIN_ID, webPreviewPlugin } from "../../builtin-plugins/web-preview";
 import type { BuiltinCorePluginDescriptor } from "./builtinCorePlugins";
 
@@ -49,6 +50,7 @@ export const DEFAULT_BUILTIN_FEATURE_PLUGINS: readonly BuiltinCorePluginDescript
   },
   { id: INTELLIGENT_UI_PLUGIN_ID, plugin: intelligentUiPlugin, canDisable: true, defaultEnabled: true },
   { id: BOT_MODE_PLUGIN_ID, plugin: botModePlugin, canDisable: true, defaultEnabled: true },
+  { id: SWARM_PLUGIN_ID, plugin: swarmBuiltinPlugin, canDisable: true, defaultEnabled: true },
 ];
 
 /** All 13 default Vite-bundled built-in client plugins mounted during microkernel boot. */

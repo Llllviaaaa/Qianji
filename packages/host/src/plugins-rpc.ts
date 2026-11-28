@@ -105,6 +105,20 @@ export function apply(ctx: Context, config: PluginsRpcConfig): void {
       }));
     },
 
+    "plugin.setScope": (params): Promise<PluginMutationResult> => {
+      const p = asObject(params);
+      const id = requiredString(p, "id");
+      const rawMode = requiredString(p, "mode");
+      if (rawMode !== "agent" && rawMode !== "bot") {
+        throw new RpcError(ErrorCode.InvalidParams, 'mode must be "agent" or "bot"');
+      }
+      if (typeof p.enabled !== "boolean") {
+        throw new RpcError(ErrorCode.InvalidParams, "enabled must be a boolean");
+      }
+      const workspace = optionalString(p, "workspace");
+      return wrapPluginAction(() => manager.setScope(id, rawMode, p.enabled as boolean, workspace));
+    },
+
     "plugin.configure": (params): Promise<PluginMutationResult> => {
       const p = asObject(params);
       const id = requiredString(p, "id");

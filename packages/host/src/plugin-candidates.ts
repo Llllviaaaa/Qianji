@@ -6,10 +6,17 @@
  */
 import type { Plugin } from "@deepseek-ai/cordis";
 import { extractPluginDependencyMeta } from "@qianji/kernel";
-import type { PluginInstallOrigin, PluginTier } from "@qianji/protocol";
+import type {
+  PluginConnectorManifest,
+  PluginInstallOrigin,
+  PluginModeScopes,
+  PluginTargetMode,
+  PluginTier,
+} from "@qianji/protocol";
 import type { BuiltinPluginDefinition } from "./agent-plugins.ts";
 import { managedPluginsRoot } from "./plugin-installer.ts";
 import { pathComparisonKey, readPluginManifest, scanPluginsDirectory, type DiscoveredPluginManifest } from "./plugin-manifest.ts";
+import { resolveTargetsAndScopes } from "./plugin-scopes.ts";
 import { readPluginsStore, resolveWorkspacePluginsDir, workspacePluginKey } from "./plugin-store.ts";
 import { errorMessage, isRecord } from "./plugin-util.ts";
 
@@ -51,6 +58,9 @@ export interface ResolvedCandidate {
   manifestError?: string;
   inject: string[];
   provides: string[];
+  targets: PluginTargetMode[];
+  scopes: PluginModeScopes;
+  connectors?: PluginConnectorManifest[];
 }
 
 export interface CandidateInputs {
@@ -167,6 +177,7 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         effectiveConfig: protectedBuiltin.config,
         inject: builtinDepMeta?.inject ?? [],
         provides: builtinDepMeta?.provides ?? [],
+        ...resolveTargetsAndScopes({ id: protectedBuiltin.id, tier: "builtin", enabled: true, canDisable: false }),
       });
       continue;
     }
@@ -176,13 +187,14 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
     if (wsManifest !== undefined && wsManifest.workspace !== undefined) {
       const wsPatch = store.workspacePlugins[workspacePluginKey(wsManifest.workspace, id)];
       const mergedConfig = { ...(wsManifest.defaultConfig ?? {}), ...(wsPatch?.config ?? {}) };
+      const wsEnabled = builtinCanDisable ? wsPatch?.enabled !== false : true;
       candidates.push({
         id,
         name: wsManifest.name,
         version: wsManifest.version,
         ...(wsManifest.description === undefined ? {} : { description: wsManifest.description }),
         tier: "workspace",
-        enabled: builtinCanDisable ? wsPatch?.enabled !== false : true,
+        enabled: wsEnabled,
         canDisable: builtinCanDisable,
         canOverride: true,
         overridesBuiltin: hasBuiltinId(id),
@@ -204,6 +216,16 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         ...(wsManifest.configSchema === undefined ? {} : { configSchema: wsManifest.configSchema }),
         inject: [...(wsManifest.inject ?? [])],
         provides: [...(wsManifest.provides ?? [])],
+        ...(wsManifest.connectors === undefined ? {} : { connectors: wsManifest.connectors }),
+        ...resolveTargetsAndScopes({
+          id,
+          tier: "workspace",
+          enabled: wsEnabled,
+          canDisable: builtinCanDisable,
+          manifestTargets: wsManifest.targets,
+          hasConnectors: Boolean(wsManifest.connectors?.length),
+          storedScopes: wsPatch?.scopes,
+        }),
       });
       continue;
     }
@@ -212,13 +234,14 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
     if (userManifest !== undefined) {
       const patch = store.plugins[id];
       const mergedConfig = { ...(userManifest.defaultConfig ?? {}), ...(patch?.config ?? {}) };
+      const userEnabled = builtinCanDisable ? patch?.enabled !== false : true;
       candidates.push({
         id,
         name: userManifest.name,
         version: userManifest.version,
         ...(userManifest.description === undefined ? {} : { description: userManifest.description }),
         tier: "user",
-        enabled: builtinCanDisable ? patch?.enabled !== false : true,
+        enabled: userEnabled,
         canDisable: builtinCanDisable,
         canOverride: true,
         overridesBuiltin: hasBuiltinId(id),
@@ -239,6 +262,16 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         ...(userManifest.configSchema === undefined ? {} : { configSchema: userManifest.configSchema }),
         inject: [...(userManifest.inject ?? [])],
         provides: [...(userManifest.provides ?? [])],
+        ...(userManifest.connectors === undefined ? {} : { connectors: userManifest.connectors }),
+        ...resolveTargetsAndScopes({
+          id,
+          tier: "user",
+          enabled: userEnabled,
+          canDisable: builtinCanDisable,
+          manifestTargets: userManifest.targets,
+          hasConnectors: Boolean(userManifest.connectors?.length),
+          storedScopes: patch?.scopes,
+        }),
       });
       continue;
     }
@@ -246,12 +279,13 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
     const broken = manifestErrors.get(id);
     if (broken !== undefined) {
       const patch = store.plugins[id];
+      const brokenEnabled = builtinCanDisable ? patch?.enabled !== false : true;
       candidates.push({
         id,
         name: id,
         version: "0.0.0",
         tier: broken.tier,
-        enabled: builtinCanDisable ? patch?.enabled !== false : true,
+        enabled: brokenEnabled,
         canDisable: builtinCanDisable,
         canOverride: true,
         overridesBuiltin: hasBuiltinId(id),
@@ -265,6 +299,13 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         manifestError: broken.message,
         inject: [],
         provides: [],
+        ...resolveTargetsAndScopes({
+          id,
+          tier: broken.tier,
+          enabled: brokenEnabled,
+          canDisable: builtinCanDisable,
+          storedScopes: patch?.scopes,
+        }),
       });
       continue;
     }
@@ -301,6 +342,13 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         ...(patch?.config === undefined ? {} : { publicConfig: patch.config }),
         inject: depMeta.inject,
         provides: depMeta.provides,
+        ...resolveTargetsAndScopes({
+          id: builtin.id,
+          tier: "builtin",
+          enabled,
+          canDisable,
+          storedScopes: patch?.scopes,
+        }),
       });
       continue;
     }
@@ -309,13 +357,14 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
     if (bundledManifest !== undefined) {
       const patch = store.plugins[id];
       const mergedConfig = { ...(bundledManifest.defaultConfig ?? {}), ...(patch?.config ?? {}) };
+      const bundledEnabled = patch?.enabled !== false;
       candidates.push({
         id,
         name: bundledManifest.name,
         version: bundledManifest.version,
         ...(bundledManifest.description === undefined ? {} : { description: bundledManifest.description }),
         tier: "builtin",
-        enabled: patch?.enabled !== false,
+        enabled: bundledEnabled,
         canDisable: true,
         canOverride: true,
         overridesBuiltin: false,
@@ -334,6 +383,16 @@ export function resolveCandidates(inputs: CandidateInputs): ResolvedCandidate[] 
         ...(bundledManifest.configSchema === undefined ? {} : { configSchema: bundledManifest.configSchema }),
         inject: [...(bundledManifest.inject ?? [])],
         provides: [...(bundledManifest.provides ?? [])],
+        ...(bundledManifest.connectors === undefined ? {} : { connectors: bundledManifest.connectors }),
+        ...resolveTargetsAndScopes({
+          id,
+          tier: "builtin",
+          enabled: bundledEnabled,
+          canDisable: true,
+          manifestTargets: bundledManifest.targets,
+          hasConnectors: Boolean(bundledManifest.connectors?.length),
+          storedScopes: patch?.scopes,
+        }),
       });
     }
   }
@@ -351,6 +410,7 @@ export function collectActivePluginSkillRoots(
   errors: ReadonlyMap<string, string>,
   cwd?: string,
   trustedWorkspace?: string,
+  mode?: PluginTargetMode,
 ): ActivePluginSkillRoot[] {
   const cwdKey = cwd !== undefined && cwd.trim() !== "" ? pathComparisonKey(cwd) : undefined;
   const trustedKey = trustedWorkspace !== undefined && trustedWorkspace.trim() !== ""
@@ -359,6 +419,7 @@ export function collectActivePluginSkillRoots(
   const roots: ActivePluginSkillRoot[] = [];
   for (const candidate of candidates) {
     if (!candidate.enabled || candidate.skillsDir === undefined) continue;
+    if (mode !== undefined && !candidate.scopes[mode]) continue;
     if (errors.has(candidate.id)) continue;
     if (candidate.tier === "workspace") {
       if (trustedKey === undefined || candidate.workspaceKey !== trustedKey) continue;

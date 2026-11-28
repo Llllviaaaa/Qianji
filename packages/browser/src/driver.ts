@@ -7,9 +7,18 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import {
+  acquireProfileLock,
+  cleanupOrphanedBrowserProfile,
+  closeBrowser,
+  terminateWindowsProcessTree,
+  waitForBrowserShutdown,
+} from "./profile-lock.ts";
+
+export { cleanupOrphanedBrowserProfile };
 
 export interface PageSnapshot {
   url: string;
@@ -165,9 +174,19 @@ export class BrowserSession {
   private targetId: string | null = null;
   private persistentProfile = false;
   private profileLockPath: string | null = null;
+  private starting: Promise<void> | null = null;
   private readonly cdp = new CdpClient();
 
   async ensureStarted(headless: boolean): Promise<void> {
+    if (this.cdp.connected) return;
+    if (this.starting) return this.starting;
+    this.starting = this.ensureStartedInner(headless).finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  private async ensureStartedInner(headless: boolean): Promise<void> {
     if (this.cdp.connected) return;
     if (this.port) {
       try {
@@ -621,76 +640,6 @@ async function waitForTargets(port: number, attempts = 50): Promise<BrowserTarge
     await delay(100);
   }
   throw new Error("Could not enumerate browser pages");
-}
-
-async function closeBrowser(port: number): Promise<number | null> {
-  const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-  if (!response.ok) throw new Error("Browser debugging endpoint did not return version information");
-  const version = await response.json() as { webSocketDebuggerUrl?: string };
-  if (!version.webSocketDebuggerUrl) throw new Error("Browser debugging endpoint did not provide a browser connection");
-  const admin = new CdpClient();
-  try {
-    await admin.connect(version.webSocketDebuggerUrl);
-    const processes = await admin.send<{ processInfo?: Array<{ type?: string; id?: number }> }>("SystemInfo.getProcessInfo").catch(() => ({ processInfo: [] }));
-    const browserProcessId = processes.processInfo?.find((processInfo) => processInfo.type === "browser")?.id ?? null;
-    await admin.send("Browser.close", {}, 5_000).catch((error) => {
-      if (!isRecoverableBrowserError(error)) throw error;
-    });
-    return browserProcessId;
-  } finally {
-    admin.close();
-  }
-}
-
-async function waitForBrowserShutdown(port: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (!response.ok) return true;
-    } catch {
-      return true;
-    }
-    await delay(100);
-  }
-  return false;
-}
-
-function terminateWindowsProcessTree(processId: number, force: boolean): Promise<void> {
-  return new Promise((resolve) => {
-    const args = ["/PID", String(processId), "/T", ...(force ? ["/F"] : [])];
-    const killer = spawn("taskkill", args, { windowsHide: true, stdio: "ignore" });
-    const timeout = setTimeout(resolve, 3_000);
-    killer.once("close", () => { clearTimeout(timeout); resolve(); });
-    killer.once("error", () => { clearTimeout(timeout); resolve(); });
-  });
-}
-
-async function acquireProfileLock(directory: string): Promise<string> {
-  const lockPath = join(directory, ".qianji-browser.lock");
-  try {
-    await writeFile(lockPath, `${process.pid}\n`, { flag: "wx" });
-    return lockPath;
-  } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-    if (code !== "EEXIST") throw error;
-  }
-
-  const activePort = await readFile(join(directory, "DevToolsActivePort"), "utf8")
-    .then((raw) => Number(raw.split(/\r?\n/)[0]))
-    .catch(() => 0);
-  if (activePort > 0) {
-    try {
-      await waitForTargets(activePort, 3);
-      throw new Error("The persistent Qianji browser profile is already in use by another task");
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("already in use")) throw error;
-    }
-  }
-
-  await unlink(lockPath).catch(() => undefined);
-  await writeFile(lockPath, `${process.pid}\n`, { flag: "wx" });
-  return lockPath;
 }
 
 async function waitForTarget(port: number | null, targetId: string): Promise<BrowserTarget> {

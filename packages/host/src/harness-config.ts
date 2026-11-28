@@ -67,6 +67,8 @@ export interface HarnessConfig {
     remotePort?: number;
     remoteUser?: string;
     remoteWorkDir?: string;
+    workspaceDir?: string;
+    storageDir?: string;
   };
   /** The user's personality and custom instructions, as one system prompt section. */
   prompt: { instructions: string };
@@ -209,6 +211,8 @@ function applyHarnessLayer(config: HarnessConfig, file: string): string[] {
       ...(typeof bot.remotePort === "number" ? { remotePort: bot.remotePort } : {}),
       ...(typeof bot.remoteUser === "string" ? { remoteUser: bot.remoteUser } : {}),
       ...(typeof bot.remoteWorkDir === "string" ? { remoteWorkDir: bot.remoteWorkDir } : {}),
+      ...(typeof bot.workspaceDir === "string" ? { workspaceDir: bot.workspaceDir } : {}),
+      ...(typeof bot.storageDir === "string" ? { storageDir: bot.storageDir } : {}),
     };
   }
   const agentLoop = section("agentLoop");

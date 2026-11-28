@@ -10,7 +10,15 @@ import { SystemPrompt } from "@qianji/system-prompt";
 import { ScriptedProvider, textReply, toolReply, useScriptedProvider } from "@qianji/testkit";
 import { Tools, textOutput } from "@qianji/tools";
 import { Ui } from "@qianji/ui";
-import { Schedule, nextScheduledRun, validateTask, type Config } from "../src/index.ts";
+import {
+  Schedule,
+  nextRunAfter,
+  nextScheduledRun,
+  validateTask,
+  type Config,
+  type ScheduledRun,
+  type ScheduledTask,
+} from "../src/index.ts";
 
 let dir = "";
 let ctx: Context | undefined;
@@ -40,12 +48,59 @@ describe("next run", () => {
     expect(nextScheduledRun({ frequency: "weekdays", hour: 9, minute: 0, weekday: 1 }, at(2026, 10, 30, 10, 0))).toBe(at(2026, 11, 2, 9, 0));
   });
 
-  it("validates tasks and keeps unattended runs away from full access", () => {
+  it("computes interval nextRunAfter with clamping (5..1440, default 30)", () => {
+    const base = { frequency: "interval" as const, hour: 0, minute: 0, weekday: 1 };
+    expect(nextRunAfter(base, wednesday10)).toBe(wednesday10 + 30 * 60_000);
+    expect(nextRunAfter({ ...base, intervalMinutes: 15 }, wednesday10)).toBe(wednesday10 + 15 * 60_000);
+    expect(nextRunAfter({ ...base, intervalMinutes: 1 }, wednesday10)).toBe(wednesday10 + 5 * 60_000);
+    expect(nextRunAfter({ ...base, intervalMinutes: 9_999 }, wednesday10)).toBe(wednesday10 + 1440 * 60_000);
+  });
+
+  it("computes once nextRunAfter and returns undefined when expired or unset", () => {
+    const futureTarget = at(2026, 10, 28, 15, 30);
+    const base = { frequency: "once" as const, hour: 15, minute: 30, weekday: 1 };
+    expect(nextRunAfter({ ...base, runAt: futureTarget }, wednesday10)).toBe(futureTarget);
+    expect(nextRunAfter({ ...base, runAt: wednesday10 }, wednesday10)).toBeUndefined();
+    expect(nextRunAfter({ ...base, runAt: wednesday10 - 60_000 }, wednesday10)).toBeUndefined();
+    expect(nextRunAfter(base, wednesday10)).toBeUndefined();
+  });
+
+  it("validates tasks, preserves intervalMinutes/runAt/scope, and keeps unattended runs away from full access", () => {
     const base = { id: "t", name: "Nightly", prompt: "check", cwd: "/w", frequency: "daily" as const, hour: 2, minute: 30 };
     expect(validateTask(base)).toMatchObject({ permissionMode: "ask", enabled: true, weekday: 1 });
     expect(() => validateTask({ ...base, permissionMode: "full-access" as never })).toThrow("permissionMode");
     expect(() => validateTask({ ...base, hour: 24 })).toThrow("hour");
     expect(() => validateTask({ ...base, prompt: " " })).toThrow("prompt is required");
+
+    const intervalValidated = validateTask({
+      id: "i1",
+      name: "Patrol",
+      prompt: "scan",
+      cwd: "/bot",
+      frequency: "interval",
+      intervalMinutes: 2,
+      scope: "bot",
+    });
+    expect(intervalValidated).toMatchObject({
+      frequency: "interval",
+      intervalMinutes: 5,
+      scope: "bot",
+    });
+
+    const onceValidated = validateTask({
+      id: "o1",
+      name: "Reminder",
+      prompt: "ping",
+      cwd: "/bot",
+      frequency: "once",
+      runAt: wednesday10 + 60_000,
+      scope: "bot",
+    });
+    expect(validateTask({ ...onceValidated, name: "Reminder 2" }, onceValidated)).toMatchObject({
+      frequency: "once",
+      runAt: wednesday10 + 60_000,
+      scope: "bot",
+    });
   });
 });
 
@@ -110,6 +165,72 @@ describe("schedule service", () => {
     expect(c.schedule.isRunning("t1")).toBe(true);
     await expect.poll(() => c.schedule.list()[0]?.lastStatus).toBe("success");
     expect(c.schedule.list()[0]?.nextRunAt).toBe(at(2026, 10, 29, 9, 0));
+  });
+
+  it("fires interval tasks with bot scope and auto-disables once tasks after scheduled firing", async () => {
+    dir = mkdtempSync(join(tmpdir(), "pid-schedule-"));
+    let now = at(2026, 10, 28, 10, 0);
+    const { ctx: c } = await setup([textReply("interval ok"), textReply("once ok")], {}, () => now);
+
+    const emittedTasks: Array<ScheduledTask | undefined> = [];
+    const emittedRuns: ScheduledRun[] = [];
+    c.on("schedule/task", (_id, t) => emittedTasks.push(t));
+    c.on("schedule/run", (r) => emittedRuns.push(r));
+
+    const savedInterval = c.schedule.save({
+      id: "int-1",
+      name: "Bot Interval",
+      prompt: "check mail",
+      cwd: dir,
+      frequency: "interval",
+      intervalMinutes: 15,
+      scope: "bot",
+      hour: 0,
+      minute: 0,
+      weekday: 1,
+    });
+    expect(savedInterval.nextRunAt).toBe(now + 15 * 60_000);
+
+    const onceTarget = now + 20 * 60_000;
+    const savedOnce = c.schedule.save({
+      id: "once-1",
+      name: "One-shot Review",
+      prompt: "summarize meeting",
+      cwd: dir,
+      frequency: "once",
+      runAt: onceTarget,
+      scope: "bot",
+      hour: 10,
+      minute: 20,
+      weekday: 3,
+    });
+    expect(savedOnce.nextRunAt).toBe(onceTarget);
+
+    // Advance 15m -> interval fires
+    now += 15 * 60_000;
+    c.schedule.tick();
+    await expect.poll(() => c.schedule.list().find((t) => t.id === "int-1")?.lastStatus).toBe("success");
+    expect(c.schedule.list().find((t) => t.id === "int-1")?.nextRunAt).toBe(now + 15 * 60_000);
+    expect(emittedRuns.some((r) => r.taskId === "int-1" && r.scope === "bot" && Boolean(r.sessionId))).toBe(true);
+
+    // Advance +5m -> once fires and auto-disables
+    now = onceTarget;
+    c.schedule.tick();
+    await expect.poll(() => c.schedule.list().find((t) => t.id === "once-1")?.lastStatus).toBe("success");
+    const afterOnce = c.schedule.list().find((t) => t.id === "once-1");
+    expect(afterOnce?.enabled).toBe(false);
+    expect(afterOnce?.nextRunAt).toBeUndefined();
+    const persistedOnce = (JSON.parse(readFileSync(join(dir, "schedules.json"), "utf8")) as ScheduledTask[]).find(
+      (t) => t.id === "once-1",
+    );
+    expect(persistedOnce?.enabled).toBe(false);
+    expect(persistedOnce?.nextRunAt).toBeUndefined();
+    expect(emittedTasks.at(-1)).toMatchObject({ id: "once-1", enabled: false });
+
+    // Further tick never re-fires the completed once task
+    now += 60 * 60_000;
+    c.schedule.tick();
+    expect(c.schedule.isRunning("once-1")).toBe(false);
   });
 
   it("reports errors, cancellation and refuses overlapping runs", async () => {

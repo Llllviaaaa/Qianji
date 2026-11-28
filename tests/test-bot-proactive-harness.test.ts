@@ -198,7 +198,51 @@ describe("Independent Proactive Bot Harness & 4 Real Connectors", () => {
       "END:VCALENDAR",
     ].join("\r\n");
 
-    const icsServer = createHttpServer((_req, res) => {
+    const postedGhComments: string[] = [];
+    const icsServer = createHttpServer((req, res) => {
+      const url = req.url ?? "";
+      if (url.startsWith("/gh/repos/acme/app/issues/7/comments") && req.method === "POST") {
+        let body = "";
+        req.on("data", (c) => { body += String(c); });
+        req.on("end", () => {
+          postedGhComments.push(body);
+          res.writeHead(201, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ id: 99 }));
+        });
+        return;
+      }
+      if (url.startsWith("/gh/repos/acme/app/issues")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify([
+            {
+              id: 700,
+              number: 7,
+              title: "Fix WSL2 storage relocation edge case",
+              html_url: "https://github.com/acme/app/issues/7",
+              updated_at: new Date().toISOString(),
+              user: { login: "alice" },
+            },
+          ]),
+        );
+        return;
+      }
+      if (url.startsWith("/notion/v1/search")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            results: [
+              {
+                id: "page-123",
+                url: "https://www.notion.so/page123",
+                last_edited_time: new Date().toISOString(),
+                properties: { Name: { type: "title", title: [{ plain_text: "Q4 Architecture Roadmap" }] } },
+              },
+            ],
+          }),
+        );
+        return;
+      }
       res.writeHead(200, { "Content-Type": "text/calendar; charset=utf-8" });
       res.end(icsPayload);
     });
@@ -235,12 +279,37 @@ describe("Independent Proactive Bot Harness & 4 Real Connectors", () => {
       {
         async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
           capturedRequests.push(request);
+          const lastMsg = request.messages[request.messages.length - 1];
+          const isToolTurn =
+            lastMsg?.role === "user" &&
+            lastMsg.content.some((c) => c.type === "text" && c.text.includes("issue #7"));
           if (request.sessionId?.endsWith(":reflect")) {
             yield {
               type: "text-delta",
               index: 0,
               text: '{"preferences":["周三下午保留整块深度工作时段"],"goals":[{"title":"周五前完成发布对齐初稿","category":"工程交付"}],"space":null}',
             };
+          } else if (isToolTurn) {
+            yield {
+              type: "tool-call-start",
+              index: 0,
+              id: "tc-gh-1",
+              name: "bot_stage_outbound_approval",
+            };
+            yield {
+              type: "tool-call-delta",
+              index: 0,
+              argumentsDelta: JSON.stringify({
+                kind: "github-comment",
+                title: "在 #7 下回复进度",
+                summary: "确认修复方案",
+                recipient: "acme/app#7",
+                draftBody: "Will include storage relocation fix in v0.4.",
+              }),
+            };
+            yield { type: "usage", usage: { inputTokens: 10, outputTokens: 12 } };
+            yield { type: "finish", reason: "tool-use" };
+            return;
           } else {
             yield { type: "text-delta", index: 0, text: "我明白你的顾虑，已为你梳理好安排并开始在后台盯紧关键节点。" };
           }
@@ -306,6 +375,20 @@ describe("Independent Proactive Bot Harness & 4 Real Connectors", () => {
       calendar: { enabled: true, icsUrl: `http://127.0.0.1:${icsPort}/cal.ics`, leadMinutes: 20 },
       processSensor: { enabled: true, watchedProcesses: ["cargo.exe"], lateNightCareEnabled: false },
       meetingsIm: { meetingNotesEnabled: true, meetingNotesDir: notesDir },
+      github: {
+        enabled: true,
+        permission: "ask-write",
+        watchedRepos: ["acme/app"],
+        apiBase: `http://127.0.0.1:${icsPort}/gh`,
+        token: "ghp_mock_token",
+      },
+      notion: {
+        enabled: true,
+        permission: "read-only",
+        parentPageId: "parent-1",
+        apiBase: `http://127.0.0.1:${icsPort}/notion/v1`,
+        token: "example_notion_mock",
+      },
     });
 
     // Warm sample sees cargo.exe running; second poll drops cargo.exe to simulate finish
@@ -316,7 +399,7 @@ describe("Independent Proactive Bot Harness & 4 Real Connectors", () => {
       triggered: boolean;
       queuedApprovals: number;
       snapshot: {
-        inboxItems: Array<{ subject: string; preview?: string; replyTo?: string }>;
+        inboxItems: Array<{ source?: string; subject: string; preview?: string; replyTo?: string }>;
         pendingApprovals: Array<{ id: string; kind?: string; recipient?: string }>;
         goals: Array<{ title: string }>;
         awareness: { conflictCount: number; todayEvents: unknown[] };
@@ -327,6 +410,8 @@ describe("Independent Proactive Bot Harness & 4 Real Connectors", () => {
     const syncedMail = patrolRes.snapshot.inboxItems.find((m) => m.subject.includes("下周项目对齐方案确认"));
     expect(syncedMail).toBeDefined();
     expect(syncedMail?.preview).not.toContain("OK FETCH");
+    expect(patrolRes.snapshot.inboxItems.some((m) => m.source === "github" && m.subject.includes("#7"))).toBe(true);
+    expect(patrolRes.snapshot.inboxItems.some((m) => m.source === "notion" && m.subject.includes("Q4 Architecture Roadmap"))).toBe(true);
     expect(patrolRes.snapshot.awareness.conflictCount).toBe(1);
     expect(patrolRes.snapshot.awareness.todayEvents.length).toBe(2);
     expect(patrolRes.snapshot.goals.some((g) => g.title.includes("周五前同步给运营团队"))).toBe(true);
@@ -340,6 +425,29 @@ describe("Independent Proactive Bot Harness & 4 Real Connectors", () => {
     }
     expect(smtp.received.length).toBe(1);
     expect(smtp.received[0]?.to).toContain("alice@example.com");
+
+    // 3.5 Verify GitHub comment approval executes real POST, and read-only permission blocks outbound write
+    await rpc.invoke("session.prompt", { sessionId: snap0.mainSessionId, content: "请帮我在 issue #7 评论一下进度" });
+    await host.ctx.botHarness?.idle(snap0.mainSessionId);
+    const snapWithGh = await rpc.invoke<{ pendingApprovals: Array<{ id: string; kind?: string }> }>("bot.getSnapshot", {});
+    const ghApr = snapWithGh.pendingApprovals.find((a) => a.kind === "github-comment");
+    expect(ghApr).toBeDefined();
+    if (ghApr) {
+      await rpc.invoke("bot.approvals.resolve", { id: ghApr.id, decision: "approved" });
+    }
+    expect(postedGhComments.length).toBe(1);
+    expect(postedGhComments[0]).toContain("storage relocation fix");
+
+    const notionTest = await rpc.invoke<{ ok: boolean; message: string }>("bot.connector.test", { kind: "notion" });
+    expect(notionTest.ok).toBe(true);
+    const notesTest = await rpc.invoke<{ ok: boolean; message: string }>("bot.connector.test", { kind: "meeting_notes" });
+    expect(notesTest.ok).toBe(true);
+
+    // Switch email to read-only -> new mail is still synced, but NO reply draft is staged
+    await rpc.invoke("bot.configure", { email: { permission: "read-only" } });
+    mailList.push({ uid: "43", from: "bob@example.com", subject: "只读模式测试来信", body: "仅查看不应自动拟回复" });
+    const roPatrol = await rpc.invoke<{ queuedApprovals: number }>("bot.patrol.runNow", { force: false });
+    expect(roPatrol.queuedApprovals).toBe(0);
 
     // 4. Focus/In-Meeting Pacing Suppression: routine email arrives while Zoom is running -> no desktop popup
     rpc.broadcasts.length = 0;

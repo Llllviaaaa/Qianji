@@ -157,6 +157,8 @@ export interface AppSettings {
   botRemotePort: number;
   botRemoteUser: string;
   botRemoteWorkDir: string;
+  botWorkspaceDir: string;
+  botStorageDir: string;
   closeToTrayInBotMode: boolean;
   archivedSessions: string[];
 }
@@ -258,6 +260,8 @@ export const DEFAULT_APP_SETTINGS: Required<AppSettings> = {
   botRemotePort: 22,
   botRemoteUser: "",
   botRemoteWorkDir: "~/.qianji-vm",
+  botWorkspaceDir: "",
+  botStorageDir: "",
   closeToTrayInBotMode: true,
   archivedSessions: [],
 };

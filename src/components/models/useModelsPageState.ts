@@ -21,7 +21,9 @@ const NO_PROVIDERS: ProviderSummary[] = [];
 const NO_CONFIGS: ModelProviderConfig[] = [];
 
 export function useModelsPageState(form: AppSettings, update: Update) {
-  const hasHost = "__TAURI_INTERNALS__" in window || Boolean(new URLSearchParams(window.location.search).get("host"));
+  const hasHost =
+    typeof window !== "undefined" &&
+    ("__TAURI_INTERNALS__" in window || Boolean(new URLSearchParams(window.location.search).get("host")));
   const reloadProviderCatalog = useAppStore((state) => state.reloadProviderCatalog);
   const queryClient = useQueryClient();
 

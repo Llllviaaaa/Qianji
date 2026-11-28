@@ -5,7 +5,8 @@
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { PluginTier } from "@qianji/protocol";
+import type { PluginConnectorManifest, PluginTargetMode, PluginTier } from "@qianji/protocol";
+import { parseManifestConnectors, parseManifestTargets } from "./plugin-scopes.ts";
 
 export interface DiscoveredPluginManifest {
   id: string;
@@ -24,6 +25,8 @@ export interface DiscoveredPluginManifest {
   defaultConfig?: Record<string, unknown>;
   inject?: string[];
   provides?: string[];
+  targets?: PluginTargetMode[];
+  connectors?: PluginConnectorManifest[];
 }
 
 const HOST_CANDIDATES = [
@@ -310,6 +313,8 @@ export function readPluginManifest(dir: string, tier: PluginTier, workspace?: st
   const provides = Array.isArray(pidField?.provides)
     ? pidField.provides.filter((item): item is string => typeof item === "string" && item.trim() !== "")
     : undefined;
+  const targets = parseManifestTargets(pidField?.targets);
+  const connectors = parseManifestConnectors(pidField?.connectors, name);
 
   return {
     id: rawId,
@@ -328,6 +333,8 @@ export function readPluginManifest(dir: string, tier: PluginTier, workspace?: st
     ...(defaultConfig === undefined ? {} : { defaultConfig }),
     ...(inject === undefined || inject.length === 0 ? {} : { inject }),
     ...(provides === undefined || provides.length === 0 ? {} : { provides }),
+    ...(targets === undefined ? {} : { targets }),
+    ...(connectors === undefined ? {} : { connectors }),
   };
 }
 

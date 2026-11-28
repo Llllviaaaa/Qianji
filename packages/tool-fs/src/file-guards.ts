@@ -2,6 +2,8 @@
  * Pre-read hygiene guards and UTF-8 BOM handling for `@qianji/tool-fs`.
  */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { basename } from "node:path";
+import { isWindowsDeviceBaseName } from "./shared.ts";
 
 export const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
 export const MAX_TEXT_READ_BYTES = 32 * 1024 * 1024;
@@ -27,6 +29,9 @@ function hasUtf16Bom(head: Buffer): boolean {
  * Returns an actionable error string when the file should be rejected, or `undefined` when safe.
  */
 export function inspectFileBeforeRead(filePath: string, isImage: boolean): string | undefined {
+  if (isWindowsDeviceBaseName(basename(filePath))) {
+    return `Cannot read Windows reserved device name (${basename(filePath)}).`;
+  }
   const stat = statSync(filePath);
   if (stat.isDirectory()) {
     return "Path is a directory; use ls to inspect its entries.";

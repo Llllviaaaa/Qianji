@@ -30,9 +30,17 @@ import {
 export * from "./child-session.ts";
 export * from "./collab.ts";
 export * from "./core.ts";
-export * from "./fork-context.ts";
+export { buildForkedContextSeed, type ForkedSubagentSeed } from "./fork-context.ts";
 export * from "./structured.ts";
-export * from "./worktree.ts";
+export {
+  applyOrSaveWorktreePatch,
+  cleanupWorktree,
+  collectWorktreePatch,
+  prepareIsolatedWorktree,
+  type CollectedWorktreePatch,
+  type PreparedWorktree,
+  type WorktreePatchResult,
+} from "./worktree.ts";
 
 export const name = "qianji-subagents";
 export const inject = ["sessions", "tools", "agents"];

@@ -1,19 +1,39 @@
 /**
  * JSON-RPC 2.0 `bot.*` endpoint registration (`packages/host/src/bot/bot-rpc.ts`).
  */
+import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import {
   ErrorCode,
   type BotAvatarPresetId,
+  type BotConnectorTestKind,
   type BotHandoffCompleteResult,
+  type BotMcpDiscoveredTool,
   type BotRemoteAuthMethod,
   type BotServerActionKind,
   type BotServerMode,
 } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
+import type { HostConnectorsService } from "../plugin-connectors.ts";
+import type { PluginManager } from "../plugin-manager.ts";
+import {
+  BrowserConnectorAuthManager,
+  buildCustomBrowserAuthSpec,
+  getBrowserAuthSpec,
+  type BrowserAuthSpec,
+} from "./connectors/browser-auth.ts";
+import { runMcpOAuthFlow } from "./connectors/mcp-oauth.ts";
+import { registerBotDiscoveryRpc } from "./bot-discovery-rpc.ts";
+import { registerBotThreadsRpc } from "./bot-threads-rpc.ts";
 import type { ProactivePulseEngine } from "./harness/bot-proactive-pulse.ts";
+import { listConnectorsForPlugin, registerBotPluginConnectorRpc } from "./plugin-connector-rpc.ts";
 import type { BotProactivePatch } from "./store-proactive.ts";
 import type { BotStateStore } from "./store.ts";
+
+function rethrowRpcError(err: unknown): never {
+  if (err instanceof RpcError) throw err;
+  throw new RpcError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
+}
 
 type Params = Record<string, unknown>;
 
@@ -47,9 +67,73 @@ export function registerBotRpcMethods(
   rpcCtx: Context,
   store: BotStateStore,
   pulse: ProactivePulseEngine,
+  getPluginManager: () => PluginManager | undefined = () => undefined,
 ): void {
+  const browserAuth = new BrowserConnectorAuthManager();
+  rpcCtx.effect(() => () => {
+    void browserAuth.cancelAuth();
+  });
+
   const notifyUpdated = (reason: string) => {
     rpcCtx.rpc.broadcast("bot/updated", { reason, ts: Date.now() });
+  };
+
+  registerBotPluginConnectorRpc(rpcCtx, store, getPluginManager, notifyUpdated);
+  registerBotThreadsRpc(rpcCtx, store, notifyUpdated);
+  registerBotDiscoveryRpc(rpcCtx, store, pulse, notifyUpdated);
+
+  const resolveCustomBrowserSpec = async (connectorId: string): Promise<BrowserAuthSpec | undefined> => {
+    if (getBrowserAuthSpec(connectorId)) return undefined;
+    const connectorsSvc = rpcCtx.get("connectors") as HostConnectorsService | undefined;
+    const reg = connectorsSvc?.get(connectorId);
+    if (reg?.browserAuthUrl) {
+      return buildCustomBrowserAuthSpec({
+        id: connectorId,
+        loginUrl: reg.browserAuthUrl,
+        defaultLabel: `${reg.name ?? connectorId} 账号`,
+      });
+    }
+    const manager = getPluginManager();
+    const plugins = manager ? await manager.list() : [];
+    for (const plugin of plugins) {
+      const merged = listConnectorsForPlugin(plugin.id, plugin.name, plugin.connectors, connectorsSvc);
+      const found = merged.find((c) => c.id === connectorId && c.browserAuthUrl);
+      if (found?.browserAuthUrl) {
+        return buildCustomBrowserAuthSpec({
+          id: connectorId,
+          loginUrl: found.browserAuthUrl,
+          defaultLabel: `${found.name} 账号`,
+        });
+      }
+    }
+    return undefined;
+  };
+
+  const getBrowserAuthEnv = async (connectorId: string) => {
+    const customSpec = await resolveCustomBrowserSpec(connectorId);
+    return {
+      profileDir: join(store.botStorageDir, "browser-profile"),
+      workspaceDir: store.botWorkspaceDir,
+      closeLiveView: () => store.liveView.close(),
+      ...(customSpec ? { customSpec } : {}),
+    };
+  };
+
+  const persistBrowserConnection = async (connectorId: string, accountLabel: string, writeCapable: boolean) => {
+    const snapshot = await store.configureProactive({
+      appPolicies: {
+        [connectorId]: {
+          connected: true,
+          authKind: "browser",
+          accountLabel,
+          connectedAt: Date.now(),
+          policy: writeCapable ? "low-risk-auto" : "read-only-auto",
+          backgroundSync: true,
+        },
+      },
+    });
+    notifyUpdated("connector-browser-connected");
+    return snapshot;
   };
 
   rpcCtx.rpc.method("bot.getSnapshot", async () => store.snapshot());
@@ -75,17 +159,143 @@ export function registerBotRpcMethods(
   rpcCtx.rpc.method("bot.connector.test", async (raw) => {
     const p = asObject(raw);
     const rawKind = reqString(p, "kind");
-    if (
-      rawKind !== "email" &&
-      rawKind !== "calendar" &&
-      rawKind !== "processes" &&
-      rawKind !== "meetings_im"
-    ) {
+    const VALID_CONNECTOR_KINDS = new Set<BotConnectorTestKind>([
+      "email",
+      "calendar",
+      "processes",
+      "meetings_im",
+      "meeting_notes",
+      "telegram",
+      "feishu",
+      "github",
+      "notion",
+      "slack",
+      "custom_webhook",
+    ]);
+    if (!VALID_CONNECTOR_KINDS.has(rawKind as BotConnectorTestKind)) {
       throw new RpcError(ErrorCode.InvalidParams, `Unknown connector kind: ${rawKind}`);
     }
-    const res = await store.testConnector(rawKind);
+    const res = await store.testConnector(rawKind as BotConnectorTestKind);
     notifyUpdated("connector-tested");
     return res;
+  });
+
+  rpcCtx.rpc.method("bot.connector.oauth", async (raw, ctx) => {
+    const p = asObject(raw);
+    const connectorId = reqString(p, "connectorId");
+    const mcpUrl = reqString(p, "mcpUrl");
+    try {
+      const oauth = await runMcpOAuthFlow(mcpUrl, {
+        signal: ctx.signal,
+        ...(typeof p.scope === "string" && p.scope.trim() !== "" ? { scope: p.scope.trim() } : {}),
+      });
+      const snapshot = await store.configureProactive({
+        appPolicies: {
+          [connectorId]: {
+            connected: true,
+            authKind: "oauth",
+            accountLabel: `${oauth.issuer} · OAuth 2.1`,
+            connectedAt: Date.now(),
+            policy: "low-risk-auto",
+            backgroundSync: true,
+          },
+        },
+      });
+      notifyUpdated("connector-oauth-connected");
+      return {
+        ok: true,
+        accessToken: oauth.accessToken,
+        tokenType: oauth.tokenType,
+        issuer: oauth.issuer,
+        snapshot,
+      };
+    } catch (err) {
+      rethrowRpcError(err);
+    }
+  });
+
+  rpcCtx.rpc.method("bot.connector.browserAuthStart", async (raw) => {
+    const p = asObject(raw);
+    const connectorId = reqString(p, "connectorId");
+    const forceInteractive = p.forceInteractive === true;
+    try {
+      const env = await getBrowserAuthEnv(connectorId);
+      const res = await browserAuth.startAuth(connectorId, {
+        ...env,
+        forceInteractive,
+        onAutoCompleted: async (check) => {
+          if (check.authenticated) {
+            await persistBrowserConnection(connectorId, check.accountLabel, check.writeCapable);
+            rpcCtx.rpc.broadcast("bot/browserAuth", {
+              connectorId,
+              status: "connected",
+              accountLabel: check.accountLabel,
+            });
+          } else {
+            rpcCtx.rpc.broadcast("bot/browserAuth", { connectorId, status: "cancelled" });
+          }
+        },
+      });
+      if (res.status === "connected") {
+        const snapshot = await persistBrowserConnection(connectorId, res.accountLabel, res.writeCapable);
+        return { ...res, snapshot };
+      }
+      return res;
+    } catch (err) {
+      rethrowRpcError(err);
+    }
+  });
+
+  rpcCtx.rpc.method("bot.connector.browserAuthComplete", async (raw) => {
+    const p = asObject(raw);
+    const connectorId = reqString(p, "connectorId");
+    try {
+      const env = await getBrowserAuthEnv(connectorId);
+      const res = await browserAuth.completeAuth(connectorId, {
+        ...env,
+        onAutoCompleted: async (check) => {
+          if (check.authenticated) {
+            await persistBrowserConnection(connectorId, check.accountLabel, check.writeCapable);
+            rpcCtx.rpc.broadcast("bot/browserAuth", {
+              connectorId,
+              status: "connected",
+              accountLabel: check.accountLabel,
+            });
+          } else {
+            rpcCtx.rpc.broadcast("bot/browserAuth", { connectorId, status: "cancelled" });
+          }
+        },
+      });
+      if (res.status === "connected") {
+        const snapshot = await persistBrowserConnection(connectorId, res.accountLabel, res.writeCapable);
+        return { ...res, snapshot };
+      }
+      return res;
+    } catch (err) {
+      rethrowRpcError(err);
+    }
+  });
+
+  rpcCtx.rpc.method("bot.connector.browserAuthCancel", async () => {
+    await browserAuth.cancelAuth();
+    return { ok: true };
+  });
+
+  rpcCtx.rpc.method("bot.connector.mcpTools", async (raw) => {
+    const p = asObject(raw);
+    const serverId = reqString(p, "serverId");
+    const targetGroup = `mcp_${serverId}`;
+    const tools = (rpcCtx.get("tools") as { listDefinitions?: () => Array<{ name: string; description: string; group?: string; readOnly?: boolean }> } | undefined)?.listDefinitions?.() ?? [];
+    const prefix = `mcp__${serverId.toLowerCase().replace(/[^a-z0-9_-]+/g, "_")}__`;
+    const list: BotMcpDiscoveredTool[] = tools
+      .filter((t) => t.group === targetGroup)
+      .map((t) => ({
+        name: t.name,
+        rawName: t.name.startsWith(prefix) ? t.name.slice(prefix.length) : t.name,
+        description: t.description.replace(/^\[MCP:\s*[^\]]+\]\s*/, ""),
+        readOnly: t.readOnly === true,
+      }));
+    return { tools: list };
   });
 
   rpcCtx.rpc.method("bot.patrol.runNow", async (raw) => {
@@ -93,20 +303,6 @@ export function registerBotRpcMethods(
     const res = await pulse.runPatrol({ force: p.force !== false });
     const snapshot = await store.snapshot();
     return { ...res, snapshot };
-  });
-
-  rpcCtx.rpc.method("bot.sideChat.create", async (raw) => {
-    const p = asObject(raw);
-    const thread = await store.createSideChat(typeof p.title === "string" ? p.title : undefined);
-    notifyUpdated("side-chat-created");
-    return { thread };
-  });
-
-  rpcCtx.rpc.method("bot.sideChat.delete", async (raw) => {
-    const p = asObject(raw);
-    await store.deleteSideChat(reqString(p, "id"));
-    notifyUpdated("side-chat-deleted");
-    return { ok: true };
   });
 
   rpcCtx.rpc.method("bot.soul.get", async () => {
@@ -153,31 +349,6 @@ export function registerBotRpcMethods(
     return { ok: true };
   });
 
-  rpcCtx.rpc.method("bot.goals.create", async (raw) => {
-    const p = asObject(raw);
-    const goal = await store.createGoal(reqString(p, "title"), typeof p.category === "string" ? p.category : "通用");
-    notifyUpdated("goal-created");
-    return { goal };
-  });
-
-  rpcCtx.rpc.method("bot.goals.delete", async (raw) => {
-    const p = asObject(raw);
-    await store.deleteGoal(reqString(p, "id"));
-    notifyUpdated("goal-deleted");
-    return { ok: true };
-  });
-
-  rpcCtx.rpc.method("bot.feed.create", async (raw) => {
-    const p = asObject(raw);
-    const item = await store.createFeedItem(
-      reqString(p, "title"),
-      reqString(p, "body"),
-      typeof p.seedPrompt === "string" ? p.seedPrompt : undefined,
-    );
-    notifyUpdated("feed-created");
-    return { item };
-  });
-
   rpcCtx.rpc.method("bot.inbox.enable", async () => {
     const res = await store.enableInbox();
     notifyUpdated("inbox-enabled");
@@ -206,6 +377,7 @@ export function registerBotRpcMethods(
       ...(typeof p.memoryLimitGb === "number" ? { memoryLimitGb: p.memoryLimitGb } : {}),
       ...(typeof p.diskLimitGb === "number" ? { diskLimitGb: p.diskLimitGb } : {}),
       ...(typeof p.autoSleepIdle === "boolean" ? { autoSleepIdle: p.autoSleepIdle } : {}),
+      ...(typeof p.storageDir === "string" ? { storageDir: p.storageDir } : {}),
       ...(typeof p.remoteHost === "string" ? { remoteHost: p.remoteHost } : {}),
       ...(typeof p.remotePort === "number" ? { remotePort: p.remotePort } : {}),
       ...(typeof p.remoteUser === "string" ? { remoteUser: p.remoteUser } : {}),
@@ -236,43 +408,45 @@ export function registerBotRpcMethods(
 
   rpcCtx.rpc.method("bot.liveView.snapshot", async () => {
     const snap = await store.snapshot();
-    return store.liveView.getSnapshot(snap.virtualServer);
+    return store.liveView.getSnapshot(snap.virtualServer).catch(rethrowRpcError);
   });
 
   rpcCtx.rpc.method("bot.liveView.navigate", async (raw) => {
     const p = asObject(raw);
     const snap = await store.snapshot();
-    return store.liveView.navigate(reqString(p, "url"), snap.virtualServer);
+    return store.liveView.navigate(reqString(p, "url"), snap.virtualServer).catch(rethrowRpcError);
   });
 
   rpcCtx.rpc.method("bot.liveView.click", async (raw) => {
     const p = asObject(raw);
     const snap = await store.snapshot();
-    return store.liveView.click(Number(p.x ?? 0), Number(p.y ?? 0), snap.virtualServer);
+    return store.liveView.click(Number(p.x ?? 0), Number(p.y ?? 0), snap.virtualServer).catch(rethrowRpcError);
   });
 
   rpcCtx.rpc.method("bot.liveView.scroll", async (raw) => {
     const p = asObject(raw);
     const snap = await store.snapshot();
-    return store.liveView.scroll(Number(p.deltaX ?? 0), Number(p.deltaY ?? 0), snap.virtualServer);
+    return store.liveView.scroll(Number(p.deltaX ?? 0), Number(p.deltaY ?? 0), snap.virtualServer).catch(rethrowRpcError);
   });
 
   rpcCtx.rpc.method("bot.liveView.type", async (raw) => {
     const p = asObject(raw);
     const snap = await store.snapshot();
-    return store.liveView.typeOrPress(
-      {
-        ...(typeof p.text === "string" ? { text: p.text } : {}),
-        ...(typeof p.key === "string" ? { key: p.key } : {}),
-      },
-      snap.virtualServer,
-    );
+    return store.liveView
+      .typeOrPress(
+        {
+          ...(typeof p.text === "string" ? { text: p.text } : {}),
+          ...(typeof p.key === "string" ? { key: p.key } : {}),
+        },
+        snap.virtualServer,
+      )
+      .catch(rethrowRpcError);
   });
 
   rpcCtx.rpc.method("bot.liveView.execDiag", async (raw) => {
     const p = asObject(raw);
     const snap = await store.snapshot();
-    return store.liveView.execDiag(reqString(p, "command"), snap.virtualServer);
+    return store.liveView.execDiag(reqString(p, "command"), snap.virtualServer).catch(rethrowRpcError);
   });
 
   rpcCtx.rpc.method("bot.data.reset", async () => {

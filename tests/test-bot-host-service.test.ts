@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Credentials } from "@qianji/llm";
 import { Sessions } from "@qianji/session";
@@ -156,6 +156,26 @@ describe("Host Bot service (bot-mode backend)", () => {
         summary: "已在工作台完成重构验证",
       });
       expect(handoffAct.description).toContain("重构验证");
+
+      // Dynamic workspace & VM storage relocation off default C:/dataDir paths
+      const customWs = join(dataDir, "custom-d-drive", "workspace");
+      const customStorage = join(dataDir, "custom-d-drive", "vm-storage");
+      const relocatedSnap = await store.configureProactive({ workspaceDir: customWs });
+      expect(relocatedSnap.botCwd).toBe(resolve(customWs));
+      expect(relocatedSnap.customBotCwd).toBe(customWs);
+      expect(existsSync(join(customWs, "weekly-notes.md"))).toBe(true);
+      expect(relocatedSnap.documents.some((d) => d.name === "weekly-notes.md")).toBe(true);
+      const relocatedMainSess = await host.ctx.sessions.get(relocatedSnap.mainSessionId);
+      expect(relocatedMainSess?.header.cwd).toBe(resolve(customWs));
+      const relocatedSideSess = await host.ctx.sessions.get(relocatedSnap.sideThreads[0]?.sessionId ?? "");
+      expect(relocatedSideSess?.header.cwd).toBe(resolve(customWs));
+
+      const relocatedVs = await store.configureVirtualServer({ storageDir: customStorage });
+      expect(relocatedVs.local.storageDir).toBe(resolve(customStorage));
+      expect(relocatedVs.local.customStorageDir).toBe(customStorage);
+      expect(store.wsl.vhdxPath).toBe(join(resolve(customStorage), "wsl-instance", "ext4.vhdx"));
+      expect(existsSync(join(dataDir, "bot", "state.json"))).toBe(true);
+      expect(existsSync(join(dataDir, "bot", "SOUL.md"))).toBe(true);
 
       const resetSnap = await store.resetAllBotData();
       expect(resetSnap.sideThreads).toHaveLength(0);

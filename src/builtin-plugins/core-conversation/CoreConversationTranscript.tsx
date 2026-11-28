@@ -3,7 +3,7 @@
  * (ADR 0023 `core-conversation`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronUp } from "lucide-react";
+import { ChevronUp, LoaderCircle } from "lucide-react";
 import {
   useFrontendService,
   useSessionHandle,
@@ -328,6 +328,14 @@ export function CoreConversationTranscript({
     }
   };
 
+  const isOpeningSession =
+    visibleTurns.length === 0 &&
+    !isStreaming &&
+    !isCompacting &&
+    (retryStatus === null || retryStatus === "") &&
+    (handleSnap?.phase === "starting" ||
+      (matchesActiveMain && sessionState?.connection === "starting"));
+
   return (
     <div
       ref={rootRef}
@@ -336,6 +344,17 @@ export function CoreConversationTranscript({
       data-session-id={sessionId}
       data-density={density}
     >
+      {isOpeningSession && (
+        <div
+          className="dshc-flow message-row notice-message"
+          role="status"
+          data-testid="session-loading-indicator"
+        >
+          <LoaderCircle className="spin" size={14} strokeWidth={1.8} aria-hidden="true" />
+          <span>正在加载会话记录…</span>
+        </div>
+      )}
+
       {firstVisibleTurnIndex > 0 && (
         <button
           type="button"

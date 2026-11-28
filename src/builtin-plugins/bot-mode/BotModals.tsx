@@ -1,51 +1,27 @@
-/** Modal overlays for Qianji Bot Mode (`src/builtin-plugins/bot-mode/BotModals.tsx`). */
+/** 1:1 Meta Muse Modal Overlays (`src/builtin-plugins/bot-mode/BotModals.tsx`). */
 import { useEffect, useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
+import { X } from "lucide-react";
 import { useFrontendService } from "@qianji/client";
-import { BotIcon } from "./BotAvatarArt";
+import type { BoundRenderFactoryFn } from "@qianji/client-slots";
+import { BotActivityDetailModal } from "./BotActivityDetailModal";
 import { BotLiveViewModal } from "./BotLiveViewModal";
+import { BotScheduledModal } from "./BotScheduledModal";
 import { BotSearchDialog } from "./BotSearchDialog";
-import { BotSettingsPaneContent } from "./BotSettingsPanes";
+import { BotSettingsShell } from "./BotSettingsShell";
 import {
-  patchBotUi,
+  closeActiveBotModal,
   useBotController,
   useBotSnapshot,
   useBotUiState,
-  type BotSettingsTab,
 } from "./botStore";
-
-const SETTINGS_TABS: ReadonlyArray<{ readonly id: BotSettingsTab; readonly name: string }> = [
-  { id: "general", name: "通用" },
-  { id: "server", name: "虚拟服务器" },
-  { id: "browser", name: "浏览器" },
-  { id: "connectors", name: "连接器" },
-  { id: "vault", name: "安全存储" },
-  { id: "permissions", name: "权限" },
-  { id: "channels", name: "消息渠道" },
-  { id: "data", name: "数据控制" },
-  { id: "voice", name: "声音和虚拟形象" },
-];
+import { useLive2DDirectorState } from "./live2d/live2dDirectorStore";
+import { Live2DShowcaseModal } from "./live2d/Live2DShowcaseModal";
 
 function CloseCircleBtn({ label, onClick }: { readonly label: string; readonly onClick: () => void }): ReactElement {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      style={{
-        width: 32,
-        height: 32,
-        borderRadius: 9999,
-        border: 0,
-        background: "transparent",
-        color: "var(--qj-text-secondary)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        cursor: "pointer",
-      }}
-    >
-      <BotIcon name="closeX" />
+    <button type="button" aria-label={label} className="qj-muse-modal-close" onClick={onClick}>
+      <X size={16} strokeWidth={1.85} />
     </button>
   );
 }
@@ -64,55 +40,24 @@ function MarkdownContractEditor({
   const [draft, setDraft] = useState(initialValue);
 
   return (
-    <div
-      className="qj-bot-dialog"
-      style={{ width: 560, maxWidth: "92vw", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>{title}</div>
-          <div style={{ fontSize: 12, color: "var(--qj-text-secondary)", marginTop: 2 }}>
-            请谨慎编辑 · 修改后将同步至千机长期记忆上下文
-          </div>
-        </div>
+    <div className="qj-bot-dialog qj-muse-editor-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="qj-muse-modal-head">
+        <div className="qj-muse-modal-title">{title}</div>
         <CloseCircleBtn label="关闭编辑器" onClick={onClose} />
       </div>
 
       <textarea
-        rows={9}
+        rows={10}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        style={{
-          width: "100%",
-          padding: 14,
-          borderRadius: 16,
-          border: 0,
-          outline: "none",
-          resize: "vertical",
-          fontFamily: "var(--qj-font-mono)",
-          fontSize: 12,
-          lineHeight: 1.65,
-          background: "var(--muse-soft-fill)",
-          color: "var(--qj-text-primary)",
-        }}
+        className="qj-muse-contract-textarea"
       />
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <button
-          type="button"
-          className="qj-soft-btn"
-          style={{ height: 36, padding: "0 16px", fontSize: 12, fontWeight: 520 }}
-          onClick={onClose}
-        >
+      <div className="qj-muse-modal-foot">
+        <button type="button" className="qj-soft-btn qj-sheet-pill-xs" onClick={onClose}>
           取消
         </button>
-        <button
-          type="button"
-          className="qj-primary-pill-btn"
-          style={{ height: 36, padding: "0 20px", fontSize: 12, fontWeight: 520 }}
-          onClick={() => onSave(draft)}
-        >
+        <button type="button" className="qj-muse-blue-pill-btn sm" onClick={() => onSave(draft)}>
           保存
         </button>
       </div>
@@ -120,30 +65,54 @@ function MarkdownContractEditor({
   );
 }
 
-export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | null {
+export function BotModals({
+  ctx,
+  renderFactory,
+}: {
+  readonly ctx?: Context;
+  readonly renderFactory?: BoundRenderFactoryFn;
+}): ReactElement | null {
   const ui = useBotUiState();
+  const director = useLive2DDirectorState();
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
   const navigationService = useFrontendService("navigationService", ctx);
   const [issueText, setIssueText] = useState("");
 
   useEffect(() => {
-    if (ui.modal === null || typeof window === "undefined") return undefined;
+    if (ui.modal === null || director.showcaseOpen || typeof window === "undefined") {
+      return undefined;
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        patchBotUi({ modal: null });
+        if (typeof document !== "undefined" && document.querySelector("[data-escape-layer]") !== null) {
+          return;
+        }
+        closeActiveBotModal();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [ui.modal]);
+  }, [director.showcaseOpen, ui.modal]);
+
+  if (director.showcaseOpen) {
+    return <Live2DShowcaseModal ctx={ctx} />;
+  }
 
   if (ui.modal === null) return null;
 
-  const closeModal = () => patchBotUi({ modal: null });
+  const closeModal = () => closeActiveBotModal();
 
   if (ui.modal === "search") {
     return <BotSearchDialog key={`search-${ui.modalNonce}`} ctx={ctx} onClose={closeModal} />;
+  }
+
+  if (ui.modal === "scheduled") {
+    return <BotScheduledModal key={`sched-${ui.modalNonce}`} ctx={ctx} />;
+  }
+
+  if (ui.modal === "activity-detail") {
+    return <BotActivityDetailModal key={`act-${ui.modalNonce}`} ctx={ctx} />;
   }
 
   if (ui.modal === "soul" || ui.modal === "memory") {
@@ -156,11 +125,8 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
           initialValue={isSoul ? snapshot.soulContent : ui.memoryContent}
           onClose={closeModal}
           onSave={(next) => {
-            if (isSoul) {
-              void ctrl.saveSoul(next);
-            } else {
-              void ctrl.saveMemory(next);
-            }
+            if (isSoul) void ctrl.saveSoul(next);
+            else void ctrl.saveMemory(next);
             closeModal();
           }}
         />
@@ -170,6 +136,7 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
 
   if (ui.modal === "shortcuts") {
     const rows: ReadonlyArray<readonly [string, string]> = [
+      ["展开 / 收起左侧面板", "Ctrl + B"],
       ["展开 / 收起旁聊抽屉", "Ctrl + J"],
       ["全局搜索", "Ctrl + K"],
       ["打开设置", "Ctrl + ,"],
@@ -178,39 +145,16 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
     ];
     return (
       <div className="qj-bot-modal-backdrop" onClick={closeModal}>
-        <div
-          className="qj-bot-dialog"
-          style={{ width: 420, maxWidth: "92vw", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>键盘快捷键</span>
+        <div className="qj-bot-dialog qj-muse-compact-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="qj-muse-modal-head">
+            <span className="qj-muse-modal-title">键盘快捷键</span>
             <CloseCircleBtn label="关闭快捷键" onClick={closeModal} />
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
+          <div className="qj-muse-shortcut-list">
             {rows.map(([label, chord]) => (
-              <div
-                key={label}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "8px 12px",
-                  borderRadius: 12,
-                  background: "var(--muse-soft-fill)",
-                }}
-              >
+              <div key={label} className="qj-muse-shortcut-row">
                 <span>{label}</span>
-                <kbd
-                  style={{
-                    fontFamily: "var(--qj-font-mono)",
-                    padding: "2px 8px",
-                    borderRadius: 6,
-                    background: "var(--qj-bg-surface)",
-                  }}
-                >
-                  {chord}
-                </kbd>
+                <kbd>{chord}</kbd>
               </div>
             ))}
           </div>
@@ -227,42 +171,22 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
     const doc = ui.activeDoc;
     return (
       <div className="qj-bot-modal-backdrop" onClick={closeModal}>
-        <div
-          className="qj-bot-dialog"
-          style={{ width: 620, maxWidth: "92vw", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="qj-bot-dialog qj-muse-editor-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="qj-muse-modal-head">
             <div>
-              <div style={{ fontSize: 17, fontWeight: 600 }}>{doc.name}</div>
-              <div style={{ fontSize: 12, color: "var(--qj-text-secondary)", marginTop: 2 }}>
+              <div className="qj-muse-modal-title">{doc.name}</div>
+              <div className="qj-muse-modal-sub">
                 {doc.sizeLabel} · {doc.updatedLabel}
               </div>
             </div>
             <CloseCircleBtn label="关闭文档预览" onClick={closeModal} />
           </div>
-          <pre
-            style={{
-              margin: 0,
-              maxHeight: 340,
-              overflow: "auto",
-              padding: 16,
-              borderRadius: 16,
-              background: "var(--muse-soft-fill)",
-              fontFamily: "var(--qj-font-mono)",
-              fontSize: 12,
-              lineHeight: 1.65,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {doc.content}
-          </pre>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <pre className="qj-muse-doc-pre">{doc.content}</pre>
+          <div className="qj-muse-modal-foot">
             {doc.path && (
               <button
                 type="button"
-                className="qj-primary-pill-btn"
-                style={{ height: 34, padding: "0 16px", fontSize: 12, fontWeight: 520 }}
+                className="qj-muse-blue-pill-btn sm"
                 onClick={() => {
                   closeModal();
                   ctrl.triggerHandoff({
@@ -288,36 +212,26 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
     const sp = ui.activeSpace;
     return (
       <div className="qj-bot-modal-backdrop" onClick={closeModal}>
-        <div
-          className="qj-bot-dialog"
-          style={{ width: 580, maxWidth: "92vw", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="qj-bot-dialog qj-muse-editor-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="qj-muse-modal-head">
             <div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>{sp.title}</div>
-              <div style={{ fontSize: 12, color: "var(--qj-text-secondary)", marginTop: 2 }}>
-                创建/更新于 {sp.updatedLabel}
-              </div>
+              <div className="qj-muse-modal-title">{sp.title}</div>
+              <div className="qj-muse-modal-sub">更新于 {sp.updatedLabel}</div>
             </div>
             <CloseCircleBtn label="关闭空间详情" onClick={closeModal} />
           </div>
-          <div style={{ padding: 16, borderRadius: 18, background: "var(--muse-soft-fill)", fontSize: 13.5, lineHeight: 1.65 }}>
-            {sp.description}
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <div className="qj-muse-space-detail-box">{sp.description}</div>
+          <div className="qj-muse-modal-foot">
             <button
               type="button"
-              className="qj-soft-btn"
-              style={{ height: 36, padding: "0 16px", fontSize: 12, fontWeight: 520 }}
+              className="qj-soft-btn qj-sheet-pill-xs"
               onClick={() => ctrl.jumpToChatWithPrompt(`继续推进空间「${sp.title}」的下一步计划：`)}
             >
               在主聊天中推进
             </button>
             <button
               type="button"
-              className="qj-primary-pill-btn"
-              style={{ height: 36, padding: "0 18px", fontSize: 12, fontWeight: 520 }}
+              className="qj-muse-blue-pill-btn sm"
               onClick={() => {
                 closeModal();
                 ctrl.triggerHandoff(
@@ -342,39 +256,25 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
   if (ui.modal === "report-issue") {
     return (
       <div className="qj-bot-modal-backdrop" onClick={closeModal}>
-        <div
-          className="qj-bot-dialog"
-          style={{ width: 480, maxWidth: "92vw", padding: 24, display: "flex", flexDirection: "column", gap: 14 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>报告问题与体验反馈</span>
+        <div className="qj-bot-dialog qj-muse-compact-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="qj-muse-modal-head">
+            <span className="qj-muse-modal-title">报告问题</span>
             <CloseCircleBtn label="关闭反馈" onClick={closeModal} />
           </div>
           <textarea
             rows={5}
             value={issueText}
             onChange={(e) => setIssueText(e.target.value)}
-            placeholder="请描述你遇到的问题或希望千机分身改进的地方…"
-            style={{
-              width: "100%",
-              padding: 12,
-              borderRadius: 14,
-              border: 0,
-              outline: "none",
-              background: "var(--muse-soft-fill)",
-              color: "var(--qj-text-primary)",
-              fontSize: 13,
-            }}
+            placeholder="请描述你遇到的问题或建议…"
+            className="qj-muse-contract-textarea"
           />
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <button type="button" className="qj-soft-btn" style={{ height: 34, padding: "0 14px", fontSize: 12 }} onClick={closeModal}>
+          <div className="qj-muse-modal-foot">
+            <button type="button" className="qj-soft-btn qj-sheet-pill-xs" onClick={closeModal}>
               取消
             </button>
             <button
               type="button"
-              className="qj-primary-pill-btn"
-              style={{ height: 34, padding: "0 16px", fontSize: 12 }}
+              className="qj-muse-blue-pill-btn sm"
               disabled={issueText.trim() === ""}
               onClick={() => {
                 setIssueText("");
@@ -382,7 +282,7 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
                 navigationService?.showToast("感谢反馈，问题记录已保存至本地诊断日志", "info");
               }}
             >
-              提交反馈
+              提交
             </button>
           </div>
         </div>
@@ -390,63 +290,5 @@ export function BotModals({ ctx }: { readonly ctx?: Context }): ReactElement | n
     );
   }
 
-  // `settings` (`760px × 520px` 9-Tab Modal)
-  return (
-    <div className="qj-bot-modal-backdrop" onClick={closeModal} data-testid="bot-settings-modal">
-      <div
-        className="qj-bot-dialog"
-        style={{ width: 760, maxWidth: "94vw", height: 520, display: "flex", position: "relative" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ position: "absolute", top: 14, right: 14, zIndex: 2 }}>
-          <CloseCircleBtn label="关闭设置" onClick={closeModal} />
-        </div>
-
-        <aside
-          aria-label="Bot 设置分类"
-          style={{
-            width: 204,
-            flexShrink: 0,
-            padding: 14,
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-            overflowY: "auto",
-            background: "var(--qj-bg-sidebar)",
-          }}
-        >
-          <div style={{ padding: "8px 12px", fontSize: 15.5, fontWeight: 600 }}>设置</div>
-          {SETTINGS_TABS.map((t) => {
-            const active = ui.settingsTab === t.id;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                data-bot-settings-tab={t.id}
-                onClick={() => patchBotUi({ settingsTab: t.id, serverFeedback: null })}
-                style={{
-                  width: "100%",
-                  border: 0,
-                  borderRadius: 12,
-                  padding: "8px 12px",
-                  textAlign: "left",
-                  fontSize: 13.5,
-                  fontWeight: active ? 550 : 400,
-                  background: active ? "var(--qj-bg-active)" : "transparent",
-                  color: "var(--qj-text-primary)",
-                  cursor: "pointer",
-                }}
-              >
-                {t.name}
-              </button>
-            );
-          })}
-        </aside>
-
-        <div style={{ flex: 1, padding: "28px 44px 28px 28px", overflowY: "auto" }}>
-          <BotSettingsPaneContent ctx={ctx} onClose={closeModal} />
-        </div>
-      </div>
-    </div>
-  );
+  return <BotSettingsShell ctx={ctx} renderFactory={renderFactory} onClose={closeModal} />;
 }

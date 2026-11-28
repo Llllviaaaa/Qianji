@@ -226,6 +226,7 @@ describe("Phase 5: Architectural guardrails, watermarks, ESLint gates & template
         "tool-only",
         "ui-slot-widget",
         "fullstack-panel",
+        "connector",
         "core-override",
         "global-skin",
       ];

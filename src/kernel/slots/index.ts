@@ -7,7 +7,17 @@
    external plugins augment them via `declare module "@qianji/client-slots"`. */
 
 /** Declaration-merged map of typed slot keys to their `SlotSpec` definitions. */
-export interface SlotMap {}
+export interface SlotMap {
+  "bot.connector.sections": {
+    readonly kind: "keyed";
+    readonly scope: "root";
+    readonly props: {
+      readonly connectorId: string;
+      readonly pluginId?: string;
+      readonly connected: boolean;
+    };
+  };
+}
 
 /** Declaration-merged map of reusable component factories (`registerFactory` / `renderFactory`). */
 export interface SlotFactoryMap {

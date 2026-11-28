@@ -10,7 +10,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import { useFrontendService } from "@qianji/client";
 import type { BotLiveViewExecDiagResult, BotLiveViewSnapshot } from "@qianji/protocol";
 import { BotIcon } from "./BotAvatarArt";
-import { openBotModal, useBotSnapshot } from "./botStore";
+import { openBotModal, patchBotUi, useBotSnapshot, useBotUiState } from "./botStore";
 
 const QUICK_DIAG_COMMANDS = [
   "uname -a && id",
@@ -28,10 +28,12 @@ export function BotLiveViewModal({
 }): ReactElement {
   const rpcService = useFrontendService("rpcService", ctx);
   const botSnap = useBotSnapshot();
+  const ui = useBotUiState();
 
+  const [initialTargetUrl] = useState<string | null>(() => ui.liveViewTargetUrl);
   const [tab, setTab] = useState<"browser" | "container">("browser");
   const [liveSnap, setLiveSnap] = useState<BotLiveViewSnapshot | null>(null);
-  const [urlInput, setUrlInput] = useState("https://example.com");
+  const [urlInput, setUrlInput] = useState(() => ui.liveViewTargetUrl || "https://example.com");
   const [typeInput, setTypeInput] = useState("");
   const [busy, setBusy] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -43,13 +45,18 @@ export function BotLiveViewModal({
   useEffect(() => {
     if (!rpcService) return undefined;
     let cancelled = false;
-    rpcService
-      .call<BotLiveViewSnapshot>("bot.liveView.snapshot", {})
+    const req = initialTargetUrl
+      ? rpcService.call<BotLiveViewSnapshot>("bot.liveView.navigate", { url: initialTargetUrl })
+      : rpcService.call<BotLiveViewSnapshot>("bot.liveView.snapshot", {});
+    req
       .then((res) => {
         if (cancelled) return;
         setLiveSnap(res);
         if (res.url && res.url !== "about:qianji-live-view") setUrlInput(res.url);
         setErrorMsg(null);
+        if (initialTargetUrl) {
+          patchBotUi({ liveViewTargetUrl: null });
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -61,7 +68,7 @@ export function BotLiveViewModal({
     return () => {
       cancelled = true;
     };
-  }, [rpcService]);
+  }, [initialTargetUrl, rpcService]);
 
   const callViewRpc = async (method: string, params: Record<string, unknown>) => {
     if (!rpcService || busy) return;

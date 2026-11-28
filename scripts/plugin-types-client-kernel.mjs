@@ -93,10 +93,20 @@ export interface CoreSlotMap {
 export type CoreSlotKey = keyof CoreSlotMap;
 export declare const CORE_SLOT_SPECS: Readonly<Record<CoreSlotKey, ChildSlotDecl>>;
 
-export interface SlotMap extends CoreSlotMap {}
+export interface SlotMap extends CoreSlotMap {
+  "bot.connector.sections": SlotSpec<
+    { readonly connectorId: string; readonly pluginId?: string; readonly connected: boolean },
+    "keyed",
+    "root"
+  >;
+}
 export interface SlotFactoryMap {
   "bot.rail": SlotFactorySpec<{ readonly active?: boolean }, "root">;
   "bot.stage": SlotFactorySpec<{ readonly active?: boolean; readonly cwd?: string }, "root">;
+  "host.settings.providers": SlotFactorySpec<
+    { readonly cwd?: string; readonly onClose?: () => void; readonly initialExpandPluginId?: string },
+    "root"
+  >;
 }
 export interface LocaleNamespaceMap {}
 export interface ResourceProtocolMap {}

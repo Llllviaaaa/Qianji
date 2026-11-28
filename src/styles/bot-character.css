@@ -1,0 +1,1485 @@
+/*
+ * Task-Aware 4K Live2D Co-Pilot Stage, Hero Task Deck, Actionable Task Bubble,
+ * Settings Gallery, and Unified《千机 · 角色与任务工坊》(`Live2DShowcaseModal`).
+ *
+ * Bound strictly to `--qj-*` and `--muse-*` semantic tokens inside
+ * `@layer components`.
+ */
+
+.qj-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 1. Right Companion Header (`220px × 236px` + Live Task Chip + Actionable Bubble) ─ */
+
+.qj-sheet-top > .qj-sheet-close-btn {
+  z-index: 28;
+}
+
+.qj-sheet-top > .qj-sheet-hero-meta {
+  position: relative;
+  z-index: 14;
+  margin-top: 4px;
+}
+
+.qj-sheet-companion-name,
+.qj-sanctuary-greeting {
+  text-wrap: balance;
+}
+
+.qj-sheet-vserver-pill {
+  max-width: 308px;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.qj-sheet-vserver-pill .qj-sheet-vserver-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-sheet-vserver-pill[data-tone="warning"] {
+  color: var(--qj-text-primary);
+}
+
+.qj-sheet-vserver-pill[data-tone="danger"] {
+  color: var(--qj-status-danger);
+}
+
+.qj-sheet-top > .qj-sheet-tab-pill {
+  position: relative;
+  z-index: 20;
+}
+
+.qj-muse-avatar-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 12px;
+  overflow: visible;
+  z-index: 16;
+}
+
+.qj-companion-portal-anchor {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.qj-portal-speech-bubble {
+  position: absolute;
+  top: auto;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: max-content;
+  max-width: 316px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 16px;
+  background: var(--muse-blur-pill-bg);
+  border: 1px solid var(--qj-border-default);
+  backdrop-filter: blur(22px) saturate(160%);
+  box-shadow: var(--muse-elevation-popover);
+  color: var(--qj-text-primary);
+  font-size: 12px;
+  font-weight: 480;
+  line-height: 1.45;
+  text-align: center;
+  pointer-events: none;
+  animation: qj-speech-float-in 160ms ease-out both;
+}
+
+.qj-portal-speech-bubble.interactive {
+  pointer-events: auto;
+}
+
+.qj-bubble-quick-actions {
+  margin-top: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.qj-bubble-action-pill {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  font-size: 11.5px;
+  font-weight: 540;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 140ms ease;
+}
+
+.qj-bubble-action-pill:hover {
+  background: var(--qj-bg-elevated);
+}
+
+.qj-bubble-action-pill:active {
+  transform: scale(0.96);
+}
+
+.qj-bubble-action-pill.primary {
+  border-color: transparent;
+  background: var(--qj-brand-primary);
+  color: var(--qj-brand-contrast);
+}
+
+.qj-bubble-action-pill.warning {
+  border-color: color-mix(in srgb, var(--qj-status-warning) 36%, transparent);
+  background: color-mix(in srgb, var(--qj-status-warning) 16%, var(--qj-bg-surface));
+  color: var(--qj-text-primary);
+}
+
+.qj-companion-task-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--qj-status-success);
+}
+
+.qj-companion-task-dot.warning {
+  background: var(--qj-status-warning);
+}
+
+.qj-portal-action-dock {
+  position: absolute;
+  right: -28px;
+  top: 44px;
+  bottom: auto;
+  z-index: 24;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity 150ms ease-out;
+}
+
+.qj-muse-avatar-hero:hover .qj-portal-action-dock,
+.qj-muse-avatar-hero:focus-within .qj-portal-action-dock {
+  opacity: 1;
+}
+
+.qj-muse-avatar-icon-btn,
+.qj-muse-avatar-edit-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 9999px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--muse-blur-pill-bg);
+  backdrop-filter: blur(16px);
+  color: var(--qj-text-secondary);
+  box-shadow: var(--pi-shadow-card);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    transform 140ms ease-out,
+    background-color 140ms ease-out,
+    color 140ms ease-out;
+}
+
+.qj-muse-avatar-icon-btn:hover,
+.qj-muse-avatar-edit-btn:hover {
+  transform: scale(1.06);
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+}
+
+.qj-muse-avatar-icon-btn:active,
+.qj-muse-avatar-edit-btn:active {
+  transform: scale(0.96);
+}
+
+/* ── 2. Frameless Live2D Stage Wrapper (`BotCharacterRig`) ───────────────── */
+
+.qj-char-rig {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  user-select: none;
+}
+
+.qj-char-rig.interactive {
+  cursor: pointer;
+}
+
+.qj-l2d-aura-stage {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── 3. Empty Main-Chat Hero & Task-Interactive Co-Pilot Deck (`BotHeroTaskDeck`) ─ */
+
+.qj-hero-portrait-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: -4px;
+}
+
+.qj-hero-task-deck {
+  width: 100%;
+  max-width: 560px;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.qj-hero-status-callout {
+  width: 100%;
+  padding: 7px 10px 7px 14px;
+  border-radius: 9999px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+.qj-hero-status-callout.warning {
+  border-color: color-mix(in srgb, var(--qj-status-warning) 36%, transparent);
+  background: color-mix(in srgb, var(--qj-status-warning) 10%, var(--qj-bg-subtle));
+}
+
+.qj-hero-status-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--qj-text-primary);
+}
+
+.qj-hero-status-left .qj-hero-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-hero-status-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.qj-hero-status-btn {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 9999px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  font-size: 12px;
+  font-weight: 530;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, transform 120ms ease-out;
+}
+
+.qj-hero-status-btn:hover {
+  background: var(--qj-bg-elevated);
+}
+
+.qj-hero-status-btn:active {
+  transform: scale(0.97);
+}
+
+.qj-hero-status-btn.primary {
+  border-color: transparent;
+  background: var(--qj-brand-primary);
+  color: var(--qj-brand-contrast);
+}
+
+.qj-hero-starter-row {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.qj-hero-starter-capsule {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  background: var(--qj-bg-subtle);
+  border: 1px solid var(--qj-border-subtle);
+  color: var(--qj-text-secondary);
+  font-size: 13px;
+  font-weight: 480;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out,
+    transform 120ms ease-out;
+}
+
+.qj-hero-starter-icon {
+  color: var(--qj-text-muted);
+  flex-shrink: 0;
+  transition: color 150ms ease-out;
+}
+
+.qj-hero-starter-capsule:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.qj-hero-starter-capsule:hover .qj-hero-starter-icon {
+  color: var(--qj-text-secondary);
+}
+
+.qj-hero-starter-capsule:active {
+  transform: scale(0.98);
+}
+
+.qj-hero-starter-count {
+  font-size: 11.5px;
+  color: var(--qj-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 4. Settings `声音和虚拟形象` Frameless Live2D Cards & Importer ──────── */
+
+.qj-settings-voice-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.qj-settings-voice-sub {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--qj-text-secondary);
+}
+
+.qj-portal-studio-launch-btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  border: 1px solid var(--qj-border-default);
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  font-size: 12.5px;
+  font-weight: 540;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: var(--pi-shadow-card);
+  transition: transform 140ms ease-out, background-color 140ms ease-out;
+}
+
+.qj-portal-studio-launch-btn svg {
+  color: var(--qj-brand-primary);
+}
+
+.qj-portal-studio-launch-btn:hover {
+  background: var(--qj-bg-elevated);
+}
+
+.qj-settings-char-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.qj-settings-char-card {
+  border: 1px solid var(--qj-border-subtle);
+  padding: 8px 8px 12px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-primary);
+  overflow: hidden;
+  transition:
+    transform 140ms ease-out,
+    background-color 140ms ease-out,
+    border-color 140ms ease-out;
+}
+
+.qj-settings-char-card:hover {
+  background: var(--qj-bg-hover);
+}
+
+.qj-settings-char-card:active {
+  transform: scale(0.97);
+}
+
+.qj-settings-char-card.active {
+  border-color: var(--qj-brand-primary);
+  box-shadow: 0 0 0 1px var(--qj-brand-primary);
+  background: var(--qj-bg-surface);
+}
+
+.qj-settings-bust-frame {
+  width: 100%;
+  height: 148px;
+  border-radius: 12px;
+  background: var(--qj-bg-app);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qj-settings-char-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.qj-settings-char-label {
+  font-size: 13px;
+  font-weight: 580;
+}
+
+.qj-settings-char-sub {
+  font-size: 11.5px;
+  color: var(--qj-text-secondary);
+}
+
+.qj-settings-upload-dropzone {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px dashed var(--qj-border-strong);
+  background: var(--muse-soft-fill);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.qj-settings-upload-dropzone.drag-active {
+  border-color: var(--qj-brand-primary);
+  background: var(--qj-brand-soft);
+}
+
+.qj-settings-upload-copy {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.qj-settings-upload-title {
+  font-size: 13.5px;
+  font-weight: 550;
+}
+
+.qj-settings-upload-desc {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--qj-text-secondary);
+}
+
+.qj-settings-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.qj-settings-upload-pill {
+  height: 32px;
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 530;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── 5. Unified Full-Bleed《千机 · 角色与任务工坊》(`.qj-l2d-modal`) ──────── */
+
+.qj-showcase-backdrop {
+  z-index: 365;
+  padding: 20px;
+  backdrop-filter: blur(12px);
+}
+
+.qj-l2d-modal {
+  --gal-ink-primary: #0f172a;
+  --gal-ink-secondary: rgba(15, 23, 42, 0.66);
+  --gal-ink-muted: rgba(15, 23, 42, 0.46);
+  --gal-card-bg: rgba(255, 255, 255, 0.74);
+  --gal-card-border: rgba(255, 255, 255, 0.88);
+  --gal-card-shadow:
+    0 20px 48px -16px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(15, 23, 42, 0.055);
+  --gal-dock-bg: rgba(255, 255, 255, 0.76);
+  --gal-sub-fill: rgba(15, 23, 42, 0.045);
+  --gal-sub-hover: rgba(15, 23, 42, 0.08);
+  --gal-sub-active: rgba(255, 255, 255, 0.94);
+  --gal-hairline: rgba(15, 23, 42, 0.075);
+
+  position: relative;
+  width: 1040px;
+  max-width: 96vw;
+  height: 656px;
+  max-height: 92vh;
+  border-radius: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 58fr) minmax(372px, 42fr);
+  background: transparent;
+  border: 1px solid var(--qj-border-default);
+  overflow: hidden;
+  color: var(--gal-ink-primary);
+}
+
+.qj-l2d-modal[data-gallery-surface="dark"] {
+  --gal-ink-primary: #f8fafc;
+  --gal-ink-secondary: rgba(226, 232, 240, 0.74);
+  --gal-ink-muted: rgba(148, 163, 184, 0.62);
+  --gal-card-bg: rgba(18, 21, 32, 0.74);
+  --gal-card-border: rgba(255, 255, 255, 0.13);
+  --gal-card-shadow: 0 24px 52px -16px rgba(0, 0, 0, 0.54);
+  --gal-dock-bg: rgba(18, 21, 32, 0.76);
+  --gal-sub-fill: rgba(255, 255, 255, 0.065);
+  --gal-sub-hover: rgba(255, 255, 255, 0.115);
+  --gal-sub-active: rgba(255, 255, 255, 0.16);
+  --gal-hairline: rgba(255, 255, 255, 0.09);
+}
+
+@media (max-width: 920px) {
+  .qj-l2d-modal {
+    grid-template-columns: 1fr;
+    height: 92vh;
+    overflow-y: auto;
+  }
+}
+
+.qj-showcase-drop-overlay {
+  position: absolute;
+  inset: 14px;
+  z-index: 60;
+  border-radius: 22px;
+  border: 1.5px dashed var(--qj-brand-primary);
+  background: var(--gal-card-bg);
+  backdrop-filter: blur(18px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.qj-showcase-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-drop-card svg {
+  color: var(--qj-brand-primary);
+}
+
+.qj-showcase-drop-title {
+  font-size: 15px;
+  font-weight: 580;
+}
+
+.qj-showcase-drop-sub {
+  font-size: 12.5px;
+  color: var(--gal-ink-secondary);
+}
+
+/* Left 58% — Open Borderless Character Exhibition & Floating Task HUD Card */
+.qj-l2d-exhibition-stage {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.qj-l2d-editorial-anchor {
+  position: absolute;
+  top: 26px;
+  left: 28px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.qj-l2d-editorial-name {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 620;
+  line-height: 1.2;
+  text-wrap: balance;
+  color: var(--gal-ink-primary);
+}
+
+.qj-l2d-editorial-meta {
+  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--gal-ink-secondary);
+}
+
+.qj-l2d-editorial-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--gal-ink-muted);
+}
+
+.qj-l2d-editorial-whisper {
+  color: var(--gal-ink-primary);
+  font-weight: 510;
+}
+
+.qj-l2d-stage-task-hud {
+  position: absolute;
+  top: 24px;
+  right: 18px;
+  z-index: 14;
+  width: max-content;
+  min-width: 244px;
+  max-width: 292px;
+  box-sizing: border-box;
+  padding: 10px 13px;
+  border-radius: 16px;
+  background: var(--gal-dock-bg);
+  border: 1px solid var(--gal-card-border);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: var(--gal-card-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  animation: qj-pill-pop-in 160ms ease-out both;
+}
+
+.qj-l2d-stage-task-hud[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--qj-status-warning) 45%, var(--gal-card-border));
+}
+
+.qj-l2d-stage-task-hud[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--qj-status-success) 42%, var(--gal-card-border));
+}
+
+.qj-l2d-stage-task-hud[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--qj-status-danger) 45%, var(--gal-card-border));
+}
+
+.qj-l2d-task-hud-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--qj-brand-primary);
+}
+
+.qj-l2d-stage-task-hud[data-tone="warning"] .qj-l2d-task-hud-head { color: var(--qj-status-warning); }
+.qj-l2d-stage-task-hud[data-tone="success"] .qj-l2d-task-hud-head { color: var(--qj-status-success); }
+.qj-l2d-stage-task-hud[data-tone="danger"] .qj-l2d-task-hud-head { color: var(--qj-status-danger); }
+
+.qj-l2d-task-hud-speech {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--gal-ink-primary);
+}
+
+.qj-l2d-task-hud-meta {
+  font-size: 11px;
+  color: var(--gal-ink-muted);
+  white-space: nowrap;
+}
+
+.qj-l2d-open-character-well {
+  position: relative;
+  z-index: 4;
+  width: 540px;
+  height: 540px;
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qj-l2d-dock-wrap {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 18px;
+  z-index: 12;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.qj-showcase-bottom-dock {
+  padding: 5px 7px;
+  border-radius: 9999px;
+  background: var(--gal-dock-bg);
+  border: 1px solid var(--gal-card-border);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--gal-card-shadow);
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  pointer-events: auto;
+}
+
+.qj-showcase-framing-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9999px;
+  background: var(--gal-sub-fill);
+  gap: 2px;
+}
+
+.qj-showcase-framing-btn {
+  height: 27px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gal-ink-secondary);
+  font-size: 12px;
+  font-weight: 510;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.qj-showcase-framing-btn:hover {
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-framing-btn.active {
+  background: var(--gal-sub-active);
+  color: var(--gal-ink-primary);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  font-weight: 560;
+}
+
+.qj-showcase-dock-divider {
+  width: 1px;
+  height: 15px;
+  background: var(--gal-hairline);
+}
+
+.qj-showcase-quick-triggers {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.qj-showcase-trigger-chip {
+  height: 27px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gal-ink-secondary);
+  font-size: 12px;
+  font-weight: 510;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease, transform 120ms ease;
+}
+
+.qj-showcase-trigger-chip:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-trigger-chip:active {
+  transform: scale(0.97);
+}
+
+/* ── 6. Right 42% Flat Frosted-Glass Inspector (Zero Nested Cards) ───────── */
+
+.qj-l2d-inspector-card {
+  position: relative;
+  z-index: 6;
+  margin: 16px 16px 16px 0;
+  padding: 16px 18px;
+  border-radius: 22px;
+  background: var(--gal-card-bg);
+  border: 1px solid var(--gal-card-border);
+  box-shadow: var(--gal-card-shadow);
+  backdrop-filter: blur(24px) saturate(160%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: var(--gal-ink-primary);
+}
+
+@media (max-width: 920px) {
+  .qj-l2d-inspector-card {
+    margin: 0 16px 16px;
+  }
+}
+
+.qj-l2d-inspector-card .qj-muse-modal-close {
+  color: var(--gal-ink-secondary);
+}
+
+.qj-l2d-inspector-card .qj-muse-modal-close:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-deck-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.qj-showcase-deck-head-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.qj-showcase-deck-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  text-wrap: balance;
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-reel-cta {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--gal-hairline);
+  border-radius: 9999px;
+  background: var(--gal-sub-fill);
+  color: var(--gal-ink-primary);
+  font-size: 11.5px;
+  font-weight: 530;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+.qj-showcase-reel-cta svg {
+  color: var(--qj-brand-primary);
+}
+
+.qj-showcase-reel-cta:hover {
+  background: var(--gal-sub-hover);
+}
+
+.qj-showcase-reel-cta.active {
+  background: var(--qj-brand-soft);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 34%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+.qj-showcase-reel-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qj-showcase-reel-bar {
+  width: 100%;
+  height: 3px;
+  border-radius: 9999px;
+  background: var(--gal-hairline);
+  overflow: hidden;
+}
+
+.qj-showcase-reel-bar > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--qj-brand-primary);
+  transform-origin: left center;
+  transition: transform 180ms ease-out;
+}
+
+.qj-showcase-reel-caption {
+  font-size: 11.5px;
+  color: var(--gal-ink-secondary);
+}
+
+.qj-showcase-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qj-showcase-divider-section {
+  padding-top: 10px;
+  border-top: 1px solid var(--gal-hairline);
+}
+
+.qj-showcase-error-note {
+  font-size: 11.5px;
+  color: var(--qj-status-danger);
+}
+
+.qj-showcase-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 560;
+  color: var(--gal-ink-secondary);
+}
+
+.qj-l2d-muted-hint {
+  font-size: 12px;
+  color: var(--gal-ink-muted);
+}
+
+.qj-showcase-asset-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.qj-showcase-icon-action {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--gal-hairline);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gal-ink-secondary);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+.qj-showcase-icon-action:hover,
+.qj-showcase-icon-only:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-icon-only {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--gal-hairline);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gal-ink-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+.qj-showcase-persona-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.qj-showcase-persona-pill {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  border: 1px solid var(--gal-hairline);
+  background: var(--gal-sub-fill);
+  color: var(--gal-ink-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+.qj-showcase-persona-pill:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-persona-pill.active {
+  background: var(--gal-sub-active);
+  border-color: var(--qj-brand-primary);
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-persona-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.qj-showcase-persona-name {
+  font-size: 11.5px;
+  font-weight: 560;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qj-task-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.qj-task-stage-chip {
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 9999px;
+  border: 1px solid var(--gal-hairline);
+  background: transparent;
+  color: var(--gal-ink-secondary);
+  font-size: 11.5px;
+  font-weight: 510;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+.qj-task-stage-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.qj-task-stage-chip:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+.qj-task-stage-chip.active {
+  background: var(--qj-brand-soft);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 45%, transparent);
+  color: var(--qj-brand-primary);
+  font-weight: 560;
+}
+
+.qj-task-bound-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--qj-brand-primary);
+  flex-shrink: 0;
+}
+
+.qj-task-bind-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.qj-task-bind-btn {
+  height: 25px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--qj-brand-primary) 34%, var(--gal-hairline));
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+  font-size: 11px;
+  font-weight: 550;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: opacity 140ms ease-out, transform 120ms ease-out;
+}
+
+.qj-task-bind-btn:active {
+  transform: scale(0.98);
+}
+
+.qj-task-bind-reset {
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gal-ink-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 140ms ease-out, background-color 140ms ease-out;
+}
+
+.qj-task-bind-reset:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+/* Live2D Expression Strip */
+.qj-live2d-exp-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 58px;
+  overflow-y: auto;
+}
+
+.qj-live2d-exp-pill {
+  height: 25px;
+  padding: 0 9px;
+  border-radius: 9999px;
+  border: 1px solid var(--gal-hairline);
+  background: var(--gal-sub-fill);
+  color: var(--gal-ink-secondary);
+  font-size: 11.5px;
+  font-weight: 510;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.qj-live2d-exp-pill:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+.qj-live2d-exp-pill.active {
+  background: var(--qj-brand-soft);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 42%, transparent);
+  color: var(--qj-brand-primary);
+  font-weight: 560;
+}
+
+/* Live2D Motion List */
+.qj-showcase-motion-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.qj-showcase-cat-strip {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.qj-showcase-cat-tab {
+  height: 23px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gal-ink-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.qj-showcase-cat-tab:hover {
+  background: var(--gal-sub-hover);
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-cat-tab.active {
+  background: var(--gal-sub-active);
+  color: var(--gal-ink-primary);
+  font-weight: 580;
+}
+
+.qj-showcase-motion-grid {
+  flex: 1 1 auto;
+  min-height: 82px;
+  overflow-y: auto;
+  padding-right: 2px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 5px;
+}
+
+.qj-showcase-motion-empty {
+  grid-column: 1 / -1;
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gal-ink-muted);
+}
+
+.qj-showcase-motion-card {
+  height: 31px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--gal-hairline);
+  background: var(--gal-sub-fill);
+  color: var(--gal-ink-primary);
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.qj-showcase-motion-card:hover {
+  background: var(--gal-sub-hover);
+}
+
+.qj-showcase-motion-card.active {
+  background: var(--qj-brand-soft);
+  border-color: color-mix(in srgb, var(--qj-brand-primary) 45%, transparent);
+  color: var(--qj-brand-primary);
+}
+
+.qj-showcase-motion-name {
+  font-size: 11.5px;
+  font-weight: 510;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qj-live2d-exp-grid,
+.qj-showcase-motion-grid {
+  scrollbar-width: thin;
+  scrollbar-color: var(--gal-hairline) transparent;
+}
+
+.qj-hero-starter-capsule:focus-visible,
+.qj-l2d-modal button:focus-visible {
+  outline: 2px solid var(--qj-brand-primary);
+  outline-offset: 2px;
+}
+
+/* Bottom Atmosphere & Parallax Section (Flat, Zero Nested Card) */
+.qj-showcase-optics-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.qj-showcase-light-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qj-showcase-light-icon {
+  color: var(--gal-ink-muted);
+  flex-shrink: 0;
+}
+
+.qj-showcase-light-pills {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.qj-showcase-light-pill {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background: var(--gal-sub-fill);
+  color: var(--gal-ink-secondary);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.qj-showcase-light-pill.active {
+  background: var(--gal-sub-active);
+  border-color: var(--qj-brand-primary);
+  color: var(--gal-ink-primary);
+  font-weight: 560;
+}
+
+.qj-showcase-light-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.qj-showcase-footer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.qj-showcase-headtrack-inline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.qj-showcase-headtrack-copy {
+  display: flex;
+  flex-direction: column;
+}
+
+.qj-showcase-headtrack-title {
+  font-size: 11px;
+  font-weight: 540;
+  color: var(--gal-ink-primary);
+}
+
+.qj-showcase-headtrack-sub {
+  font-size: 10px;
+  color: var(--gal-ink-secondary);
+}
+
+.qj-showcase-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  padding: 2px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--gal-hairline);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 150ms ease;
+}
+
+.qj-showcase-switch.on {
+  background: var(--qj-brand-primary);
+}
+
+.qj-showcase-switch-thumb {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  transform: translate3d(0, 0, 0);
+  transition: transform 150ms ease-out;
+}
+
+.qj-showcase-switch.on .qj-showcase-switch-thumb {
+  transform: translate3d(14px, 0, 0);
+}
+
+.qj-showcase-parallax-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qj-showcase-mini-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--gal-ink-secondary);
+}
+
+.qj-showcase-mini-slider input[type="range"] {
+  width: 68px;
+  accent-color: var(--qj-brand-primary);
+  cursor: pointer;
+}
+
+/* ── 7. Micro-Motion & Reduced Motion ────────────────────────────────────── */
+
+@keyframes qj-speech-float-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+
+@keyframes qj-pill-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qj-portal-speech-bubble,
+  .qj-l2d-stage-task-hud {
+    animation: none !important;
+  }
+  .qj-portal-action-dock,
+  .qj-hero-starter-capsule,
+  .qj-showcase-switch-thumb,
+  .qj-showcase-reel-bar > span {
+    transition: none !important;
+  }
+}

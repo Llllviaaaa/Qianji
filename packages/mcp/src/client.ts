@@ -180,7 +180,7 @@ class StdioMcpClient implements McpClient {
     const result = await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: "Qianji", version: "0.3.0" },
+      clientInfo: { name: "Qianji", version: "0.4.0" },
     }) as { protocolVersion?: string; capabilities?: McpCapabilities };
     const negotiated = result.protocolVersion || PROTOCOL_VERSION;
     if (!SUPPORTED_PROTOCOL_VERSIONS.has(negotiated)) {
@@ -377,7 +377,7 @@ class HttpMcpClient implements McpClient {
     const result = await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: "Qianji", version: "0.3.0" },
+      clientInfo: { name: "Qianji", version: "0.4.0" },
     }) as { protocolVersion?: string; capabilities?: McpCapabilities };
     this.negotiatedVersion = result.protocolVersion || PROTOCOL_VERSION;
     if (!SUPPORTED_PROTOCOL_VERSIONS.has(this.negotiatedVersion)) {

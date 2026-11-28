@@ -6,24 +6,94 @@ export const CLEAN_IDEA_SECTIONS: BotIdeaSection[] = [
     items: [
       {
         id: "idea-health-check",
-        icon: "✓",
+        icon: "check",
         title: "给你一份验证过的本地仓库健康度清单",
         description: "等你忙完手头代码，我可以按顺序核实当前工作区的未提交分支、依赖状态与测试结果，给你一份状态清楚的总结。",
         seedPrompt: "帮我检查当前工作区的未提交变更、分支状态与测试健康度，整理一份清晰的总结清单。",
+        sourceLabel: "工作区洞察",
+        isFeatured: true,
+        buildStatus: "not_started",
+        capabilities: [
+          {
+            kind: "doc",
+            title: "仓库健康度核对报告",
+            subtitle: "分支差异、依赖一致性与单测状态逐项核对结果",
+            ready: true,
+            docPreset: {
+              name: "仓库健康度核对报告",
+              summary: "汇总未提交变更、分支落后情况与核心测试通过率",
+            },
+          },
+          {
+            kind: "workbench",
+            title: "Agent 工作台草案",
+            subtitle: "发现异常时直接生成可一键接力的修复上下文",
+            ready: true,
+          },
+        ],
+        howItWorks:
+          "我会先只读扫描当前工作区的 Git 状态、分支偏离与最近测试结果，不会改动你正在编辑的任何文件；核对完成后生成一份结论清晰的报告，遇到需要修改代码的问题再等你确认。",
       },
       {
         id: "idea-space-board",
-        icon: "❖",
+        icon: "space",
         title: "我可以为你构建个人千机面板，把我处理的所有事项集中在一处展示",
         description: "无需繁琐配置。需要你拍板的事项置顶显示，每天早上静默刷新。",
         seedPrompt: "我想创建一个空间，关于 每日待拍板事项与工作推进看板",
+        sourceLabel: "组合方案包",
+        isFeatured: true,
+        buildStatus: "not_started",
+        capabilities: [
+          {
+            kind: "space",
+            title: "空间",
+            subtitle: "个人晨间推进面板，置顶待拍板事项与目标进展。",
+            ready: true,
+            spacePreset: {
+              title: "个人千机推进面板",
+              description: "集中汇总待拍板事项、长期目标与最新核查产物",
+            },
+          },
+          {
+            kind: "schedule",
+            title: "定期任务",
+            subtitle: "每天早上 08:30 静默刷新面板数据，无异常不打扰。",
+            ready: true,
+            schedulePreset: {
+              name: "每日千机面板静默刷新",
+              prompt: "汇总今日待拍板事项、活跃目标阻塞点与最新动态简报并更新空间面板。",
+              frequency: "daily",
+              hour: 8,
+              minute: 30,
+            },
+          },
+        ],
+        howItWorks:
+          "启动后我会为你创建专属常驻空间，并挂载一条每天早上的静默刷新任务。平时所有后台进展直接沉淀在面板里，只有真正卡在需要你拍板的节点才置顶提醒你。",
       },
       {
         id: "idea-cost-plan",
-        icon: "$",
+        icon: "dollar",
         title: "我可以按真实对话习惯梳理多模型怎么搭配最省心省钱",
         description: "结合日常问答、深度长文与代码推理场景，规划主力模型与高性价比轻量模型的分工建议。",
         seedPrompt: "帮我规划一套兼顾响应速度、推理质量与调用成本的多模型日常搭配方案。",
+        sourceLabel: "成本与效率",
+        isFeatured: true,
+        buildStatus: "not_started",
+        capabilities: [
+          {
+            kind: "doc",
+            title: "多模型分工与成本对照单",
+            subtitle: "按主聊天、后台巡检与深度编码推荐最优模型组合",
+            ready: true,
+            docPreset: {
+              name: "多模型日常搭配方案",
+              summary: "对比各模型响应延迟、上下文单价与适用任务边界",
+            },
+          },
+        ],
+        howItWorks:
+          "我会读取当前已配置的供应商模型列表与近期会话负载特征，测算高频巡检与深度推理各自的开销占比，整理出一份可直接套用的主备模型分工表供你确认。",
       },
     ],
   },
@@ -32,17 +102,60 @@ export const CLEAN_IDEA_SECTIONS: BotIdeaSection[] = [
     items: [
       {
         id: "idea-pre-pr",
-        icon: "⑂",
+        icon: "git",
         title: "提交合并前，自动在隔离环境跑完门禁并生成变更摘要",
         description: "自动执行类型检查、代码规范与单测校验，完全不打乱你当前正在编辑的文件。",
         seedPrompt: "帮我梳理当前项目的提交前门禁检查步骤，并生成本次改动的变更摘要。",
+        sourceLabel: "工程守护",
+        buildStatus: "not_started",
+        capabilities: [
+          {
+            kind: "workbench",
+            title: "Agent 工作台门禁草案",
+            subtitle: "隔离执行 typecheck / lint / test 并提取失败定位",
+            ready: true,
+          },
+          {
+            kind: "doc",
+            title: "PR 变更摘要草稿",
+            subtitle: "按模块归纳核心改动动机、影响面与验证结果",
+            ready: true,
+          },
+        ],
+        howItWorks:
+          "我会在受控隔离副本中依次运行类型检查、代码规范与关联单测，全部通过后生成结构化 PR 描述草稿；若某项门禁报错，我会附上精确文件行号等你决定是否接力修复。",
       },
       {
         id: "idea-watch-ci",
-        icon: "✦",
+        icon: "sparkles",
         title: "监测重点任务与异常日志，并在第一时间备好排查草案",
         description: "把需要盯守的目标交给我。只有真正出现异常时才提醒你，并附上可直接切入工作台的排查线索。",
         seedPrompt: "帮我制定一份重点仓库与构建异常的定时巡检计划。",
+        sourceLabel: "组合方案包",
+        buildStatus: "not_started",
+        capabilities: [
+          {
+            kind: "schedule",
+            title: "定期任务",
+            subtitle: "按工作日或固定间隔静默巡检构建与日志信号。",
+            ready: true,
+            schedulePreset: {
+              name: "重点构建与异常巡检",
+              prompt: "检查重点仓库构建状态与错误日志，仅在发现新异常时整理排查线索。",
+              frequency: "weekdays",
+              hour: 10,
+              minute: 0,
+            },
+          },
+          {
+            kind: "goal",
+            title: "异常盯守目标",
+            subtitle: "持续追踪未闭环故障直至验证恢复",
+            ready: true,
+          },
+        ],
+        howItWorks:
+          "我会先和你确认要盯守的仓库或命令指标，随后建立静默定期巡检。正常运行期间零打扰；一旦捕获新失败，立即整理根因假设与工作台接力卡片通知你。",
       },
     ],
   },
@@ -51,26 +164,77 @@ export const CLEAN_IDEA_SECTIONS: BotIdeaSection[] = [
     items: [
       {
         id: "idea-morning-brief",
-        icon: "☀",
+        icon: "sun",
         title: "把一整天的安排整理成清爽早报，不用一早翻零散通知",
         description: "一页汇集待办重点、长期目标进度与关注资讯，每天早上准时就绪。",
         seedPrompt: "我们来定制一份适合我节奏的每日清爽早报模板。",
+        sourceLabel: "日常节律",
+        buildStatus: "not_started",
+        capabilities: [
+          {
+            kind: "space",
+            title: "空间",
+            subtitle: "早晨报告，集中呈现今日日程、阻塞点与精选资讯。",
+            ready: true,
+            spacePreset: {
+              title: "每日清爽早报",
+              description: "汇集今日关键安排、跨天目标状态与定制动态",
+            },
+          },
+          {
+            kind: "schedule",
+            title: "定期任务",
+            subtitle: "每天早上按你习惯的时间自动成稿。",
+            ready: true,
+            schedulePreset: {
+              name: "生成每日清爽早报",
+              prompt: "结合今日日程、活跃目标进展与关注领域生成一页清爽早报。",
+              frequency: "daily",
+              hour: 8,
+              minute: 0,
+            },
+          },
+        ],
+        howItWorks:
+          "早上准时汇总你的未完结目标、近期收件箱重点与技术动态，清晰划分待你拍板、正在推进与今日日程三块内容，让你一打开就能掌握全局。",
       },
       {
         id: "idea-overnight-research",
-        icon: "☾",
+        icon: "moon",
         title: "在休息前把长耗时调研交给我，整理好对比结论等你拍板",
         description: "搜集技术资料、对比方案优劣、汇总成结构化文档并归档进资源库。",
         seedPrompt: "帮我针对以下主题做一次深度对比调研，并把结论整理成结构化报告：",
+        sourceLabel: "深度调研",
+        buildStatus: "not_started",
+        capabilities: [
+          {
+            kind: "space",
+            title: "空间",
+            subtitle: "调研专题看板，沉淀多轮对比数据与参考信源。",
+            ready: true,
+          },
+          {
+            kind: "doc",
+            title: "结构化对比调研报告",
+            subtitle: "清晰列出已完成核实、核心权衡与待你决策项",
+            ready: true,
+          },
+        ],
+        howItWorks:
+          "把调研题目或纠结的备选方案交给我后，我会分步检索权威资料、横向核对关键指标与成本边界，最后交付一份写明结论与适用建议的报告归档到资源库。",
       },
     ],
   },
 ];
 
+export const DEFAULT_FEED_INSTRUCTIONS =
+  "为我打造一个关于我兴趣的动态版块。保持内容简洁直接。确保可快速浏览。尽量避免点击诱饵。";
+
 export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
   mainSessionId: "",
   mainSessionFile: "",
   botCwd: "",
+  customBotCwd: "",
   profile: {
     displayName: "千机",
     avatarPreset: "alabaster-felt",
@@ -90,8 +254,13 @@ export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
   pendingApprovals: [],
   recentApprovals: [],
   feed: [],
+  feedInstructions: DEFAULT_FEED_INSTRUCTIONS,
   ideaSections: CLEAN_IDEA_SECTIONS,
   goals: [],
+  goalViewPrefs: {
+    showSubtitles: true,
+    autoSort: false,
+  },
   spaces: [],
   documents: [],
   media: [],
@@ -115,6 +284,7 @@ export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
   connectorConfigs: {
     email: {
       enabled: false,
+      permission: "ask-write",
       preset: "qq",
       emailAddress: "",
       imapHost: "imap.qq.com",
@@ -128,6 +298,7 @@ export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
     calendar: { enabled: false, icsUrl: "", localIcsPath: "", leadMinutes: 15 },
     processSensor: { enabled: true, watchedProcesses: [], lateNightCareEnabled: true },
     meetingsIm: {
+      permission: "ask-write",
       meetingNotesEnabled: false,
       meetingNotesDir: "",
       telegramEnabled: false,
@@ -135,6 +306,16 @@ export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
       hasTelegramToken: false,
       feishuEnabled: false,
       hasFeishuWebhook: false,
+    },
+    github: { enabled: false, permission: "read-only", watchedRepos: [], hasToken: false },
+    notion: { enabled: false, permission: "read-only", parentPageId: "", hasToken: false },
+    slack: { enabled: false, permission: "ask-write", channelLabel: "", hasWebhookUrl: false },
+    customWebhook: {
+      enabled: false,
+      permission: "ask-write",
+      label: "Zapier / 自定义 Webhook",
+      endpointUrl: "",
+      hasBearerToken: false,
     },
   },
   awareness: {
@@ -159,6 +340,8 @@ export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
       engine: "wsl2",
       engineState: "running",
       distroName: "qianji-bot-vm",
+      storageDir: "",
+      customStorageDir: "",
       isolationSummary: "WSL2 独立 VHDX · interop=off · unshare -m · cgroup v2",
     },
     remote: {
@@ -172,7 +355,7 @@ export const FALLBACK_BOT_SNAPSHOT: BotSnapshotResult = {
       privateKeyPath: "",
       hasStoredSecret: false,
     },
-    liveViewTaskTitle: "虚拟服务器受控环境空闲待命",
+    liveViewTaskTitle: "独立云桌面与受控浏览器待命中",
   },
   embeddedTasks: [],
 };

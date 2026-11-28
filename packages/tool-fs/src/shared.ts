@@ -21,9 +21,22 @@ export function displayPath(base: string, path: string): string {
 }
 
 /** Directories never worth walking into. */
-export const SKIPPED_DIRS = new Set([".git", "node_modules", ".hg", ".svn"]);
+export const SKIPPED_DIRS = new Set([".git", "node_modules", ".hg", ".svn", ".ccache"]);
 
-/** Every file under `root`, depth first, skipping `SKIPPED_DIRS`. */
+const WIN_RESERVED_DEVICE_RE = /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?:\..*)?$/i;
+
+/**
+ * Whether `entryName` is a Windows reserved DOS device name (`CON`, `PRN`, `AUX`,
+ * `NUL`, `COM1`..`COM9`, `LPT1`..`LPT9`, with or without extension). Opening these
+ * on Win32 can block indefinitely on console/device I/O (`CONIN$`).
+ */
+export function isWindowsDeviceBaseName(entryName: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== "win32") return false;
+  const trimmed = entryName.trim().replace(/[. ]+$/, "");
+  return WIN_RESERVED_DEVICE_RE.test(trimmed);
+}
+
+/** Every file under `root`, depth first, skipping `SKIPPED_DIRS` and Windows device names. */
 export function* walkFiles(root: string, signal?: AbortSignal): Generator<string> {
   const stack = [root];
   while (stack.length > 0) {
@@ -38,6 +51,7 @@ export function* walkFiles(root: string, signal?: AbortSignal): Generator<string
     entries.sort((a, b) => a.name.localeCompare(b.name));
     const subdirs: string[] = [];
     for (const entry of entries) {
+      if (isWindowsDeviceBaseName(entry.name)) continue;
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (!SKIPPED_DIRS.has(entry.name)) subdirs.push(path);

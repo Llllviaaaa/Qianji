@@ -4,18 +4,26 @@
  */
 import type {
   BotCalendarEventSummary,
+  BotConnectorTestKind,
   BotInboxItem,
   BotLiveAwarenessSummary,
   PendingBotApproval,
 } from "@qianji/protocol";
 import { buildDefaultAwareness, buildDefaultConnectorsConfig, formatClock, type PersistedBotState } from "../defaults.ts";
+import { ensureBotWorkspaceDefaults } from "../store-actions.ts";
+import { isConnectorWriteAllowed } from "../store-proactive.ts";
 import { syncCalendarEvents } from "./calendar-connector.ts";
-import { fetchRecentEmails, sendSmtpEmail, type FetchedEmail } from "./email-connector.ts";
+import {
+  dispatchApprovedConnectorAction,
+  syncGitHubRepos,
+  syncNotionPages,
+  type GitHubIssueEntry,
+  type NotionPageEntry,
+} from "./cloud-connectors.ts";
+import { fetchRecentEmails, type FetchedEmail } from "./email-connector.ts";
 import {
   pollTelegramUpdates,
   scanMeetingNotes,
-  sendFeishuWebhook,
-  sendTelegramMessage,
   type MeetingNoteEntry,
   type TelegramMessageEntry,
 } from "./meetings-and-im.ts";
@@ -25,6 +33,10 @@ export interface ConnectorSecrets {
   emailPassword?: string;
   telegramToken?: string;
   feishuWebhook?: string;
+  githubToken?: string;
+  notionToken?: string;
+  slackWebhook?: string;
+  customWebhookToken?: string;
 }
 
 export interface ConnectorDelta {
@@ -35,6 +47,8 @@ export interface ConnectorDelta {
   completedProcesses: string[];
   newMeetingNotes: MeetingNoteEntry[];
   newTelegramMsgs: TelegramMessageEntry[];
+  newGitHubItems: GitHubIssueEntry[];
+  newNotionPages: NotionPageEntry[];
   lateNightReminderNeeded: boolean;
   awareness: BotLiveAwarenessSummary;
 }
@@ -42,6 +56,8 @@ export interface ConnectorDelta {
 export class ConnectorHub {
   readonly processSensor: ProcessSensor;
   private readonly seenEmailKeys = new Set<string>();
+  private readonly seenGitHubIds = new Set<string>();
+  private readonly seenNotionIds = new Set<string>();
   private readonly notifiedMeetingIds = new Set<string>();
   private lastMeetingMtimeMs = 0;
   private telegramOffset = 0;
@@ -52,7 +68,7 @@ export class ConnectorHub {
   }
 
   ensureConfig(st: PersistedBotState): void {
-    if (!st.connectorConfigs) st.connectorConfigs = buildDefaultConnectorsConfig();
+    st.connectorConfigs = ensureBotWorkspaceDefaults(st.connectorConfigs ?? buildDefaultConnectorsConfig());
     if (!st.awareness) st.awareness = buildDefaultAwareness();
   }
 
@@ -82,6 +98,8 @@ export class ConnectorHub {
       completedProcesses: [],
       newMeetingNotes: [],
       newTelegramMsgs: [],
+      newGitHubItems: [],
+      newNotionPages: [],
       lateNightReminderNeeded: false,
       awareness: st.awareness ?? buildDefaultAwareness(),
     };
@@ -202,13 +220,82 @@ export class ConnectorHub {
       );
     }
 
+    if (cfg.github?.enabled && cfg.github.watchedRepos.length > 0) {
+      const ghCfg = cfg.github;
+      tasks.push(
+        syncGitHubRepos(ghCfg, secrets.githubToken)
+          .then((gh) => {
+            ghCfg.lastSyncAt = nowMs;
+            ghCfg.lastError = undefined;
+            const added: BotInboxItem[] = [];
+            for (const it of gh.items) {
+              if (!this.seenGitHubIds.has(it.id)) {
+                this.seenGitHubIds.add(it.id);
+                delta.newGitHubItems.push(it);
+              }
+              added.push({
+                id: it.id,
+                source: "github",
+                sender: `${it.repo} · @${it.author}`,
+                subject: `${it.isPullRequest ? "PR" : "Issue"} #${it.number}: ${it.title}`,
+                preview: it.url,
+                fullBody: `${it.title}\n${it.url}`,
+                replyTo: `${it.repo}#${it.number}`,
+                timeLabel: formatClock(it.updatedAt),
+                unread: true,
+                createdAt: it.updatedAt,
+              });
+            }
+            this.mergeInboxItems(st, added);
+          })
+          .catch((err) => {
+            ghCfg.lastError = err instanceof Error ? err.message : String(err);
+          }),
+      );
+    }
+
+    if (cfg.notion?.enabled && secrets.notionToken) {
+      const notionCfg = cfg.notion;
+      const notionToken = secrets.notionToken;
+      tasks.push(
+        syncNotionPages(notionCfg, notionToken)
+          .then((pages) => {
+            notionCfg.lastSyncAt = nowMs;
+            notionCfg.lastError = undefined;
+            const added: BotInboxItem[] = [];
+            for (const pg of pages) {
+              if (!this.seenNotionIds.has(pg.id)) {
+                this.seenNotionIds.add(pg.id);
+                delta.newNotionPages.push(pg);
+              }
+              added.push({
+                id: `notion-${pg.id}`,
+                source: "notion",
+                sender: "Notion",
+                subject: pg.title,
+                preview: pg.url,
+                fullBody: `${pg.title}\n${pg.url}`,
+                replyTo: pg.id,
+                timeLabel: formatClock(pg.lastEditedAt),
+                unread: true,
+                createdAt: pg.lastEditedAt,
+              });
+            }
+            this.mergeInboxItems(st, added);
+          })
+          .catch((err) => {
+            notionCfg.lastError = err instanceof Error ? err.message : String(err);
+          }),
+      );
+    }
+
     await Promise.all(tasks);
     st.awareness = delta.awareness;
     return delta;
   }
 
   async testConnector(
-    kind: "email" | "calendar" | "processes" | "meetings_im",
+    kind: BotConnectorTestKind,
     st: PersistedBotState,
     secrets: ConnectorSecrets,
   ): Promise<{ ok: boolean; message: string }> {
@@ -259,6 +346,91 @@ export class ConnectorHub {
       };
     }
 
+    if (kind === "github") {
+      const gh = cfg.github ?? buildDefaultConnectorsConfig().github;
+      if (!gh) return { ok: false, message: "GitHub 配置缺失" };
+      try {
+        const res = await syncGitHubRepos(gh, secrets.githubToken);
+        if (res.discoveredRepos && res.discoveredRepos.length > 0 && gh.watchedRepos.length === 0) {
+          gh.watchedRepos = res.discoveredRepos;
+        }
+        gh.lastSyncAt = Date.now();
+        gh.lastError = undefined;
+        await this.collectDelta(st, secrets);
+        return { ok: true, message: `GitHub 连接成功：同步到 ${res.totalCount} 条开放 Issue/PR` };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        gh.lastError = msg;
+        return { ok: false, message: msg };
+      }
+    }
+
+    if (kind === "notion") {
+      const notion = cfg.notion ?? buildDefaultConnectorsConfig().notion;
+      if (!notion) return { ok: false, message: "Notion 配置缺失" };
+      try {
+        const pages = await syncNotionPages(notion, secrets.notionToken ?? "");
+        notion.lastSyncAt = Date.now();
+        notion.lastError = undefined;
+        await this.collectDelta(st, secrets);
+        return { ok: true, message: `Notion 连接成功：检索到 ${pages.length} 个最近页面` };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        notion.lastError = msg;
+        return { ok: false, message: msg };
+      }
+    }
+
+    if (kind === "slack") {
+      const slack = cfg.slack ?? buildDefaultConnectorsConfig().slack;
+      if (!slack || !secrets.slackWebhook) return { ok: false, message: "请填写 Slack Incoming Webhook 地址" };
+      slack.lastSyncAt = Date.now();
+      slack.lastError = undefined;
+      return { ok: true, message: "Slack Webhook 已加密保存，待批准外发就绪" };
+    }
+
+    if (kind === "custom_webhook") {
+      const wh = cfg.customWebhook ?? buildDefaultConnectorsConfig().customWebhook;
+      if (!wh || !/^https?:\/\//i.test(wh.endpointUrl.trim())) {
+        return { ok: false, message: "请填写有效的自定义 Webhook HTTPS 地址" };
+      }
+      wh.lastSyncAt = Date.now();
+      wh.lastError = undefined;
+      return { ok: true, message: `自动化 Webhook「${wh.label || "自定义"}」配置就绪` };
+    }
+
+    if (kind === "meeting_notes") {
+      if (cfg.meetingsIm.meetingNotesDir.trim() === "") {
+        return { ok: false, message: "请选择或填写会议纪要目录路径" };
+      }
+      const notes = scanMeetingNotes(cfg.meetingsIm.meetingNotesDir, 0);
+      cfg.meetingsIm.lastSyncAt = Date.now();
+      cfg.meetingsIm.lastError = undefined;
+      return { ok: true, message: `会议纪要目录已就绪，扫描到 ${notes.notes.length} 份纪要文件` };
+    }
+
+    if (kind === "telegram") {
+      if (!secrets.telegramToken) return { ok: false, message: "请填写 Telegram Bot Token" };
+      try {
+        const tg = await pollTelegramUpdates(cfg.meetingsIm.telegramApiBase, secrets.telegramToken, this.telegramOffset);
+        this.telegramOffset = tg.nextOffset;
+        cfg.meetingsIm.lastSyncAt = Date.now();
+        cfg.meetingsIm.lastError = undefined;
+        return { ok: true, message: `Telegram 连接成功，收到 ${tg.messages.length} 条新消息` };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        cfg.meetingsIm.lastError = msg;
+        return { ok: false, message: msg };
+      }
+    }
+
+    if (kind === "feishu") {
+      if (!secrets.feishuWebhook) return { ok: false, message: "请填写飞书机器人 Webhook 地址" };
+      cfg.meetingsIm.lastSyncAt = Date.now();
+      cfg.meetingsIm.lastError = undefined;
+      return { ok: true, message: "飞书机器人 Webhook 已加密保存，待批准外发就绪" };
+    }
+
     // meetings_im
     const msgs: string[] = [];
     if (cfg.meetingsIm.meetingNotesEnabled && cfg.meetingsIm.meetingNotesDir.trim() !== "") {
@@ -287,35 +459,9 @@ export class ConnectorHub {
   ): Promise<string> {
     this.ensureConfig(st);
     const cfg = st.connectorConfigs ?? buildDefaultConnectorsConfig();
-    if (approval.kind === "send-email") {
-      if (!approval.recipient || !approval.draftBody) {
-        throw new Error("邮件批准项缺少收件人或正文草稿");
-      }
-      await sendSmtpEmail(cfg.email, secrets.emailPassword ?? "", {
-        to: approval.recipient,
-        subject: approval.subject || "Re: 回复",
-        body: approval.draftBody,
-      });
-      return `刚刚 · 已通过 SMTP 发送邮件至 ${approval.recipient}`;
+    if (approval.kind && !isConnectorWriteAllowed(st, approval.kind)) {
+      throw new Error("该连接器当前处于「仅只读 (read-only)」权限模式，已拒绝外发操作");
     }
-
-    if (approval.kind === "send-telegram") {
-      const chatId = approval.recipient || cfg.meetingsIm.telegramChatId;
-      if (!secrets.telegramToken || !chatId || !approval.draftBody) {
-        throw new Error("Telegram 发送缺少 Token、Chat ID 或消息正文");
-      }
-      await sendTelegramMessage(cfg.meetingsIm.telegramApiBase, secrets.telegramToken, chatId, approval.draftBody);
-      return `刚刚 · 已发送 Telegram 消息给 ${chatId}`;
-    }
-
-    if (approval.kind === "send-feishu") {
-      if (!secrets.feishuWebhook || !approval.draftBody) {
-        throw new Error("飞书推送缺少加密 Webhook 或消息正文");
-      }
-      await sendFeishuWebhook(secrets.feishuWebhook, approval.draftBody);
-      return "刚刚 · 已通过飞书机器人推送消息";
-    }
-
-    return "刚刚 · 已批准执行";
+    return dispatchApprovedConnectorAction(approval, cfg, secrets);
   }
 }

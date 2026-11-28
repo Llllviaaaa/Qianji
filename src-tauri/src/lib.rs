@@ -164,8 +164,20 @@ fn request_app_exit(app: AppHandle, already_confirmed: bool) {
 
 fn initialize_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "tray_show", "打开 千机", true, None::<&str>)?;
-    let show_bot = MenuItem::with_id(app, "tray_show_bot", "进入 Bot 分身形态", true, None::<&str>)?;
-    let show_agent = MenuItem::with_id(app, "tray_show_agent", "进入 Agent 工作台", true, None::<&str>)?;
+    let show_bot = MenuItem::with_id(
+        app,
+        "tray_show_bot",
+        "进入 Bot 分身形态",
+        true,
+        None::<&str>,
+    )?;
+    let show_agent = MenuItem::with_id(
+        app,
+        "tray_show_agent",
+        "进入 Agent 工作台",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &show_bot, &show_agent, &quit])?;
 
@@ -347,9 +359,12 @@ pub fn run() {
                 let hide_to_tray = window
                     .app_handle()
                     .try_state::<AppState>()
-                    .and_then(|st| st.settings.lock().ok().map(|s| {
-                        s.ui_shell_mode != "bot" || s.close_to_tray_in_bot_mode
-                    }))
+                    .and_then(|st| {
+                        st.settings
+                            .lock()
+                            .ok()
+                            .map(|s| s.ui_shell_mode != "bot" || s.close_to_tray_in_bot_mode)
+                    })
                     .unwrap_or(true);
                 if hide_to_tray {
                     let _ = window.hide();

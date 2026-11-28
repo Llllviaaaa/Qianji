@@ -11,17 +11,20 @@ import {
   isCorePluginTemplateKind,
   type CorePluginTemplateKind,
 } from "./plugin-templates-core.ts";
+import { buildConnectorTemplateSpec } from "./plugin-templates-connector.ts";
 
 export type PluginTemplateKind =
   | "tool-only"
   | "ui-slot-widget"
   | "fullstack-panel"
+  | "connector"
   | CorePluginTemplateKind;
 
 export const PLUGIN_TEMPLATE_KINDS: readonly PluginTemplateKind[] = [
   "tool-only",
   "ui-slot-widget",
   "fullstack-panel",
+  "connector",
   ...CORE_PLUGIN_TEMPLATE_KINDS,
 ] as const;
 
@@ -73,11 +76,15 @@ export function scaffoldPluginFiles(options: {
     written.push(relPath);
   };
 
+  const connectorSpec = template === "connector"
+    ? buildConnectorTemplateSpec({ pluginId, title, description, toolPrefix })
+    : undefined;
+
   const coreSpec = isCorePluginTemplateKind(template)
     ? buildCoreTemplateSpec(template, { pluginId, title, description, toolPrefix })
     : undefined;
 
-  const hasHost = template === "tool-only" || template === "fullstack-panel";
+  const hasHost = template === "tool-only" || template === "fullstack-panel" || template === "connector";
   const hasClient =
     template === "ui-slot-widget" ||
     template === "fullstack-panel" ||
@@ -95,29 +102,33 @@ export function scaffoldPluginFiles(options: {
     },
   };
 
-  const pkgJson: Record<string, unknown> = {
-    name: pluginId,
-    version: "0.1.0",
-    private: true,
-    type: "module",
-    description,
-    ...(hasHost ? { main: "./index.ts" } : {}),
-    qianji: {
-      id: pluginId,
-      name: title,
-      ...(hasHost ? { host: "./index.ts" } : {}),
-      ...(hasClient ? { client: "./client.tsx" } : {}),
-      configSchema: coreSpec !== undefined ? coreSpec.configSchema : defaultConfigSchema,
-    },
-  };
+  const pkgJson: Record<string, unknown> = connectorSpec !== undefined
+    ? connectorSpec.pkgJson
+    : {
+        name: pluginId,
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        description,
+        ...(hasHost ? { main: "./index.ts" } : {}),
+        qianji: {
+          id: pluginId,
+          name: title,
+          ...(hasHost ? { host: "./index.ts" } : {}),
+          ...(hasClient ? { client: "./client.tsx" } : {}),
+          configSchema: coreSpec !== undefined ? coreSpec.configSchema : defaultConfigSchema,
+        },
+      };
   write("package.json", `${JSON.stringify(pkgJson, null, 2)}\n`);
 
-  const tsconfigInclude = coreSpec !== undefined
-    ? [...coreSpec.tsconfigInclude]
-    : [
-        ...(hasHost ? ["index.ts"] : []),
-        ...(hasClient ? ["client.tsx"] : []),
-      ];
+  const tsconfigInclude = connectorSpec !== undefined
+    ? [...connectorSpec.tsconfigInclude]
+    : coreSpec !== undefined
+      ? [...coreSpec.tsconfigInclude]
+      : [
+          ...(hasHost ? ["index.ts"] : []),
+          ...(hasClient ? ["client.tsx"] : []),
+        ];
 
   const typesRel = pluginTypesDir !== undefined
     ? relative(targetDir, pluginTypesDir).replace(/\\/g, "/")
@@ -148,6 +159,13 @@ export function scaffoldPluginFiles(options: {
         include: tsconfigInclude,
       };
   write("tsconfig.json", `${JSON.stringify(tsconfig, null, 2)}\n`);
+
+  if (connectorSpec !== undefined) {
+    for (const entry of connectorSpec.files) {
+      write(entry.relPath, entry.content);
+    }
+    return written;
+  }
 
   if (coreSpec !== undefined) {
     for (const entry of coreSpec.files) {

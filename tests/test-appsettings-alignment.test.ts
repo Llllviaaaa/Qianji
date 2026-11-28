@@ -51,10 +51,18 @@ describe("Phase 4.1: Tri-end AppSettings contract alignment", () => {
     expect(enabled.config.sandbox.enabled).toBe(false);
 
     const disabled = harnessFromDesktop({
-      settings: { ...DEFAULT_APP_SETTINGS, intelligentUiEnabled: false, sandboxEnabled: true },
+      settings: {
+        ...DEFAULT_APP_SETTINGS,
+        intelligentUiEnabled: false,
+        sandboxEnabled: true,
+        botWorkspaceDir: "D:/QianjiBot/workspace",
+        botStorageDir: "D:/QianjiVM",
+      },
       configDir: "D:/tmp/qianji-cfg",
     });
     expect(disabled.config.intelligentUi.enabled).toBe(false);
     expect(disabled.config.sandbox.enabled).toBe(true);
+    expect(disabled.config.bot.workspaceDir).toBe("D:/QianjiBot/workspace");
+    expect(disabled.config.bot.storageDir).toBe("D:/QianjiVM");
   });
 });

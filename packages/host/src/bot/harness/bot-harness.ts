@@ -3,9 +3,9 @@
  * specifically for Qianji Bot Mode (`packages/host/src/bot/harness/bot-harness.ts`).
  *
  * Distinct from `AgentLoop` (`packages/agent-loop`): builds caring companion prompts
- * (`bot-prompt.ts`), injects Bot-exclusive proactive tools (`bot-tools.ts`), bridges
- * VM/Browser execution, enforces outbound safety boundaries, and runs asynchronous
- * post-turn reflection (`bot-reflection.ts`).
+ * (`bot-prompt.ts`), injects Bot-exclusive proactive tools (`bot-tools.ts`), syncs
+ * live in-flight turn activity, enforces outbound safety boundaries, and runs
+ * asynchronous post-turn semantic reflection (`bot-reflection.ts`).
  */
 import type { Context } from "@deepseek-ai/cordis";
 import {
@@ -25,8 +25,12 @@ import {
   type ToolSchema,
   type UserContent,
 } from "@qianji/llm";
+import type { BotActivityEntry } from "@qianji/protocol";
+import type { ScheduledTask } from "@qianji/schedule";
 import type { EventOf, ModelRef, Session } from "@qianji/session";
 import { textOutput, type ToolCall, type ToolEnv, type ToolOutput } from "@qianji/tools";
+import type { PersistedBotState } from "../defaults.ts";
+import type { TurnRecordOptions } from "../store-threads.ts";
 import { buildBotSystemPrompt } from "./bot-prompt.ts";
 import { reflectOnSettledTurn } from "./bot-reflection.ts";
 import {
@@ -35,7 +39,6 @@ import {
   executeBotNativeTool,
   type BotNativeToolsHost,
 } from "./bot-tools.ts";
-import type { PersistedBotState } from "../defaults.ts";
 
 interface BotRun {
   controller: AbortController;
@@ -44,6 +47,8 @@ interface BotRun {
   followUp: UserContent[][];
   streaming: StreamChunk[];
   runningTools: Map<string, string>;
+  turnStartSeq: number;
+  activityId?: string;
 }
 
 export interface BotHarnessHost extends BotNativeToolsHost {
@@ -54,7 +59,9 @@ export interface BotHarnessHost extends BotNativeToolsHost {
   persist(): void;
   getReflectionModel(state: PersistedBotState): ModelRef | undefined;
   executeToolInVm(call: ToolCall, env: ToolEnv): Promise<ToolOutput | undefined>;
-  recordSettledTurn(session: Session): Promise<void>;
+  recordTurnProgress(session: Session, options?: TurnRecordOptions): Promise<BotActivityEntry | undefined>;
+  recordSettledTurn(session: Session, options?: TurnRecordOptions): Promise<BotActivityEntry | undefined>;
+  listScheduledTasks?(): ScheduledTask[];
   notifyUpdated(reason: string, extra?: Record<string, unknown>): void;
   readonly botWorkspaceDir: string;
   readonly memoryFile: string;
@@ -82,7 +89,7 @@ export class BotCompanionHarness implements Agents {
     if (this.runs.has(session.id)) throw new AgentBusyError(session.id);
     if (session.state().model === undefined) throw new NoModelError(session.id);
     const event = session.append("user", { content });
-    this.startRun(session);
+    this.startRun(session, event.seq);
     return event;
   }
 
@@ -140,7 +147,7 @@ export class BotCompanionHarness implements Agents {
     session.delta(delta);
   }
 
-  private startRun(session: Session): void {
+  private startRun(session: Session, turnStartSeq: number): void {
     const run: BotRun = {
       controller: new AbortController(),
       done: Promise.resolve(),
@@ -148,6 +155,7 @@ export class BotCompanionHarness implements Agents {
       followUp: [],
       streaming: [],
       runningTools: new Map(),
+      turnStartSeq,
     };
     this.runs.set(session.id, run);
     const release = this.ctx.sessions.hold(session.id);
@@ -157,6 +165,12 @@ export class BotCompanionHarness implements Agents {
   private async drive(session: Session, run: BotRun): Promise<void> {
     let outcome: RunOutcome = "error";
     this.emit(session, { type: "agent-start" });
+    const initialActivity = await this.host
+      .recordTurnProgress(session, { turnStartSeq: run.turnStartSeq, status: "running" })
+      .catch(() => undefined);
+    if (initialActivity !== undefined) run.activityId = initialActivity.id;
+    this.host.notifyUpdated("turn-started", { sessionId: session.id, activityId: run.activityId });
+
     try {
       outcome = await this.loop(session, run);
     } catch (error) {
@@ -174,8 +188,15 @@ export class BotCompanionHarness implements Agents {
     this.runs.delete(session.id);
     this.emit(session, { type: "agent-end", outcome });
 
-    await this.host.recordSettledTurn(session).catch(() => undefined);
-    this.host.notifyUpdated("turn-settled", { sessionId: session.id });
+    const settledOutcome = outcome === "done" ? "done" : outcome === "aborted" ? "aborted" : "error";
+    const settledActivity = await this.host
+      .recordSettledTurn(session, {
+        turnStartSeq: run.turnStartSeq,
+        activityId: run.activityId,
+        outcome: settledOutcome,
+      })
+      .catch(() => undefined);
+    this.host.notifyUpdated("turn-settled", { sessionId: session.id, activityId: settledActivity?.id });
 
     if (outcome === "done") {
       const state = await this.host.ensureLoaded().catch(() => null);
@@ -187,6 +208,8 @@ export class BotCompanionHarness implements Agents {
           memoryFile: this.host.memoryFile,
           botWorkspaceDir: this.host.botWorkspaceDir,
           reflectionModel: this.host.getReflectionModel(state),
+          activityId: settledActivity?.id ?? run.activityId,
+          turnStartSeq: run.turnStartSeq,
           onPersistAndNotify: (reason) => {
             this.host.persist();
             this.host.notifyUpdated(reason);
@@ -210,6 +233,7 @@ export class BotCompanionHarness implements Agents {
         soulMarkdown: this.host.readSoul(),
         memoryMarkdown: this.host.readMemory(),
         state: st,
+        scheduledTasks: this.host.listScheduledTasks?.() ?? [],
       });
 
       const hostToolSchemas = this.ctx.tools.schemas(session.id);
@@ -298,7 +322,18 @@ export class BotCompanionHarness implements Agents {
       if (signal.aborted) break;
       run.runningTools.set(call.id, call.name);
       this.emit(session, { type: "tool-start", callId: call.id, name: call.name });
-      const env: ToolEnv = { sessionId: session.id, cwd: session.header.cwd, signal };
+      const startedAct = await this.host
+        .recordTurnProgress(session, {
+          turnStartSeq: run.turnStartSeq,
+          activityId: run.activityId,
+          status: "running",
+          activeToolName: call.name,
+        })
+        .catch(() => undefined);
+      if (startedAct !== undefined) run.activityId = startedAct.id;
+      this.host.notifyUpdated("turn-tool-progress", { sessionId: session.id, activityId: run.activityId });
+
+      const env: ToolEnv = { sessionId: session.id, cwd: this.host.botWorkspaceDir || session.header.cwd, signal };
       const toolCall: ToolCall = { id: call.id, name: call.name, args: { ...call.arguments } };
       let out: ToolOutput;
       try {
@@ -319,6 +354,15 @@ export class BotCompanionHarness implements Agents {
         isError: out.isError === true,
       });
       this.emit(session, { type: "tool-end", callId: call.id, isError: out.isError === true });
+      const endedAct = await this.host
+        .recordTurnProgress(session, {
+          turnStartSeq: run.turnStartSeq,
+          activityId: run.activityId,
+          status: "running",
+        })
+        .catch(() => undefined);
+      if (endedAct !== undefined) run.activityId = endedAct.id;
+      this.host.notifyUpdated("turn-tool-progress", { sessionId: session.id, activityId: run.activityId });
     }
   }
 }

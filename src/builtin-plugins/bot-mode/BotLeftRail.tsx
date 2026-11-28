@@ -1,10 +1,27 @@
 /**
- * Left `68px` minimalist dock (`bot.rail` factory) matching `qianji-dual-mode-hifi.html` 1:1.
+ * 1:1+ Meta Muse Left Icon-Only Rail (`bot.rail` factory, `72px` fixed width).
+ *
+ * Renders the top circular avatar return button on non-chat views, 7 vertically
+ * centered `42px` circular icon buttons (`聊天 / 搜索 / 动态 / 点子 / 目标 / 资源库 / 创建空间`),
+ * global `Ctrl+B` (`Cmd+B`) drawer shortcut, and the bottom `=` menu trigger.
  */
 import { useEffect, type ReactElement } from "react";
-import type { SlotComponentProps } from "@qianji/client-slots";
-import { BotBrandOrbIcon, BotIcon, type BotIconName } from "./BotAvatarArt";
 import {
+  Equal,
+  Lightbulb,
+  MessageCircle,
+  Newspaper,
+  Search,
+  Shapes,
+  SquareCheck,
+  SquarePlus,
+} from "lucide-react";
+import { useNavigationState } from "@qianji/client";
+import type { SlotComponentProps } from "@qianji/client-slots";
+import { BotCompanionAvatar } from "./BotAvatarArt";
+import {
+  botUiStore,
+  openBotConnector,
   openBotModal,
   patchBotUi,
   useBotSnapshot,
@@ -12,25 +29,31 @@ import {
   type BotRailView,
 } from "./botStore";
 
-const DOCK_ITEMS: ReadonlyArray<{
-  readonly id: BotRailView | "search";
-  readonly title: string;
-  readonly icon: BotIconName;
-}> = [
-  { id: "chat", title: "聊天 (Ctrl+J)", icon: "chat" },
-  { id: "search", title: "搜索 (Ctrl+K)", icon: "search" },
-  { id: "feed", title: "动态", icon: "feed" },
-  { id: "ideas", title: "点子", icon: "ideas" },
-  { id: "goals", title: "目标", icon: "goals" },
-  { id: "library", title: "资源库", icon: "library" },
-  { id: "spaces", title: "创建空间", icon: "spaces" },
+type RailNavId = BotRailView | "search";
+
+interface RailNavItem {
+  readonly id: RailNavId;
+  readonly label: string;
+  readonly Icon: typeof MessageCircle;
+}
+
+const RAIL_ITEMS: readonly RailNavItem[] = [
+  { id: "chat", label: "聊天", Icon: MessageCircle },
+  { id: "search", label: "搜索", Icon: Search },
+  { id: "feed", label: "动态", Icon: Newspaper },
+  { id: "ideas", label: "点子", Icon: Lightbulb },
+  { id: "goals", label: "目标", Icon: SquareCheck },
+  { id: "library", label: "资源库", Icon: Shapes },
+  { id: "spaces", label: "创建空间", Icon: SquarePlus },
 ];
 
 export function BotLeftRail(
-  _props: SlotComponentProps<{ readonly active?: boolean }, "root">,
+  props: SlotComponentProps<{ readonly active?: boolean }, "root">,
 ): ReactElement {
   const ui = useBotUiState();
   const snapshot = useBotSnapshot();
+  const navState = useNavigationState(props.ctx);
+  const isBotShellActive = props.active === true || navState?.shellMode === "bot";
 
   useEffect(() => {
     if (!ui.moreMenuOpen || typeof document === "undefined" || typeof window === "undefined") {
@@ -55,92 +78,143 @@ export function BotLeftRail(
     };
   }, [ui.moreMenuOpen]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onShortcut = (event: KeyboardEvent) => {
+      const domBotActive =
+        typeof document !== "undefined" &&
+        document.querySelector('.app-shell[data-shell-mode="bot"]') !== null;
+      if (!isBotShellActive && !domBotActive) return;
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "b"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        const cur = botUiStore.get();
+        const currentlyVisible = cur.chatDrawerOpen || cur.chatDrawerPinned;
+        patchBotUi({
+          activeView: "chat",
+          chatDrawerOpen: !currentlyVisible,
+          ...(currentlyVisible ? { chatDrawerPinned: false } : {}),
+        });
+      }
+    };
+    window.addEventListener("keydown", onShortcut, true);
+    return () => window.removeEventListener("keydown", onShortcut, true);
+  }, [isBotShellActive]);
+
   const pendingCount = snapshot.pendingApprovals.length;
+  const showTopAvatar =
+    ui.activeView === "feed" ||
+    ui.activeView === "ideas" ||
+    ui.activeView === "goals" ||
+    ui.activeView === "library";
 
   return (
-    <aside className="qj-bot-rail" aria-label="千机 Bot 导航栏" data-testid="bot-left-rail">
-      <button
-        type="button"
-        className="qj-bot-brand-btn"
-        title={snapshot.profile.displayName}
-        aria-label="回到主聊天"
-        onClick={() => patchBotUi({ activeView: "chat", activeSessionId: null, modal: null })}
-      >
-        <BotBrandOrbIcon size={20} />
-      </button>
+    <aside
+      className="qj-bot-island-dock"
+      aria-label="千机分身导航栏"
+      data-testid="bot-left-rail"
+    >
+      <div className="qj-rail-top-slot">
+        {showTopAvatar && (
+          <button
+            type="button"
+            className="qj-rail-avatar-btn"
+            title={`回到${snapshot.profile.displayName}聊天`}
+            aria-label="打开完整聊天"
+            onClick={() => patchBotUi({ activeView: "chat", modal: null, moreMenuOpen: false })}
+          >
+            <BotCompanionAvatar
+              preset={snapshot.profile.avatarPreset}
+              customDataUrl={snapshot.profile.customAvatarDataUrl}
+              size={40}
+              shape="circle"
+            />
+          </button>
+        )}
+      </div>
 
-      <div className="qj-bot-dock-group">
-        {DOCK_ITEMS.map((item) => {
-          const isSearch = item.id === "search";
-          const isActive = !isSearch && ui.activeView === item.id && ui.modal === null;
+      <nav className="qj-island-group" aria-label="分身视图">
+        {RAIL_ITEMS.map(({ id, label, Icon }) => {
+          const isActive =
+            id === "search" ? ui.modal === "search" : ui.activeView === id && ui.modal === null;
           return (
             <button
-              key={item.id}
+              key={id}
               type="button"
-              data-bot-nav={item.id}
-              className={`qj-bot-dock-slot${isActive ? " active" : ""}`}
-              title={item.title}
-              aria-label={item.title}
-              aria-current={isActive ? "page" : undefined}
+              data-bot-nav={id}
+              title={id === "chat" ? `${label} (Ctrl+B 切换侧栏)` : label}
+              aria-label={label}
+              aria-current={isActive && id !== "search" ? "page" : undefined}
+              className={`qj-island-slot${isActive ? " active" : ""}`}
               onClick={() => {
-                patchBotUi({ moreMenuOpen: false });
-                if (isSearch) {
+                if (id === "search") {
                   openBotModal("search");
                   return;
                 }
-                if (item.id === "spaces" && ui.composerDraft.trim() === "") {
-                  patchBotUi({ activeView: "spaces", modal: null, composerDraft: "我想创建一个空间，关于 " });
-                } else {
-                  patchBotUi({ activeView: item.id, modal: null });
+                if (id === "chat" && ui.activeView === "chat" && ui.modal === null) {
+                  const isOpen = ui.chatDrawerOpen || ui.chatDrawerPinned;
+                  patchBotUi({
+                    chatDrawerOpen: !isOpen,
+                    ...(isOpen ? { chatDrawerPinned: false } : {}),
+                    moreMenuOpen: false,
+                  });
+                  return;
                 }
+                patchBotUi({ activeView: id, modal: null, moreMenuOpen: false });
               }}
             >
-              <div className="qj-bot-dock-circle">
-                <BotIcon name={item.icon} />
-              </div>
-              {item.id === "feed" && pendingCount > 0 && (
-                <span className="qj-bot-dock-badge" aria-hidden="true" />
+              <Icon size={21} strokeWidth={1.75} aria-hidden="true" />
+              {id === "feed" && pendingCount > 0 && (
+                <span className="qj-island-badge" aria-hidden="true" />
               )}
             </button>
           );
         })}
-      </div>
+      </nav>
 
-      <div className="qj-bot-rail-more-anchor" style={{ position: "relative" }}>
-        <button
-          type="button"
-          data-bot-nav="more"
-          className={`qj-bot-dock-slot${ui.moreMenuOpen ? " active" : ""}`}
-          title="设置与更多"
-          aria-label="设置与更多"
-          onClick={() => patchBotUi({ moreMenuOpen: !ui.moreMenuOpen })}
-        >
-          <div className="qj-bot-dock-circle">
-            <BotIcon name="more" />
-          </div>
-        </button>
+      <div className="qj-island-bottom">
+        <div className="qj-bot-rail-more-anchor">
+          <button
+            type="button"
+            data-bot-nav="more"
+            title="更多与设置"
+            aria-label="更多与设置"
+            className={`qj-island-slot${ui.moreMenuOpen ? " active" : ""}`}
+            onClick={() => patchBotUi({ moreMenuOpen: !ui.moreMenuOpen })}
+          >
+            <Equal size={20} strokeWidth={1.85} aria-hidden="true" />
+          </button>
 
-        {ui.moreMenuOpen && (
-          <div className="qj-bot-more-popover" role="menu" aria-label="Bot 更多菜单">
-            <button type="button" role="menuitem" onClick={() => openBotModal("shortcuts")}>
-              <span>键盘快捷键</span>
-              <span style={{ fontSize: 12, color: "var(--qj-text-muted)" }}>Ctrl+/</span>
-            </button>
-            <button type="button" role="menuitem" onClick={() => openBotModal("report-issue")}>
-              <span>报告问题</span>
-            </button>
-            <div style={{ margin: "4px 0", borderTop: "1px solid var(--qj-border-default)" }} />
-            <button
-              type="button"
-              role="menuitem"
-              style={{ fontWeight: 500 }}
-              onClick={() => openBotModal("settings", "general")}
-            >
-              <span>设置</span>
-              <span style={{ fontSize: 12, fontWeight: 400, color: "var(--qj-text-muted)" }}>Ctrl+,</span>
-            </button>
-          </div>
-        )}
+          {ui.moreMenuOpen && (
+            <div className="qj-bot-more-popover" role="menu" aria-label="Bot 更多菜单">
+              <button type="button" role="menuitem" onClick={() => openBotConnector(null)}>
+                <span>连接器与应用</span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => openBotModal("shortcuts")}>
+                <span>键盘快捷键</span>
+                <span className="qj-bot-menu-shortcut">Ctrl+/</span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => openBotModal("report-issue")}>
+                <span>报告问题</span>
+              </button>
+              <div className="qj-bot-menu-sep" />
+              <button
+                type="button"
+                role="menuitem"
+                className="qj-bot-menu-strong"
+                onClick={() => openBotModal("settings", "general")}
+              >
+                <span>设置</span>
+                <span className="qj-bot-menu-shortcut">Ctrl+,</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );

@@ -3,8 +3,9 @@
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { BotLocalEngineKind, BotLocalEngineState, BotSharedFolderRule } from "@qianji/protocol";
+import { migrateStorageSubdirs } from "./storage-paths.ts";
 import {
   buildMountedExecScript,
   runWslSubprocess,
@@ -40,25 +41,98 @@ export interface WslRuntimeOptions {
 
 export class WslContainerRuntime {
   readonly distroName: string;
-  readonly instanceDir: string;
-  readonly cacheDir: string;
-  readonly sharedCopiesDir: string;
-  readonly vhdxPath: string;
-  readonly goldenTarPath: string;
 
+  private storageDir: string;
+  private botWorkspaceDir: string;
   private supportedCache: boolean | undefined;
   private provisioning = false;
   private cachedSnapshot: { ts: number; value: WslInspectSnapshot } | undefined;
   private lastKernelVersion: string | undefined;
   private keepaliveChild: ChildProcess | null = null;
 
-  constructor(private readonly opts: WslRuntimeOptions) {
+  constructor(opts: WslRuntimeOptions) {
     this.distroName = opts.distroName ?? "qianji-bot-vm";
-    this.instanceDir = join(opts.botDir, "wsl-instance");
-    this.cacheDir = join(opts.botDir, "vm-cache");
-    this.sharedCopiesDir = join(opts.botDir, "shared-copies");
-    this.vhdxPath = join(this.instanceDir, "ext4.vhdx");
-    this.goldenTarPath = join(this.cacheDir, "golden-rootfs.tar");
+    this.storageDir = resolve(opts.botDir);
+    this.botWorkspaceDir = resolve(opts.botWorkspaceDir);
+  }
+
+  get instanceDir(): string {
+    return join(this.storageDir, "wsl-instance");
+  }
+
+  get cacheDir(): string {
+    return join(this.storageDir, "vm-cache");
+  }
+
+  get sharedCopiesDir(): string {
+    return join(this.storageDir, "shared-copies");
+  }
+
+  get vhdxPath(): string {
+    return join(this.instanceDir, "ext4.vhdx");
+  }
+
+  get goldenTarPath(): string {
+    return join(this.cacheDir, "golden-rootfs.tar");
+  }
+
+  setPaths(next: { storageDir: string; botWorkspaceDir: string }): void {
+    const nextStorage = resolve(next.storageDir);
+    const nextWs = resolve(next.botWorkspaceDir);
+    if (this.storageDir !== nextStorage) {
+      this.storageDir = nextStorage;
+      this.invalidateCache();
+    }
+    this.botWorkspaceDir = nextWs;
+  }
+
+  async relocateStorage(nextStorageDir: string, nextWorkspaceDir: string): Promise<void> {
+    const targetStorage = resolve(nextStorageDir);
+    const targetWs = resolve(nextWorkspaceDir);
+    if (this.storageDir.toLowerCase() === targetStorage.toLowerCase()) {
+      this.setPaths({ storageDir: targetStorage, botWorkspaceDir: targetWs });
+      return;
+    }
+
+    const prevStorage = this.storageDir;
+    const prevInstanceDir = this.instanceDir;
+    mkdirSync(targetStorage, { recursive: true });
+
+    if (this.isSupported()) {
+      const distros = await this.listDistros();
+      const installed = distros.some((d) => d.name.toLowerCase() === this.distroName.toLowerCase());
+      if (installed) {
+        await this.sleep();
+        const nextCacheDir = join(targetStorage, "vm-cache");
+        const nextInstanceDir = join(targetStorage, "wsl-instance");
+        mkdirSync(nextCacheDir, { recursive: true });
+        mkdirSync(nextInstanceDir, { recursive: true });
+        const exportTar = join(nextCacheDir, "relocated-rootfs.tar");
+        const exp = await runWslSubprocess("wsl.exe", ["--export", this.distroName, exportTar], { timeoutMs: 120_000 });
+        if (exp.exitCode !== 0) {
+          throw new Error(`导出 WSL2 容器镜像失败：${stripWslStderrNoise(exp.stderr) || exp.stdout}`);
+        }
+        await runWslSubprocess("wsl.exe", ["--unregister", this.distroName], { timeoutMs: 20_000 });
+        rmSync(prevInstanceDir, { recursive: true, force: true });
+        const imp = await runWslSubprocess(
+          "wsl.exe",
+          ["--import", this.distroName, nextInstanceDir, exportTar, "--version", "2"],
+          { timeoutMs: 120_000 },
+        );
+        rmSync(exportTar, { force: true });
+        if (imp.exitCode !== 0) {
+          throw new Error(`迁移导入 WSL2 容器失败：${stripWslStderrNoise(imp.stderr) || imp.stdout}`);
+        }
+      } else {
+        rmSync(prevInstanceDir, { recursive: true, force: true });
+      }
+    } else {
+      rmSync(prevInstanceDir, { recursive: true, force: true });
+    }
+
+    migrateStorageSubdirs(prevStorage, targetStorage);
+    this.setPaths({ storageDir: targetStorage, botWorkspaceDir: targetWs });
+    this.invalidateCache();
   }
 
   invalidateCache(): void {
@@ -339,7 +413,7 @@ export class WslContainerRuntime {
 
     const script = buildMountedExecScript({
       guestCwd: options.guestCwd ?? "/workspace",
-      workspaceMount: winPathToWslMount(this.opts.botWorkspaceDir),
+      workspaceMount: winPathToWslMount(this.botWorkspaceDir),
       sharedMounts,
       cpuCores: options.cpuCores,
       memoryLimitGb: options.memoryLimitGb,

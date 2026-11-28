@@ -14,11 +14,9 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
-  ChevronUp,
   CornerUpRight,
   ListOrdered,
   Square,
-  Trash2,
 } from "lucide-react";
 import {
   rewindController,
@@ -90,11 +88,6 @@ export function CoreComposerMain({
   const draft = composerSnap?.draft ?? "";
   const prefill = composerSnap?.prefill ?? null;
   const attachments = composerSnap?.attachments ?? EMPTY_ATTACHMENTS;
-  const queuedMessages = composerSnap?.managedFollowUpQueue ?? [];
-  const pendingCount =
-    queuedMessages.length +
-    (composerSnap?.steeringQueue.length ?? 0) +
-    (composerSnap?.followUpQueue.length ?? 0);
 
   const isStreaming =
     ownerStreaming ??
@@ -103,7 +96,6 @@ export function CoreComposerMain({
   const [streamingBehavior, setStreamingBehavior] = useState<"steer" | "followUp">(defaultFollowUpBehavior);
   const [syncedFollowUpDefault, setSyncedFollowUpDefault] = useState(defaultFollowUpBehavior);
   const [streamingMenuOpen, setStreamingMenuOpen] = useState(false);
-  const [queueOpen, setQueueOpen] = useState(false);
   const streamingWrapRef = useRef<HTMLDivElement>(null);
 
   if (syncedFollowUpDefault !== defaultFollowUpBehavior) {
@@ -386,63 +378,6 @@ export function CoreComposerMain({
           </div>
         </div>
       </div>
-
-      {pendingCount > 0 && (
-        <div className={`composer-queue ${queueOpen ? "open" : ""}`}>
-          <button
-            type="button"
-            className="composer-queue-summary"
-            aria-expanded={queuedMessages.length > 0 ? queueOpen : undefined}
-            onClick={() => queuedMessages.length > 0 && setQueueOpen((value) => !value)}
-          >
-            <ListOrdered size={14} />
-            <strong>{pendingCount} 条待处理</strong>
-            {queuedMessages.length > 0 && (queueOpen ? <ChevronDown size={14} /> : <ChevronUp size={14} />)}
-          </button>
-          {queueOpen && queuedMessages.length > 0 && (
-            <ol className="composer-queue-list" aria-label="待处理消息">
-              {queuedMessages.map((item, index) => (
-                <li key={item.id}>
-                  <span className="composer-queue-order">{index + 1}</span>
-                  <span className="composer-queue-copy">{item.text}</span>
-                  <span className="composer-queue-actions">
-                    <button
-                      type="button"
-                      disabled={index === 0}
-                      title="上移"
-                      onClick={() => composerService?.moveQueuedMessage(item.id, -1)}
-                    >
-                      <ChevronUp size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={index === queuedMessages.length - 1}
-                      title="下移"
-                      onClick={() => composerService?.moveQueuedMessage(item.id, 1)}
-                    >
-                      <ChevronDown size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      title="立即作为调整发送"
-                      onClick={() => void composerService?.steerQueuedMessage(item.id)}
-                    >
-                      <CornerUpRight size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      title="删除"
-                      onClick={() => composerService?.removeQueuedMessage(item.id)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
     </div>
   );
 }

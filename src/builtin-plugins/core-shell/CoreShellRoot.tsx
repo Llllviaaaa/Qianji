@@ -257,8 +257,8 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
   const effectiveShellMode = botAvailable && navSnap?.shellMode === "bot" ? "bot" : "agent";
   const isBotMode = effectiveShellMode === "bot";
 
-  const agentSidebarRendered = sidebarVisible || sidebarHoverPreview;
-  const panelOpen = isBotMode || agentSidebarRendered;
+  const sidebarRendered = sidebarVisible || sidebarHoverPreview;
+  const panelOpen = !isBotMode && sidebarRendered;
   const hasSlotStatusbarItems = (slotsRegistry?.getEntries("shell.statusbar").length ?? 0) > 0;
 
   return (
@@ -296,22 +296,17 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
           className={`primary-sidebar-panel${panelOpen ? " open" : ""}${!isBotMode && !sidebarVisible && sidebarHoverPreview ? " hover-preview" : ""}`}
           data-panel=""
           data-sidebar-panel-state={
-            isBotMode ? "pinned" : sidebarVisible ? "pinned" : sidebarHoverPreview ? "preview" : "closed"
+            isBotMode ? "closed" : sidebarVisible ? "pinned" : sidebarHoverPreview ? "preview" : "closed"
           }
           onMouseEnter={!isBotMode ? cancelHoverClose : undefined}
           onMouseLeave={!isBotMode && !sidebarVisible ? scheduleHoverClose : undefined}
         >
-          {agentSidebarRendered &&
+          {sidebarRendered &&
             renderSlot("shell.sidebar", {
               visible: sidebarVisible,
               width: sidebarWidth,
               onResize: handleSidebarWidthChange,
             })}
-          {botAvailable && (
-            <div className="qj-bot-rail-layer" aria-hidden={!isBotMode}>
-              {renderFactory("bot.rail", { active: isBotMode })}
-            </div>
-          )}
         </div>
 
         {!isBotMode && sidebarVisible && (
@@ -373,6 +368,9 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
 
           {botAvailable && (
             <div className="qj-stage-pane-bot" aria-hidden={!isBotMode}>
+              <div className="qj-bot-rail-layer" aria-hidden={!isBotMode}>
+                {renderFactory("bot.rail", { active: isBotMode })}
+              </div>
               {renderFactory("bot.stage", { active: isBotMode, cwd: effectiveCwd })}
             </div>
           )}

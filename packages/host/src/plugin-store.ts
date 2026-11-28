@@ -7,12 +7,19 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { PluginInstallOrigin, WorkspaceTrustEntry, WorkspaceTrustListResult } from "@qianji/protocol";
+import type {
+  PluginInstallOrigin,
+  PluginModeScopes,
+  WorkspaceTrustEntry,
+  WorkspaceTrustListResult,
+} from "@qianji/protocol";
 import { canonicalPath, pathComparisonKey, scanPluginsDirectory } from "./plugin-manifest.ts";
+import { sanitizeStoredScopes } from "./plugin-scopes.ts";
 
 export interface StoredPluginPatch {
   enabled?: boolean;
   watch?: boolean;
+  scopes?: Partial<PluginModeScopes>;
   config?: Record<string, unknown>;
   /** Present when a `local` plugin is linked in place rather than copied into `<dataDir>/plugins`. */
   linkedDir?: string;
@@ -22,6 +29,7 @@ export interface StoredPluginPatch {
 export interface StoredWorkspacePluginPatch {
   enabled?: boolean;
   watch?: boolean;
+  scopes?: Partial<PluginModeScopes>;
   config?: Record<string, unknown>;
 }
 
@@ -89,9 +97,11 @@ export function readPluginsStore(dataDir: string): PluginsStoreData {
     for (const [id, entry] of Object.entries(parsed.plugins)) {
       if (!isRecord(entry)) continue;
       const origin = sanitizeOrigin(entry.origin);
+      const scopes = sanitizeStoredScopes(entry.scopes);
       plugins[id] = {
         ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
         ...(typeof entry.watch === "boolean" ? { watch: entry.watch } : {}),
+        ...(scopes === undefined ? {} : { scopes }),
         ...(isRecord(entry.config) ? { config: entry.config } : {}),
         ...(typeof entry.linkedDir === "string" && entry.linkedDir.trim() !== "" ? { linkedDir: entry.linkedDir } : {}),
         ...(origin === undefined ? {} : { origin }),
@@ -103,9 +113,11 @@ export function readPluginsStore(dataDir: string): PluginsStoreData {
   if (isRecord(parsed.workspacePlugins)) {
     for (const [key, entry] of Object.entries(parsed.workspacePlugins)) {
       if (!isRecord(entry)) continue;
+      const scopes = sanitizeStoredScopes(entry.scopes);
       workspacePlugins[key] = {
         ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
         ...(typeof entry.watch === "boolean" ? { watch: entry.watch } : {}),
+        ...(scopes === undefined ? {} : { scopes }),
         ...(isRecord(entry.config) ? { config: entry.config } : {}),
       };
     }

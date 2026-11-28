@@ -137,6 +137,8 @@ export function harnessFromDesktop(message: DesktopMessage): DesktopHarness {
       remotePort: Math.max(1, num(settings.botRemotePort, DEFAULT_APP_SETTINGS.botRemotePort)),
       remoteUser: str(settings.botRemoteUser, DEFAULT_APP_SETTINGS.botRemoteUser),
       remoteWorkDir: str(settings.botRemoteWorkDir, DEFAULT_APP_SETTINGS.botRemoteWorkDir),
+      workspaceDir: str(settings.botWorkspaceDir, DEFAULT_APP_SETTINGS.botWorkspaceDir),
+      storageDir: str(settings.botStorageDir, DEFAULT_APP_SETTINGS.botStorageDir),
     },
     prompt: { instructions: personalInstructions(settings) },
   };

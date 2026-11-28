@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import type { BotDocumentItem, BotMediaItem, BotServerMode } from "@qianji/protocol";
+import type { PluginManager } from "../plugin-manager.ts";
 import type { ProcessProbeFn } from "./connectors/process-sensor.ts";
 import {
   DEFAULT_SOUL_MARKDOWN,
@@ -17,6 +18,9 @@ import {
 
 export interface BotStoreConfig {
   dataDir: string;
+  workspaceDir?: string;
+  storageDir?: string;
+  defaultModel?: () => { provider: string; model: string } | undefined;
   distroName?: string;
   displayName?: string;
   avatarPreset?: string;
@@ -30,6 +34,7 @@ export interface BotStoreConfig {
   remoteUser?: string;
   remoteWorkDir?: string;
   processProbe?: ProcessProbeFn;
+  pluginManager?: () => PluginManager | undefined;
 }
 
 export function writeFileAtomic(file: string, content: string, mode?: number): void {
@@ -57,6 +62,12 @@ export function applyBotConfigOverlay(target: PersistedBotState, config: BotStor
   if (typeof config.remotePort === "number") target.virtualServer.remote.port = config.remotePort;
   if (typeof config.remoteUser === "string" && config.remoteUser !== "") target.virtualServer.remote.username = config.remoteUser;
   if (typeof config.remoteWorkDir === "string" && config.remoteWorkDir !== "") target.virtualServer.remote.workDir = config.remoteWorkDir;
+  if (typeof config.workspaceDir === "string" && config.workspaceDir.trim() !== "") {
+    target.customWorkspaceDir = config.workspaceDir.trim();
+  }
+  if (typeof config.storageDir === "string" && config.storageDir.trim() !== "") {
+    target.virtualServer.local.customStorageDir = config.storageDir.trim();
+  }
 }
 
 export function executeApprovedShellCommand(command: string, cwd: string): Promise<{ code: number | null }> {

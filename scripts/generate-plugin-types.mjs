@@ -526,6 +526,45 @@ export declare namespace Logger {
   function format(exporter: Exporter, message: LoggerMessage): string;
 }
 
+export interface HostConnectorPatrolDelta {
+  title: string;
+  summary: string;
+  seedPrompt?: string;
+}
+
+export interface HostConnectorRegistration {
+  id: string;
+  name?: string;
+  tagline?: string;
+  description?: string;
+  category?: "office" | "dev" | "automation";
+  publisher?: string;
+  authLabel?: string;
+  authMode?: "plugin" | "browser" | "mcp-oauth" | "mcp-direct";
+  browserAuthUrl?: string;
+  mcpUrl?: string;
+  trustedReadOnly?: boolean;
+  icon?: string;
+  iconBg?: string;
+  featured?: boolean;
+  starterPrompts?: string[];
+  connect?: (ctx: { config: Record<string, unknown>; forceInteractive?: boolean }) => Promise<{
+    connected?: boolean;
+    accountLabel?: string;
+    requireConfigModal?: boolean;
+    message?: string;
+  }>;
+  disconnect?: () => Promise<void> | void;
+  status?: () =>
+    | Promise<{ connected: boolean; accountLabel?: string; error?: string }>
+    | { connected: boolean; accountLabel?: string; error?: string };
+  patrol?: () => Promise<HostConnectorPatrolDelta[]>;
+}
+
+export interface HostConnectorsService {
+  register(connector: HostConnectorRegistration): () => void;
+}
+
 export interface Context {
   tools: Tools;
   commands: Commands;
@@ -540,6 +579,7 @@ export interface Context {
   ui: Ui;
   pricing: Pricing;
   hostInfo: HostInfoService;
+  connectors: HostConnectorsService;
   contributions: ClientContributionService;
   styles: ClientStylesService;
   betterSidebar: BetterSidebarService;

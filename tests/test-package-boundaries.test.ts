@@ -62,6 +62,8 @@ const LOOP_PACKAGE = "agent-loop";
 const IMPLEMENTATION_EDGES: Record<string, string> = {
   "memory -> permissions": "the memory tool denies or confirms writes by the session's effective permission mode",
   "session-search-fts -> session-jsonl": "the FTS index parses and walks the JSONL session files it indexes",
+  "swarm -> pricing": "swarm telemetry estimates per-member and aggregate USD cost via the pricing catalog",
+  "swarm -> subagents": "swarm workers reuse subagent git worktree isolation, patch merging, forked context seeds, and tool allowlists",
 };
 
 type Kind = "contract" | "root" | "test-only" | "implementation";

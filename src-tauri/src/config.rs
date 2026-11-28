@@ -126,6 +126,10 @@ pub(crate) struct AppSettings {
     pub(crate) bot_remote_port: u16,
     pub(crate) bot_remote_user: String,
     pub(crate) bot_remote_work_dir: String,
+    #[serde(default)]
+    pub(crate) bot_workspace_dir: String,
+    #[serde(default)]
+    pub(crate) bot_storage_dir: String,
     pub(crate) close_to_tray_in_bot_mode: bool,
     pub(crate) archived_sessions: Vec<String>,
 }
@@ -333,6 +337,8 @@ impl Default for AppSettings {
             bot_remote_port: 22,
             bot_remote_user: String::new(),
             bot_remote_work_dir: "~/.qianji-vm".to_string(),
+            bot_workspace_dir: String::new(),
+            bot_storage_dir: String::new(),
             close_to_tray_in_bot_mode: true,
             archived_sessions: Vec::new(),
         }
