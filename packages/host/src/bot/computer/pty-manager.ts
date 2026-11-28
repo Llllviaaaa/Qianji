@@ -16,7 +16,7 @@ import { runWslSubprocess, winPathToWslMount, type WslContainerRuntime } from ".
 import { parseWslVerboseList, selectPreferredUbuntuDistro } from "./linux-gui-helpers.ts";
 import { quotePosixPath, quotePosixSingle } from "./remote-lease.ts";
 import type { RemoteNodesEngine } from "./remote-nodes-engine.ts";
-import { computeFencedRoots, resolveFencedPath } from "./sentinel-fence.ts";
+import { canonicalizeExistingAncestors, computeFencedRoots, resolveFencedPath } from "./sentinel-fence.ts";
 
 const MAX_OUTPUT_TAIL = 16_384;
 const DONE_MARKER_RE = /\r?\n?__QJ_DONE_([0-9a-f]{8})__:([^\r\n]*)\r?\n?/g;
@@ -159,14 +159,16 @@ export class PtySessionManager {
       return toInfo(entry);
     }
 
-    const wsDir = resolve(this.deps.getBotWorkspaceDir());
-    mkdirSync(wsDir, { recursive: true });
+    const rawWsDir = resolve(this.deps.getBotWorkspaceDir());
+    mkdirSync(rawWsDir, { recursive: true });
+    const wsDir = canonicalizeExistingAncestors(rawWsDir);
     const fencedTarget = resolveFencedPath(params.cwd, wsDir, this.deps.getSharedFolders());
     mkdirSync(fencedTarget.hostPath, { recursive: true });
+    const targetHostPath = canonicalizeExistingAncestors(fencedTarget.hostPath);
 
     let child: ChildProcessWithoutNullStreams;
     let shellKind: "sh" | "powershell";
-    let initialDisplayCwd = fencedTarget.hostPath;
+    let initialDisplayCwd = targetHostPath;
     const linuxDistro = engine === "local-linux" ? await this.resolveLinuxPtyDistro() : undefined;
 
     if (linuxDistro) {
@@ -182,11 +184,11 @@ export class PtySessionManager {
     } else if (process.platform === "win32") {
       shellKind = "powershell";
       child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"], {
-        cwd: fencedTarget.hostPath, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
+        cwd: targetHostPath, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       });
     } else {
       shellKind = "sh";
-      child = spawn("/bin/sh", [], { cwd: fencedTarget.hostPath, stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn("/bin/sh", [], { cwd: targetHostPath, stdio: ["pipe", "pipe", "pipe"] });
     }
 
     const entry: SubprocessPtyEntry = {
@@ -236,7 +238,7 @@ export class PtySessionManager {
     });
 
     if (linuxDistro) {
-      const wslMountCwd = winPathToWslMount(fencedTarget.hostPath);
+      const wslMountCwd = winPathToWslMount(targetHostPath);
       child.stdin.write(`cd ${quotePosixPath(wslMountCwd)} 2>/dev/null || cd /workspace 2>/dev/null || true\n`, "utf8");
     } else if (shellKind === "powershell") {
       const initScript = [
@@ -272,15 +274,26 @@ export class PtySessionManager {
     const cmdLine = params.data.replace(/[\r\n]+$/, "");
     const tok = randomBytes(4).toString("hex");
     const donePromise = new Promise<void>((resolveDone) => {
-      const timer = setTimeout(() => { entry.waiters.delete(tok); resolveDone(); }, 2_500);
+      const timer = setTimeout(() => { entry.waiters.delete(tok); resolveDone(); }, 15_000);
       entry.waiters.set(tok, () => { clearTimeout(timer); resolveDone(); });
     });
 
     if (entry.shellKind === "powershell") {
-      const wsDir = resolve(this.deps.getBotWorkspaceDir());
+      const rawWsDir = resolve(this.deps.getBotWorkspaceDir());
+      mkdirSync(rawWsDir, { recursive: true });
+      const wsDir = canonicalizeExistingAncestors(rawWsDir);
       const roots = computeFencedRoots(wsDir, this.deps.getSharedFolders());
-      const fenceSnippet = `$__roots = @(${roots.map((r) => psQuote(r.toLowerCase())).join(", ")}); $__cur = (Get-Location).ProviderPath; $__ok = $false; foreach ($__r in $__roots) { if ($__cur.ToLowerInvariant().StartsWith($__r)) { $__ok = $true; break } }; if (-not $__ok) { Set-Location -LiteralPath ${psQuote(wsDir)}; Write-Output '[Sentinel Fence] Directory outside fenced roots refused.' }; `;
-      entry.child.stdin.write(`${cmdLine}\n${fenceSnippet}Write-Output "__QJ_DONE_${tok}__:$((Get-Location).ProviderPath)"\n`, "utf8");
+      const fenceSnippet = [
+        `$__roots = @(${roots.map((r) => psQuote(r.toLowerCase())).join(", ")})`,
+        `$__loc = Get-Location`,
+        `$__cur = $__loc.ProviderPath`,
+        `if ($__loc.Provider.Name -eq 'FileSystem') { try { $__cur = [System.IO.Path]::GetFullPath((Get-Item -LiteralPath $__cur -Force).FullName) } catch { } } else { $__cur = '' }`,
+        `$__curCmp = $__cur.TrimEnd('\\', '/').ToLowerInvariant()`,
+        `$__ok = $false`,
+        `foreach ($__r in $__roots) { $__rBase = $__r.TrimEnd('\\', '/'); if ($__curCmp -ne '' -and ($__curCmp -eq $__rBase -or $__curCmp.StartsWith("$__rBase\\") -or ($__r.EndsWith('\\') -and $__cur.ToLowerInvariant().StartsWith($__r)))) { $__ok = $true; break } }`,
+        `if (-not $__ok) { Set-Location -LiteralPath ${psQuote(wsDir)}; Write-Output '[Sentinel Fence] Directory outside fenced roots refused.'; $__cur = (Get-Location).ProviderPath; try { $__cur = [System.IO.Path]::GetFullPath((Get-Item -LiteralPath $__cur -Force).FullName) } catch { } }`,
+      ].join("; ");
+      entry.child.stdin.write(`${cmdLine}\n${fenceSnippet}; Write-Output "__QJ_DONE_${tok}__:$__cur"\n`, "utf8");
     } else {
       entry.child.stdin.write(`${cmdLine}\nprintf '\\n__QJ_DONE_${tok}__:%s\\n' "$(pwd)"\n`, "utf8");
     }

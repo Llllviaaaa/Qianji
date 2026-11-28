@@ -182,6 +182,8 @@ namespace QianjiWinDesktop
         private Size _fixedMatchClient = Size.Empty;
         private FormBorderStyle prevBorder;
         private ToolbarForm toolBar;
+        private Panel authGuidePanel;
+        private Label authGuideStatusLabel;
         private ContextMenuStrip _displayMenu, _moreMenu, _resMenu;
 
         private const int WM_SIZING = 0x0214;
@@ -232,12 +234,13 @@ namespace QianjiWinDesktop
             MinimumSize = new Size(640, (int)(640 / aspect + 0.5));
 
             rdp = new ChildSessionControl { Dock = DockStyle.None, BackColor = Color.Black };
-            rdp.RdpEvents.Connected = delegate { Program.Log("RDP OnConnected event received"); };
+            rdp.RdpEvents.Connected = delegate { HideAuthGuide(); Program.Log("RDP OnConnected event received"); };
             rdp.RdpEvents.RemoteDesktopSizeChange = HandleRemoteResize;
             rdp.RdpEvents.Disconnected = HandleDisconnected;
             rdp.RdpEvents.FatalError = HandleFatalError;
             rdp.RdpEvents.LogonError = HandleLogonError;
             Controls.Add(rdp);
+            InitAuthGuidePanel();
 
             statusTimer = new Timer { Interval = 750 };
             statusTimer.Tick += delegate { UpdateConnectionStatus(); };
@@ -336,13 +339,19 @@ namespace QianjiWinDesktop
                 string act = MiniJson.GetString(req, "action", "focus");
                 BeginInvoke((MethodInvoker)delegate
                 {
-                    if (act == "focus" || act == "restore" || act == "open")
+                    if (act == "focus" || act == "restore" || act == "open" || act == "connect")
                     {
                         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
                         Show();
                         Activate();
                         SetForegroundWindow(Handle);
                         if (toolBar != null) toolBar.FollowHost(this);
+                        if (act == "connect")
+                        {
+                            int curState = 0;
+                            try { dynamic ocx = rdp.GetOcxObject(); if (ocx != null) curState = (int)ocx.Connected; } catch { }
+                            if (curState == 0 && !connecting) Reconnect();
+                        }
                     }
                     else if (act == "minimize") WindowState = FormWindowState.Minimized;
                     else if (act == "reconnect") Reconnect();
@@ -385,6 +394,7 @@ namespace QianjiWinDesktop
                 if (toolBar != null) toolBar.ResetToTopCenter();
             }
             if (dynamicMode) SetDynamicLayout(); else ApplyLetterbox();
+            LayoutAuthGuidePanel();
             if (toolBar != null) toolBar.FollowHost(this);
         }
 
@@ -488,9 +498,109 @@ namespace QianjiWinDesktop
             rdp.SetBounds(0, 0, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
         }
 
+        private void InitAuthGuidePanel()
+        {
+            authGuidePanel = new Panel
+            {
+                Size = new Size(500, 250),
+                BackColor = Color.FromArgb(24, 26, 32),
+                Visible = false
+            };
+
+            var titleLabel = new Label
+            {
+                Text = Strings.T("guide_auth_title"),
+                ForeColor = Color.FromArgb(243, 244, 246),
+                Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold),
+                AutoSize = false,
+                Location = new Point(24, 20),
+                Size = new Size(452, 28)
+            };
+
+            var bodyLabel = new Label
+            {
+                Text = Strings.T("guide_auth_body"),
+                ForeColor = Color.FromArgb(180, 188, 200),
+                Font = new Font("Microsoft YaHei UI", 9.2f, FontStyle.Regular),
+                AutoSize = false,
+                Location = new Point(24, 56),
+                Size = new Size(452, 112)
+            };
+
+            authGuideStatusLabel = new Label
+            {
+                Text = string.Empty,
+                ForeColor = Color.FromArgb(251, 191, 36),
+                Font = new Font("Microsoft YaHei UI", 8.5f, FontStyle.Regular),
+                AutoSize = false,
+                Location = new Point(24, 170),
+                Size = new Size(452, 22)
+            };
+
+            var retryBtn = new Button
+            {
+                Text = Strings.T("btn_retry_connect"),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.White,
+                Font = new Font("Microsoft YaHei UI", 9.2f, FontStyle.Bold),
+                Location = new Point(24, 200),
+                Size = new Size(140, 32),
+                Cursor = Cursors.Hand
+            };
+            retryBtn.FlatAppearance.BorderSize = 0;
+            retryBtn.Click += delegate { Reconnect(); };
+
+            var closeBtn = new Button
+            {
+                Text = Strings.T("btn_close_window"),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(42, 45, 54),
+                ForeColor = Color.FromArgb(229, 231, 235),
+                Font = new Font("Microsoft YaHei UI", 9.2f, FontStyle.Regular),
+                Location = new Point(176, 200),
+                Size = new Size(108, 32),
+                Cursor = Cursors.Hand
+            };
+            closeBtn.FlatAppearance.BorderColor = Color.FromArgb(68, 74, 88);
+            closeBtn.Click += delegate { programmaticClose = true; Close(); };
+
+            authGuidePanel.Controls.Add(titleLabel);
+            authGuidePanel.Controls.Add(bodyLabel);
+            authGuidePanel.Controls.Add(authGuideStatusLabel);
+            authGuidePanel.Controls.Add(retryBtn);
+            authGuidePanel.Controls.Add(closeBtn);
+            Controls.Add(authGuidePanel);
+            LayoutAuthGuidePanel();
+        }
+
+        private void LayoutAuthGuidePanel()
+        {
+            if (authGuidePanel == null || authGuidePanel.IsDisposed) return;
+            int x = Math.Max(12, (ClientSize.Width - authGuidePanel.Width) / 2);
+            int y = Math.Max(12, (ClientSize.Height - authGuidePanel.Height) / 2);
+            authGuidePanel.Location = new Point(x, y);
+        }
+
+        private void ShowAuthGuide(string detail)
+        {
+            if (authGuidePanel == null || authGuidePanel.IsDisposed) return;
+            if (authGuideStatusLabel != null) authGuideStatusLabel.Text = detail ?? string.Empty;
+            LayoutAuthGuidePanel();
+            authGuidePanel.Visible = true;
+            authGuidePanel.BringToFront();
+        }
+
+        private void HideAuthGuide()
+        {
+            if (authGuidePanel == null || authGuidePanel.IsDisposed) return;
+            authGuidePanel.Visible = false;
+        }
+
         private void ConnectChildSession()
         {
             if (connecting || closing || rdp.IsDisposed) return;
+            HideAuthGuide();
             try
             {
                 bool childSessionsEnabled;
@@ -597,7 +707,7 @@ namespace QianjiWinDesktop
             try
             {
                 string authLuid = NativeSessionApi.GetCurrentAuthLuid();
-                var startInfo = new ProcessStartInfo { FileName = helperPath, UseShellExecute = true, Verb = "runas" };
+                var startInfo = new ProcessStartInfo { FileName = helperPath, Arguments = "--quiet", UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden };
                 using (Process helper = Process.Start(startInfo)) { }
                 if (!string.IsNullOrEmpty(authLuid))
                 {
@@ -631,6 +741,7 @@ namespace QianjiWinDesktop
                     lastLoggedState = state;
                     if (state == 1)
                     {
+                        HideAuthGuide();
                         connectionReadyAt = DateTime.Now.AddSeconds(2);
                         resizeRetryCount = 0;
                         lastFailedDisplaySize = Size.Empty;
@@ -703,6 +814,7 @@ namespace QianjiWinDesktop
             if (reason == 0xC07) message += Strings.T("status_disconnected_acct");
             SetStatus(message);
             if (ReconnectPolicy.ShouldAutoReconnect(reason)) EnterReconnectState();
+            else ShowAuthGuide(message);
         }
 
         private void HandleFatalError(int errorCode)
@@ -722,8 +834,9 @@ namespace QianjiWinDesktop
             if (errorCode == -2) { SetStatus(Strings.T("status_continuing")); return; }
             connecting = false;
             statusTimer.Stop();
-            SetStatus(Strings.T("status_logon_error", errorCode));
-            EnterReconnectState();
+            string message = Strings.T("status_logon_error", errorCode);
+            SetStatus(message);
+            ShowAuthGuide(message);
         }
 
         private void EnterReconnectState()
@@ -978,6 +1091,7 @@ namespace QianjiWinDesktop
             SetWindowPos(Handle, IntPtr.Zero, L, T, ww, wh, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             SyncRestoreRect();
             if (dynamicMode) SetDynamicLayout(); else ApplyLetterbox();
+            LayoutAuthGuidePanel();
             if (toolBar != null) toolBar.FollowHost(this);
         }
 

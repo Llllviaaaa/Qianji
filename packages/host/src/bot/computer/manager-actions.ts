@@ -81,7 +81,7 @@ export async function runComputerEngineAction(
 
   if (action === "open-native-desktop") {
     if (engine === "local-win-pip") {
-      const res = await ctx.winPip.openNativeViewer();
+      const res = await ctx.winPip.openNativeViewer({ forceOpen: params.forceOpen });
       ctx.setWinPipStatus(res.status);
       const snapshot = await ctx.getSnapshot({ engine: "local-win-pip" });
       ctx.emitComputerEvent({ kind: "snapshot", snapshot });

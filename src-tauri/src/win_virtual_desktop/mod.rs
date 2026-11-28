@@ -110,6 +110,7 @@ pub struct WinDesktopEnableChildSessionResult {
 pub struct WinDesktopOpenViewerRequest {
     pub mode: Option<String>,
     pub dynamic: Option<bool>,
+    pub force_open: Option<bool>,
     pub isolated_profile_dir: Option<String>,
     pub workspace_dir: Option<String>,
 }
@@ -166,7 +167,12 @@ pub struct WinDesktopCaptureResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct WinDesktopLaunchRequest {
     pub kind: Option<String>,
-    #[serde(alias = "executable", alias = "command", alias = "program", alias = "target")]
+    #[serde(
+        alias = "executable",
+        alias = "command",
+        alias = "program",
+        alias = "target"
+    )]
     pub app: Option<String>,
     pub args: Vec<String>,
     pub url: Option<String>,
@@ -319,7 +325,8 @@ pub fn run_non_windows_helper_fallback() -> i32 {
     if std::io::stdin().read_to_string(&mut raw).is_ok() {
         if let Ok(value) = serde_json::from_str::<Value>(&raw) {
             if value.get("action").and_then(Value::as_str) == Some("win_desktop_status") {
-                let req: WinDesktopStatusRequest = serde_json::from_value(value).unwrap_or_default();
+                let req: WinDesktopStatusRequest =
+                    serde_json::from_value(value).unwrap_or_default();
                 if let Ok(out) = serde_json::to_string(&session::query_status(&req)) {
                     println!("{out}");
                     return 0;

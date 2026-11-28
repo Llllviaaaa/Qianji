@@ -270,6 +270,21 @@ describe("Bot Mode Frontend Microkernel & 1:1 Muse Integration", () => {
     );
     expect(abortedAfterTool).toHaveLength(2);
     expect(abortedAfterTool[1]?.content).toBe("已完成第一步备份，后续执行已中止。");
+
+    // Subsequent proactive/handoff assistant messages without an intervening user message keep both settled bubbles
+    const withHandoffReturn = filterVisibleBotMessages(
+      [
+        { id: "u1", role: "user", content: "在顶部发消息也必须立即滚到底部看到最新消息" },
+        { id: "a1", role: "assistant", content: "收到，已自动定位到最新消息底部。" },
+        { id: "a2", role: "assistant", content: "Agent 工作台已完成接力回传：空间巡检完成" },
+      ],
+      false,
+    );
+    expect(withHandoffReturn.map((m) => m.content)).toEqual([
+      "在顶部发消息也必须立即滚到底部看到最新消息",
+      "收到，已自动定位到最新消息底部。",
+      "Agent 工作台已完成接力回传：空间巡检完成",
+    ]);
   });
 
   it("renders all 1:1 Muse views, Companion tabs, and 9-tab Settings / Virtual Server console", async () => {

@@ -96,9 +96,16 @@ export function filterVisibleBotMessages<
     assistantGroup = [];
   };
 
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i += 1) {
+    const msg = messages[i];
+    if (msg === undefined) continue;
     if (msg.role === "assistant") {
       assistantGroup.push(msg);
+      const isSettledStandaloneReply =
+        (msg.toolCalls?.length ?? 0) === 0 && stripBotThinking(msg.content).trim() !== "";
+      if (isSettledStandaloneReply && i < messages.length - 1) {
+        flushGroup(false);
+      }
     } else {
       flushGroup(false);
       if (msg.role === "user" || stripBotThinking(msg.content).trim() !== "") {

@@ -96,7 +96,20 @@ export function BotComputerDesktopTab({ ctx }: { readonly ctx?: Context }): Reac
       patchComputerStudioUi({ expandedDesktop: true });
       return;
     }
-    if (winChildReady) {
+    if (snap.activeEngine === "local-win-pip") {
+      if (winStatus?.childSessionEnabled !== true) {
+        void studio.runEngineAction({ engine: "local-win-pip", action: "enable-win-child-session" });
+        return;
+      }
+      if (winStatus.signOutRequired === true) {
+        void studio.runEngineAction({
+          engine: "local-win-pip",
+          action: "open-native-desktop",
+          forceOpen: true,
+        });
+        handleTakeControl();
+        return;
+      }
       void studio.runEngineAction({ engine: "local-win-pip", action: "open-native-desktop" });
       handleTakeControl();
       return;
@@ -201,11 +214,38 @@ export function BotComputerDesktopTab({ ctx }: { readonly ctx?: Context }): Reac
               </button>
             </div>
           ) : winStatus.signOutRequired === true ? (
-            <div className="qj-cs-screen-empty" data-testid="computer-win-signout-required">
+            <div className="qj-cs-screen-empty qj-cs-win-signout-card" data-testid="computer-win-signout-required">
               <Monitor size={22} strokeWidth={1.7} />
+              <span className="qj-cs-screen-empty-title">系统独立桌面已开启</span>
               <p className="qj-cs-screen-empty-desc">
-                已开启系统 Child Sessions，请注销并重新登录一次 Windows 以激活免密独立桌面
+                请注销并重新登录一次 Windows 以激活免密独立桌面；若暂不便注销，可用账号密码直接尝试连接，或先切至免注销的 Linux 桌面。
               </p>
+              <div className="qj-cs-screen-empty-actions">
+                <button
+                  type="button"
+                  data-testid="computer-force-open-win-btn"
+                  disabled={isOpeningNativeWin}
+                  className="qj-cs-screen-primary-btn"
+                  onClick={() =>
+                    void studio.runEngineAction({
+                      engine: "local-win-pip",
+                      action: "open-native-desktop",
+                      forceOpen: true,
+                    })
+                  }
+                >
+                  <ExternalLink size={12.5} />
+                  <span>{isOpeningNativeWin ? "正在唤起…" : "免注销密码直连"}</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="computer-switch-linux-fallback-btn"
+                  className="qj-cs-screen-secondary-btn"
+                  onClick={() => void studio.selectStudio({ engine: "local-linux", tab: "desktop" })}
+                >
+                  切换 Linux 桌面
+                </button>
+              </div>
             </div>
           ) : (
             <div className="qj-cs-win-ready-stage" data-testid="computer-win-child-ready">

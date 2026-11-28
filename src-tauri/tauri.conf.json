@@ -38,6 +38,11 @@
     ],
     "resources": {
       "resources/harness/": "harness/"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/hooks.nsh"
+      }
     }
   }
 }

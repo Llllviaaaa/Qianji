@@ -8,7 +8,7 @@
  * - Persistent stateful PTY (`cd` & env persistence across writes, Sentinel fence on `cd`) & `bot_request_takeover` state machine
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -43,6 +43,12 @@ import {
   syncIsolatedCopyWithWorktree,
 } from "../packages/host/src/bot/computer/local-linux-engine";
 import { quotePosixPath } from "../packages/host/src/bot/computer/remote-lease";
+import {
+  canonicalizeExistingAncestors,
+  computeFencedRoots,
+  hasTrailingSafeRootPrefix,
+  resolveFencedPath,
+} from "../packages/host/src/bot/computer/sentinel-fence";
 import { startVncWsProxy } from "../packages/host/src/bot/computer/vnc-ws-proxy";
 import { resolveWinInputAction } from "../packages/host/src/bot/computer/win-helper-client";
 import { BOT_NATIVE_TOOL_SCHEMAS, executeBotNativeTool } from "../packages/host/src/bot/harness/bot-tools";
@@ -583,12 +589,14 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
             viewerOpen = false;
             return { ok: true, viewerOpen: false, action: "close" };
           }
-          if (signOutRequired) {
+          if (signOutRequired && payload.forceOpen !== true) {
             return { ok: false, signOutRequired: true };
           }
           viewerOpen = true;
-          childSessionActive = true;
-          return { ok: true, viewerOpen: true, childSessionActive: true };
+          if (!signOutRequired) {
+            childSessionActive = true;
+          }
+          return { ok: true, viewerOpen: true, childSessionActive, signOutRequired };
         }
         if (payload.action === "win_desktop_launch") {
           openWins.push({ hwnd: "0x2001", title: String(payload.url ?? payload.app ?? "App"), app: "msedge.exe" });
@@ -650,6 +658,22 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
     expect(enabledRes.snapshot.localWinPip?.childSessionEnabled).toBe(true);
     expect(enabledRes.snapshot.localWinPip?.signOutRequired).toBe(true);
     expect(enabledRes.message).toContain("注销并重新登录");
+
+    // 2b. Before Windows re-login, default open-native-desktop warns, while forceOpen: true opens viewer for password auth
+    const blockedOpen = await rpc.invoke<{ ok: boolean; snapshot: BotComputerStudioSnapshot }>("bot.computer.action", {
+      engine: "local-win-pip",
+      action: "open-native-desktop",
+    });
+    expect(blockedOpen.ok).toBe(false);
+
+    const forceOpenRes = await rpc.invoke<{ ok: boolean; message: string; snapshot: BotComputerStudioSnapshot }>("bot.computer.action", {
+      engine: "local-win-pip",
+      action: "open-native-desktop",
+      forceOpen: true,
+    });
+    expect(forceOpenRes.ok).toBe(true);
+    expect(forceOpenRes.snapshot.localWinPip?.viewerOpen).toBe(true);
+    expect(forceOpenRes.message).toContain("账号密码");
 
     // 3. After Windows re-login, open-native-desktop launches viewer & activates Child Session
     signOutRequired = false;
@@ -841,11 +865,89 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
       sessionId: opened.pty.sessionId,
       data: "cd ../..\n",
     });
-    expect(escapeRes.pty.cwd.toLowerCase()).toBe(resolve(wsDir).toLowerCase());
+    expect(escapeRes.pty.cwd.toLowerCase()).toBe(canonicalizeExistingAncestors(wsDir).toLowerCase());
     expect(escapeRes.pty.outputTail).toContain("Sentinel Fence");
+
+    mkdirSync(join(dataDir, "bot-workspace-evil"), { recursive: true });
+    const siblingPrefixEscape = await rpc.invoke<{ pty: BotComputerPtySessionInfo }>("bot.computer.pty.write", {
+      sessionId: opened.pty.sessionId,
+      data: "cd ../bot-workspace-evil\n",
+    });
+    expect(siblingPrefixEscape.pty.cwd.toLowerCase()).toBe(canonicalizeExistingAncestors(wsDir).toLowerCase());
+    expect(siblingPrefixEscape.pty.outputTail).toContain("Sentinel Fence");
 
     await rpc.invoke("bot.computer.pty.resize", { sessionId: opened.pty.sessionId, cols: 120, rows: 40 });
     await rpc.invoke("bot.computer.pty.close", { sessionId: opened.pty.sessionId });
+  });
+
+  it("canonicalizes Windows 8.3 short paths and junction/symlink roots in computeFencedRoots & resolveFencedPath", () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "qj-canon-fence-"));
+    tempDirs.push(sandbox);
+
+    const realBase = join(sandbox, "LongDirectoryNameForShortPathCheck");
+    const realWs = join(realBase, "bot-workspace");
+    const realProject = join(realWs, "project-alpha");
+    const evilSibling = join(realBase, "bot-workspace-evil");
+    const realShared = join(realBase, "shared-docs");
+    mkdirSync(realProject, { recursive: true });
+    mkdirSync(evilSibling, { recursive: true });
+    mkdirSync(realShared, { recursive: true });
+    writeFileSync(join(realProject, "index.ts"), "export const ok = true;\n", "utf8");
+    writeFileSync(join(realShared, "readme.md"), "# Shared\n", "utf8");
+
+    const aliasBase = join(sandbox, "alias-link");
+    symlinkSync(realBase, aliasBase, process.platform === "win32" ? "junction" : "dir");
+    const aliasWs = join(aliasBase, "bot-workspace");
+    const aliasShared = join(aliasBase, "shared-docs");
+
+    const roots = computeFencedRoots(aliasWs, [{ path: aliasShared, access: "read-only" }]);
+    const lowerRoots = roots.map((r) => (process.platform === "win32" ? r.toLowerCase() : r));
+    const normExpected = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+    expect(lowerRoots).toContain(normExpected(canonicalizeExistingAncestors(realWs)));
+    expect(lowerRoots).toContain(normExpected(resolve(aliasWs)));
+    expect(lowerRoots).toContain(normExpected(canonicalizeExistingAncestors(realShared)));
+    expect(lowerRoots).toContain(normExpected(resolve(aliasShared)));
+
+    // Canonical target accessed when workspace root is configured via non-canonical alias (8.3 / junction)
+    const resolvedFromCanonical = resolveFencedPath(
+      join(canonicalizeExistingAncestors(realWs), "project-alpha", "index.ts"),
+      aliasWs,
+      [{ path: aliasShared, access: "read-only" }],
+    );
+    expect(resolvedFromCanonical.virtualPath).toBe("/workspace/project-alpha/index.ts");
+    expect(normExpected(resolvedFromCanonical.hostPath)).toBe(
+      normExpected(join(canonicalizeExistingAncestors(realWs), "project-alpha", "index.ts")),
+    );
+
+    // Non-existent nested child under an alias ancestor still canonicalizes the existing ancestor
+    const uncreatedTarget = resolveFencedPath(
+      "new-folder/nested/draft.md",
+      join(aliasBase, "uncreated-ws"),
+      [],
+    );
+    expect(uncreatedTarget.virtualPath).toBe("/workspace/new-folder/nested/draft.md");
+    expect(normExpected(uncreatedTarget.hostPath)).toBe(
+      normExpected(join(canonicalizeExistingAncestors(realBase), "uncreated-ws", "new-folder", "nested", "draft.md")),
+    );
+
+    // Sibling prefix collision (`/bot-workspace` vs `/bot-workspace-evil`) is strictly rejected
+    expect(hasTrailingSafeRootPrefix(evilSibling, realWs)).toBe(false);
+    expect(hasTrailingSafeRootPrefix(realProject, realWs)).toBe(true);
+    expect(() => resolveFencedPath(join(evilSibling, "steal.txt"), aliasWs, [])).toThrow(/Sentinel Path Fence/);
+
+    if (process.platform === "win32") {
+      const shortProbe = spawnSync("cmd.exe", ["/d", "/c", `for %I in ("${realBase}") do @echo %~sI`], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      const shortBase = (shortProbe.stdout ?? "").trim();
+      if (shortBase !== "" && existsSync(shortBase)) {
+        const shortWs = join(shortBase, "bot-workspace");
+        const fromShortRoot = resolveFencedPath(join(realWs, "project-alpha"), shortWs, []);
+        expect(fromShortRoot.virtualPath).toBe("/workspace/project-alpha");
+        expect(fromShortRoot.hostPath.toLowerCase()).toBe(canonicalizeExistingAncestors(realProject).toLowerCase());
+      }
+    }
   });
 
   it("records timeline steps with autoFollow & drives bot_request_takeover state machine (requested -> active -> idle)", async () => {

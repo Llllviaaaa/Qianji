@@ -37,26 +37,70 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 const BINARY_IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
+function stripWinVerbatimPrefix(p: string): string {
+  if (process.platform !== "win32") return p;
+  if (p.startsWith("\\\\?\\UNC\\")) return `\\\\${p.slice("\\\\?\\UNC\\".length)}`;
+  if (/^\\\\\?\\[a-zA-Z]:[\\/]/.test(p)) return p.slice(4);
+  return p;
+}
+
+function trimTrailingPathSep(p: string): string {
+  if (process.platform === "win32") {
+    if (/^[a-zA-Z]:[\\/]*$/.test(p)) return `${p.slice(0, 2)}\\`;
+    return p.replace(/[\\/]+$/, "");
+  }
+  return p === "/" ? "/" : p.replace(/\/+$/, "");
+}
+
 function normalizeCmp(p: string): string {
-  const abs = resolve(p);
+  const abs = trimTrailingPathSep(resolve(p));
   return process.platform === "win32" ? abs.toLowerCase() : abs;
 }
 
-function resolveRealOrLexical(target: string): string {
+/**
+ * Canonicalizes `target` by resolving the deepest existing directory/file ancestor
+ * via `realpathSync.native` (expanding Windows 8.3 short paths such as `RUNNER~1`
+ * into `runneradmin` as well as symlinks/junctions) and appending any not-yet-created
+ * relative suffix segments.
+ */
+export function canonicalizeExistingAncestors(target: string): string {
   const abs = resolve(target);
-  if (existsSync(abs)) {
-    try { return realpathSync(abs); } catch { return abs; }
+  let cur = abs;
+  while (true) {
+    if (existsSync(cur)) {
+      let realCur: string;
+      try {
+        realCur = stripWinVerbatimPrefix(realpathSync.native(cur));
+      } catch {
+        try {
+          realCur = stripWinVerbatimPrefix(realpathSync(cur));
+        } catch {
+          realCur = cur;
+        }
+      }
+      return cur === abs ? resolve(realCur) : resolve(realCur, relative(cur, abs));
+    }
+    const parent = dirname(cur);
+    if (parent === cur) return abs;
+    cur = parent;
   }
-  const parent = dirname(abs);
-  if (parent !== abs && existsSync(parent)) {
-    try { return join(realpathSync(parent), relative(parent, abs)); } catch { return abs; }
-  }
-  return abs;
+}
+
+export function hasTrailingSafeRootPrefix(candidatePath: string, rootPath: string): boolean {
+  const isWin = process.platform === "win32";
+  const sep = isWin ? "\\" : "/";
+  const norm = (s: string) => trimTrailingPathSep(isWin ? resolve(s).replace(/\//g, "\\").toLowerCase() : resolve(s));
+  const cand = norm(candidatePath);
+  const root = norm(rootPath);
+  if (cand === root) return true;
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return cand.startsWith(prefix);
 }
 
 export function isSubpathOfRoot(candidatePath: string, rootPath: string): boolean {
-  const cand = resolveRealOrLexical(candidatePath);
-  const root = resolveRealOrLexical(rootPath);
+  const cand = canonicalizeExistingAncestors(candidatePath);
+  const root = canonicalizeExistingAncestors(rootPath);
+  if (!hasTrailingSafeRootPrefix(cand, root)) return false;
   const rel = relative(
     process.platform === "win32" ? root.toLowerCase() : root,
     process.platform === "win32" ? cand.toLowerCase() : cand,
@@ -68,16 +112,24 @@ export function computeFencedRoots(
   botWorkspaceDir: string,
   sharedFolders: readonly BotSharedFolderRule[],
 ): string[] {
-  const out: string[] = [resolve(botWorkspaceDir)];
-  const seen = new Set<string>([normalizeCmp(botWorkspaceDir)]);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const addRootVariants = (raw: string) => {
+    const canonical = trimTrailingPathSep(canonicalizeExistingAncestors(raw));
+    const lexical = trimTrailingPathSep(resolve(raw));
+    for (const variant of [canonical, lexical]) {
+      const key = normalizeCmp(variant);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(variant);
+      }
+    }
+  };
+  addRootVariants(botWorkspaceDir);
   for (const folder of sharedFolders) {
     const trimmed = folder.path.trim();
     if (trimmed === "") continue;
-    const key = normalizeCmp(trimmed);
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push(resolve(trimmed));
-    }
+    addRootVariants(trimmed);
   }
   return out;
 }
@@ -95,7 +147,7 @@ export function resolveFencedPath(
   options: { requireWritable?: boolean } = {},
 ): ResolvedFencedTarget {
   const fencedRoots = computeFencedRoots(botWorkspaceDir, sharedFolders);
-  const wsRoot = resolve(botWorkspaceDir);
+  const wsRoot = canonicalizeExistingAncestors(botWorkspaceDir);
   const trimmed = (rawPath ?? "").trim();
   const isWinDriveOrUnc = /^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\");
   const vpath = isWinDriveOrUnc ? trimmed : trimmed.replace(/\\/g, "/");
@@ -115,21 +167,23 @@ export function resolveFencedPath(
     if (!matched) {
       throw new SentinelFenceError(`Sentinel Path Fence blocked unknown shared mount "${trimmed}"`, trimmed, fencedRoots);
     }
-    candidateHostPath = sub ? resolve(matched.path, sub) : resolve(matched.path);
+    const matchedRootCanon = canonicalizeExistingAncestors(matched.path);
+    candidateHostPath = sub ? resolve(matchedRootCanon, sub) : matchedRootCanon;
   } else if (isWinDriveOrUnc || isAbsolute(vpath) || vpath.startsWith("/")) {
     candidateHostPath = resolve(isWinDriveOrUnc ? trimmed : vpath);
   } else {
     candidateHostPath = resolve(wsRoot, vpath);
   }
 
+  const resolvedHost = canonicalizeExistingAncestors(candidateHostPath);
   let matchedRoot: string | undefined;
   let isReadonly = false;
-  if (isSubpathOfRoot(candidateHostPath, wsRoot)) {
+  if (isSubpathOfRoot(resolvedHost, wsRoot)) {
     matchedRoot = wsRoot;
   } else {
     for (const sf of sharedFolders) {
-      if (sf.path.trim() !== "" && isSubpathOfRoot(candidateHostPath, sf.path)) {
-        matchedRoot = resolve(sf.path);
+      if (sf.path.trim() !== "" && isSubpathOfRoot(resolvedHost, sf.path)) {
+        matchedRoot = canonicalizeExistingAncestors(sf.path);
         isReadonly = sf.access === "read-only";
         break;
       }
@@ -139,19 +193,18 @@ export function resolveFencedPath(
   if (matchedRoot === undefined) {
     throw new SentinelFenceError(
       `Sentinel Path Fence refused path "${rawPath ?? ""}" outside allowed roots (${fencedRoots.join(", ")})`,
-      candidateHostPath,
+      resolvedHost,
       fencedRoots,
     );
   }
   if (options.requireWritable === true && isReadonly) {
     throw new SentinelFenceError(
       `Sentinel Path Fence refused write to read-only shared folder "${rawPath ?? ""}"`,
-      candidateHostPath,
+      resolvedHost,
       fencedRoots,
     );
   }
 
-  const resolvedHost = resolve(candidateHostPath);
   let virtualPath: string;
   if (isSubpathOfRoot(resolvedHost, wsRoot)) {
     const rel = relative(wsRoot, resolvedHost).replace(/\\/g, "/");
@@ -161,7 +214,8 @@ export function resolveFencedPath(
     const sf = sfIdx >= 0 ? sharedFolders[sfIdx] : undefined;
     if (sf !== undefined) {
       const slug = sharedFolderSlug(sf.path, sfIdx);
-      const rel = relative(resolve(sf.path), resolvedHost).replace(/\\/g, "/");
+      const sfCanon = canonicalizeExistingAncestors(sf.path);
+      const rel = relative(sfCanon, resolvedHost).replace(/\\/g, "/");
       virtualPath = rel === "" ? `/shared/${slug}` : posix.join(`/shared/${slug}`, rel);
     } else {
       virtualPath = resolvedHost;
@@ -179,10 +233,11 @@ export function listFencedFiles(
 ): BotComputerFilesListResult {
   const target = resolveFencedPath(rawPath, botWorkspaceDir, sharedFolders);
   if (!existsSync(target.hostPath)) {
-    mkdirSync(botWorkspaceDir, { recursive: true });
-    if (normalizeCmp(target.hostPath) !== normalizeCmp(botWorkspaceDir)) {
+    const canonWsDir = canonicalizeExistingAncestors(botWorkspaceDir);
+    if (normalizeCmp(target.hostPath) !== normalizeCmp(canonWsDir)) {
       throw new Error(`Directory not found: ${rawPath ?? target.hostPath}`);
     }
+    mkdirSync(target.hostPath, { recursive: true });
   }
   const st = statSync(target.hostPath);
   if (!st.isDirectory()) throw new Error(`Not a directory: ${rawPath ?? target.hostPath}`);

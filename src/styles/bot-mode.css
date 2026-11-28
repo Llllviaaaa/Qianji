@@ -237,15 +237,25 @@
   min-height: 0;
   background: var(--qj-bg-app);
   opacity: 0;
+  visibility: hidden;
   transform: translate3d(16px, 0, 0) scale(0.994);
   pointer-events: none;
-  transition: opacity 240ms ease, transform var(--qj-morph-dur) var(--qj-morph-ease);
+  transition: opacity 240ms ease, transform var(--qj-morph-dur) var(--qj-morph-ease), visibility 0s linear 240ms;
 }
 
 .app-shell.codex-shot[data-shell-mode="bot"] .qj-stage-pane-bot {
   opacity: 1;
+  visibility: visible;
   transform: translate3d(0, 0, 0) scale(1);
   pointer-events: auto;
+  transition: opacity 240ms ease, transform var(--qj-morph-dur) var(--qj-morph-ease), visibility 0s linear 0s;
+}
+
+.app-shell.codex-shot:not([data-shell-mode="bot"]) .qj-stage-pane-bot,
+.app-shell.codex-shot:not([data-shell-mode="bot"]) .qj-stage-pane-bot *,
+.app-shell.codex-shot:not([data-shell-mode="bot"]) .qj-bot-rail-layer,
+.app-shell.codex-shot:not([data-shell-mode="bot"]) .qj-bot-rail-layer * {
+  pointer-events: none !important;
 }
 
 /* ── 3. Handoff Chrome ────────────────────────────────────────────────── */
@@ -321,13 +331,16 @@
   height: 100%;
   z-index: 45;
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: opacity 180ms ease;
+  transition: opacity 180ms ease, visibility 0s linear 180ms;
 }
 
 .app-shell.codex-shot[data-shell-mode="bot"] .qj-bot-rail-layer {
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
+  transition: opacity 180ms ease, visibility 0s linear 0s;
 }
 
 .qj-bot-island-dock {

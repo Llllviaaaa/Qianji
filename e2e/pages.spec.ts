@@ -18,9 +18,10 @@ test("run a scheduled task now", async ({ app, harness }) => {
   });
   harness.provider.push(textReply("Notes summarized."));
   await app.getByRole("button", { name: "定时任务" }).click();
-  await expect(app.getByText("Nightly notes")).toBeVisible();
-  await app.getByRole("button", { name: "立即运行" }).click();
-  await expect(app.getByText("上次成功")).toBeVisible();
+  const scheduledPage = app.locator(".scheduled-tasks-page");
+  await expect(scheduledPage.getByText("Nightly notes")).toBeVisible();
+  await scheduledPage.getByRole("button", { name: "立即运行" }).click();
+  await expect(scheduledPage.getByText("上次成功")).toBeVisible();
   expect(harness.provider.requests).toHaveLength(1);
 });
 

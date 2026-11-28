@@ -75,9 +75,16 @@ namespace QianjiWinDesktop
         public int Attempts { get { return _attempts; } }
         public bool GaveUp { get; private set; }
 
+        public static bool IsAuthOrUserCancelDisconnect(int disconnectReason)
+        {
+            if (disconnectReason == 1 || disconnectReason == 2) return true;
+            if (disconnectReason >= 0x807 && (disconnectReason & 0xFF) == 0x07) return true;
+            return false;
+        }
+
         public static bool ShouldAutoReconnect(int disconnectReason)
         {
-            return disconnectReason != 1;
+            return !IsAuthOrUserCancelDisconnect(disconnectReason);
         }
 
         public void Enter()

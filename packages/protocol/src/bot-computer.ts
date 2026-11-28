@@ -232,6 +232,7 @@ export interface BotComputerSelectParams {
 export interface BotComputerEngineActionParams {
   engine: BotComputerEngineId;
   action: BotComputerEngineActionKind;
+  forceOpen?: boolean;
   appOrUrl?: string;
   launchKind?: "browser" | "app";
   hwnd?: string;

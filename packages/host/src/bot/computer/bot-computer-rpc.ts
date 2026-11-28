@@ -131,6 +131,7 @@ export function registerBotComputerRpc(
       .performAction({
         engine,
         action: actionRaw,
+        ...(typeof p.forceOpen === "boolean" ? { forceOpen: p.forceOpen } : {}),
         ...(typeof p.appOrUrl === "string" ? { appOrUrl: p.appOrUrl } : {}),
         ...(p.launchKind === "browser" || p.launchKind === "app" ? { launchKind: p.launchKind } : {}),
         ...(typeof p.hwnd === "string" ? { hwnd: p.hwnd } : {}),

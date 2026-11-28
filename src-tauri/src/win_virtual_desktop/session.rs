@@ -21,6 +21,7 @@ pub const ENABLE_CHILD_SESSIONS_EXE_NAME: &str = "qianji-enable-child-sessions.e
 #[serde(default, rename_all = "camelCase")]
 struct SignOutMarker {
     auth_luid: Option<String>,
+    linked_auth_luid: Option<String>,
 }
 
 /// Pure edition classifier so unit tests can verify Home vs Pro/Enterprise/Server logic.
@@ -101,6 +102,26 @@ pub(crate) fn read_recorded_enable_luid() -> Option<String> {
     parsed.auth_luid.filter(|s| !s.trim().is_empty())
 }
 
+pub(crate) fn find_matching_recorded_luid(current_auth_luid: Option<&str>) -> Option<String> {
+    let cur = current_auth_luid.map(str::trim).filter(|s| !s.is_empty())?;
+    let raw = fs::read_to_string(marker_file_path()).ok()?;
+    let parsed: SignOutMarker = serde_json::from_str(&raw).ok()?;
+    for candidate in [parsed.auth_luid, parsed.linked_auth_luid]
+        .into_iter()
+        .flatten()
+    {
+        let trimmed = candidate.trim();
+        if !trimmed.is_empty() && trimmed.eq_ignore_ascii_case(cur) {
+            return Some(cur.to_string());
+        }
+    }
+    None
+}
+
+pub(crate) fn clear_recorded_enable_luid() {
+    let _ = fs::remove_file(marker_file_path());
+}
+
 pub(crate) fn record_enable_luid(luid: Option<&str>) {
     let Some(luid_str) = luid.map(str::trim).filter(|s| !s.is_empty()) else {
         return;
@@ -111,6 +132,7 @@ pub(crate) fn record_enable_luid(luid: Option<&str>) {
     }
     let marker = SignOutMarker {
         auth_luid: Some(luid_str.to_string()),
+        linked_auth_luid: None,
     };
     if let Ok(raw) = serde_json::to_string(&marker) {
         let _ = fs::write(path, raw);
@@ -144,7 +166,7 @@ mod imp {
     const TOKEN_STATISTICS_CLASS: u32 = 10;
     const TOKEN_ELEVATION_CLASS: u32 = 20;
     const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
-    const SW_SHOWNORMAL: i32 = 1;
+    const SW_HIDE: i32 = 0;
 
     #[repr(C)]
     struct TokenElevation {
@@ -210,7 +232,10 @@ mod imp {
     unsafe extern "system" {
         fn GetModuleHandleW(lp_module_name: *const u16) -> HModule;
         fn LoadLibraryW(lp_lib_file_name: *const u16) -> HModule;
-        fn GetProcAddress(h_module: HModule, lp_proc_name: *const u8) -> *const c_void;
+        fn GetProcAddress(
+            h_module: HModule,
+            lp_proc_name: *const std::ffi::c_char,
+        ) -> *const c_void;
         fn GetLastError() -> u32;
     }
 
@@ -225,7 +250,11 @@ mod imp {
             pv_data: *mut c_void,
             pcb_data: *mut u32,
         ) -> i32;
-        fn OpenProcessToken(process_handle: Handle, desired_access: u32, token_handle: *mut Handle) -> i32;
+        fn OpenProcessToken(
+            process_handle: Handle,
+            desired_access: u32,
+            token_handle: *mut Handle,
+        ) -> i32;
         fn GetTokenInformation(
             token_handle: Handle,
             token_information_class: u32,
@@ -259,12 +288,16 @@ mod imp {
                 module = unsafe { LoadLibraryW(dll_w.as_ptr()) };
             }
             if module.is_null() {
-                return WtsChildSessionApi { is_enabled: None, enable: None, get_session_id: None };
+                return WtsChildSessionApi {
+                    is_enabled: None,
+                    enable: None,
+                    get_session_id: None,
+                };
             }
             unsafe {
-                let p_is = GetProcAddress(module, b"WTSIsChildSessionsEnabled\0".as_ptr());
-                let p_en = GetProcAddress(module, b"WTSEnableChildSessions\0".as_ptr());
-                let p_id = GetProcAddress(module, b"WTSGetChildSessionId\0".as_ptr());
+                let p_is = GetProcAddress(module, c"WTSIsChildSessionsEnabled".as_ptr());
+                let p_en = GetProcAddress(module, c"WTSEnableChildSessions".as_ptr());
+                let p_id = GetProcAddress(module, c"WTSGetChildSessionId".as_ptr());
                 WtsChildSessionApi {
                     is_enabled: (!p_is.is_null()).then(|| transmute(p_is)),
                     enable: (!p_en.is_null()).then(|| transmute(p_en)),
@@ -274,7 +307,11 @@ mod imp {
         })
     }
 
-    pub(crate) fn read_reg_string(hive: Handle, subkey: &str, value_name: Option<&str>) -> Option<String> {
+    pub(crate) fn read_reg_string(
+        hive: Handle,
+        subkey: &str,
+        value_name: Option<&str>,
+    ) -> Option<String> {
         let subkey_w = to_wide_null(subkey);
         let value_w = value_name.map(to_wide_null);
         let mut buf = [0_u16; 512];
@@ -294,7 +331,10 @@ mod imp {
             return None;
         }
         let u16_len = (byte_len as usize / 2).min(buf.len());
-        let end = buf[..u16_len].iter().position(|&c| c == 0).unwrap_or(u16_len);
+        let end = buf[..u16_len]
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(u16_len);
         let text = String::from_utf16_lossy(&buf[..end]).trim().to_string();
         (!text.is_empty()).then_some(text)
     }
@@ -310,7 +350,7 @@ mod imp {
         let ntdll_w = to_wide_null("ntdll.dll");
         let ntdll = unsafe { GetModuleHandleW(ntdll_w.as_ptr()) };
         if !ntdll.is_null() {
-            let proc_addr = unsafe { GetProcAddress(ntdll, b"RtlGetVersion\0".as_ptr()) };
+            let proc_addr = unsafe { GetProcAddress(ntdll, c"RtlGetVersion".as_ptr()) };
             if !proc_addr.is_null() {
                 let rtl_get_version: FnRtlGetVersion = unsafe { transmute(proc_addr) };
                 let _ = unsafe { rtl_get_version(&mut info) };
@@ -326,10 +366,14 @@ mod imp {
 
     fn query_token_info() -> (bool, Option<String>) {
         let mut token = null_mut();
-        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 || token.is_null() {
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0
+            || token.is_null()
+        {
             return (false, None);
         }
-        let mut elev = TokenElevation { token_is_elevated: 0 };
+        let mut elev = TokenElevation {
+            token_is_elevated: 0,
+        };
         let mut ret_len = 0_u32;
         let ok_elev = unsafe {
             GetTokenInformation(
@@ -352,7 +396,10 @@ mod imp {
         };
         unsafe { CloseHandle(token) };
         let luid = (ok_stats != 0).then(|| {
-            format!("{:08x}:{:08x}", stats.authentication_id.high_part, stats.authentication_id.low_part)
+            format!(
+                "{:08x}:{:08x}",
+                stats.authentication_id.high_part, stats.authentication_id.low_part
+            )
         });
         (ok_elev != 0 && elev.token_is_elevated != 0, luid)
     }
@@ -383,7 +430,11 @@ mod imp {
         let viewer_probe = agent_client::probe_viewer_status();
         let agent_probe = agent_client::probe_child_agent_status();
         let child_session_active = child_session_id.is_some() || agent_probe.is_some();
-        let recorded_luid = read_recorded_enable_luid();
+        if child_session_active {
+            clear_recorded_enable_luid();
+        }
+        let recorded_luid =
+            find_matching_recorded_luid(auth_luid.as_deref()).or_else(read_recorded_enable_luid);
         let sign_out_required = compute_sign_out_required(
             child_session_enabled,
             child_session_active,
@@ -409,7 +460,12 @@ mod imp {
         } else if let Some(vp) = &viewer_probe {
             (vp.width, vp.height, Vec::new(), None)
         } else {
-            (DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT, Vec::new(), None)
+            (
+                DEFAULT_DESKTOP_WIDTH,
+                DEFAULT_DESKTOP_HEIGHT,
+                Vec::new(),
+                None,
+            )
         };
 
         let hint = if !pro_supported {
@@ -425,7 +481,12 @@ mod imp {
         WinDesktopStatus {
             ok: true,
             account_mode: "current-user".to_string(),
-            backend: if pro_supported && wts_available { "rdp-child-session" } else { "unavailable" }.to_string(),
+            backend: if pro_supported && wts_available {
+                "rdp-child-session"
+            } else {
+                "unavailable"
+            }
+            .to_string(),
             pro_supported,
             edition_id,
             os_build,
@@ -448,7 +509,9 @@ mod imp {
         }
     }
 
-    pub fn enable_child_session(req: &WinDesktopStatusRequest) -> WinDesktopEnableChildSessionResult {
+    pub fn enable_child_session(
+        req: &WinDesktopStatusRequest,
+    ) -> WinDesktopEnableChildSessionResult {
         let api = load_wts_api();
         let (_, _, pro_supported) = detect_os_edition();
         let (elevated, auth_luid) = query_token_info();
@@ -515,7 +578,9 @@ mod imp {
                 enabled: false,
                 requires_elevation: true,
                 sign_out_required: false,
-                elevation_hint: Some(format!("Missing setup helper {ENABLE_CHILD_SESSIONS_EXE_NAME}")),
+                elevation_hint: Some(format!(
+                    "Missing setup helper {ENABLE_CHILD_SESSIONS_EXE_NAME}"
+                )),
                 last_error_code: Some(2),
                 status,
             };
@@ -523,12 +588,14 @@ mod imp {
 
         let verb_w = to_wide_null("runas");
         let file_w = to_wide_null(&helper_exe.to_string_lossy());
+        let params_w = to_wide_null("--quiet");
         let mut sei: ShellExecuteInfoW = unsafe { zeroed() };
         sei.cb_size = size_of::<ShellExecuteInfoW>() as u32;
         sei.f_mask = SEE_MASK_NOCLOSEPROCESS;
         sei.lp_verb = verb_w.as_ptr();
         sei.lp_file = file_w.as_ptr();
-        sei.n_show = SW_SHOWNORMAL;
+        sei.lp_parameters = params_w.as_ptr();
+        sei.n_show = SW_HIDE;
 
         let launched = unsafe { ShellExecuteExW(&mut sei) };
         if launched == 0 {

@@ -72,20 +72,22 @@ pub fn normalize_input_request(req: &WinDesktopInputRequest) -> Result<Normalize
     {
         return match direct.to_ascii_lowercase().as_str() {
             "move" => Ok(NormalizedInputOp::Move),
-            "click" => Ok(NormalizedInputOp::Click(parse_button(req.button.as_deref())?)),
-            "double_click" | "double-click" | "dblclick" => {
-                Ok(NormalizedInputOp::DoubleClick(parse_button(req.button.as_deref())?))
-            }
+            "click" => Ok(NormalizedInputOp::Click(parse_button(
+                req.button.as_deref(),
+            )?)),
+            "double_click" | "double-click" | "dblclick" => Ok(NormalizedInputOp::DoubleClick(
+                parse_button(req.button.as_deref())?,
+            )),
             "right_click" | "right-click" => Ok(NormalizedInputOp::Click(MouseButtonKind::Right)),
             "middle_click" | "middle-click" => {
                 Ok(NormalizedInputOp::Click(MouseButtonKind::Middle))
             }
-            "down" | "mousedown" => {
-                Ok(NormalizedInputOp::ButtonDown(parse_button(req.button.as_deref())?))
-            }
-            "up" | "mouseup" => {
-                Ok(NormalizedInputOp::ButtonUp(parse_button(req.button.as_deref())?))
-            }
+            "down" | "mousedown" => Ok(NormalizedInputOp::ButtonDown(parse_button(
+                req.button.as_deref(),
+            )?)),
+            "up" | "mouseup" => Ok(NormalizedInputOp::ButtonUp(parse_button(
+                req.button.as_deref(),
+            )?)),
             "wheel" | "scroll" => Ok(NormalizedInputOp::Wheel {
                 delta_x: req.delta_x.unwrap_or(0),
                 delta_y: req.delta_y.unwrap_or(0),
@@ -135,14 +137,20 @@ pub fn normalize_input_request(req: &WinDesktopInputRequest) -> Result<Normalize
             }
         }
         "move" => Ok(NormalizedInputOp::Move),
-        "click" => Ok(NormalizedInputOp::Click(parse_button(req.button.as_deref())?)),
-        "double_click" | "double-click" | "dblclick" => {
-            Ok(NormalizedInputOp::DoubleClick(parse_button(req.button.as_deref())?))
-        }
+        "click" => Ok(NormalizedInputOp::Click(parse_button(
+            req.button.as_deref(),
+        )?)),
+        "double_click" | "double-click" | "dblclick" => Ok(NormalizedInputOp::DoubleClick(
+            parse_button(req.button.as_deref())?,
+        )),
         "right_click" | "right-click" => Ok(NormalizedInputOp::Click(MouseButtonKind::Right)),
         "middle_click" | "middle-click" => Ok(NormalizedInputOp::Click(MouseButtonKind::Middle)),
-        "down" | "mousedown" => Ok(NormalizedInputOp::ButtonDown(parse_button(req.button.as_deref())?)),
-        "up" | "mouseup" => Ok(NormalizedInputOp::ButtonUp(parse_button(req.button.as_deref())?)),
+        "down" | "mousedown" => Ok(NormalizedInputOp::ButtonDown(parse_button(
+            req.button.as_deref(),
+        )?)),
+        "up" | "mouseup" => Ok(NormalizedInputOp::ButtonUp(parse_button(
+            req.button.as_deref(),
+        )?)),
         "wheel" | "scroll" => Ok(NormalizedInputOp::Wheel {
             delta_x: req.delta_x.unwrap_or(0),
             delta_y: req.delta_y.unwrap_or(0),

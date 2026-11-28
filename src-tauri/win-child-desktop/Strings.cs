@@ -64,6 +64,10 @@ namespace QianjiWinDesktop
             { "btn_exit", "结束" }, { "btn_more", "更多" }, { "btn_collapse", "收起" }, { "btn_drag", "拖动" },
             { "tip_display_dynamic", "显示 · 动态" }, { "tip_display_fixed", "显示 · 固定" },
             { "tip_expand", "展开工具栏" }, { "tip_collapse", "收起工具栏" },
+            { "guide_auth_title", "需要验证账号密码，或注销重登一次以免密连接" },
+            { "guide_auth_body", "• 若当前 Windows 账号设有登录密码：点击下方「输入密码重连」，在系统安全窗口中输入账号密码（注意：不是锁屏 PIN 码）即可免注销直连。\r\n\r\n• 若仅使用 Windows Hello（PIN / 指纹）或无密码微软账号：请保存工作后注销并重新登录一次 Windows，此后即可永久免密自动直连。" },
+            { "btn_retry_connect", "输入密码重连" },
+            { "btn_close_window", "关闭窗口" },
         };
 
         private static readonly Dictionary<string, string> en = new Dictionary<string, string>
@@ -109,6 +113,10 @@ namespace QianjiWinDesktop
             { "btn_exit", "Exit" }, { "btn_more", "More" }, { "btn_collapse", "Collapse" }, { "btn_drag", "Drag" },
             { "tip_display_dynamic", "Display · Dynamic" }, { "tip_display_fixed", "Display · Fixed" },
             { "tip_expand", "Expand toolbar" }, { "tip_collapse", "Collapse toolbar" },
+            { "guide_auth_title", "Password verification or one-time Windows re-login required" },
+            { "guide_auth_body", "• If your Windows account has a password: click \"Retry Connection\" below and enter your account password (not your lock-screen PIN) in the Windows Security prompt.\r\n\r\n• If you use Windows Hello (PIN / biometrics) or passwordless sign-in: save your work, sign out of Windows, and sign back in once to activate automatic passwordless connection." },
+            { "btn_retry_connect", "Retry Connection" },
+            { "btn_close_window", "Close Window" },
         };
 
         public static string T(string key)

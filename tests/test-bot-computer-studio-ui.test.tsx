@@ -211,7 +211,15 @@ describe("OpenMausBot-Style Computer Panel (3-Column Layout, VNC, Child Session,
       childSessionEnabled: true, signOutRequired: true, desktopName: "QianjiChildSession", fencedRoots: [], openWindows: [],
     };
     computerStudioSnapshotStore.set((prev) => ({ ...prev, localWinPip: signOutWin }));
-    expect(harness.renderHtml()).toContain("请注销并重新登录一次 Windows 以激活免密独立桌面");
+    const signOutHtml = harness.renderHtml();
+    expect(signOutHtml).toContain("请注销并重新登录一次 Windows 以激活免密独立桌面");
+    expect(signOutHtml).toContain('data-testid="computer-force-open-win-btn"');
+    expect(signOutHtml).toContain('data-testid="computer-switch-linux-fallback-btn"');
+    await studio.runEngineAction({ engine: "local-win-pip", action: "open-native-desktop", forceOpen: true });
+    expect(harness.rpcCalls).toContainEqual({
+      method: "bot.computer.action",
+      params: { engine: "local-win-pip", action: "open-native-desktop", forceOpen: true },
+    });
 
     computerStudioSnapshotStore.set((prev) => ({ ...prev, localWinPip: { ...signOutWin, signOutRequired: false, childSessionActive: true } }));
     expect(harness.renderHtml()).toContain('data-testid="computer-open-native-win-btn"');

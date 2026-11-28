@@ -155,37 +155,46 @@ export class WinPipComputerEngine {
     }
   }
 
-  async openNativeViewer(): Promise<{
+  async openNativeViewer(opts?: { forceOpen?: boolean }): Promise<{
     ok: boolean;
     message: string;
     elevationRequired?: boolean;
     status: BotLocalWinPipStatus;
   }> {
+    const forceOpen = opts?.forceOpen === true;
     try {
       const res = await this.deps.invokeHelper({
         action: "win_desktop_open_viewer",
+        ...(forceOpen ? { forceOpen: true } : {}),
         isolatedProfileDir: this.isolatedProfileDir,
         workspaceDir: this.deps.getBotWorkspaceDir(),
       });
       const base = await this.inspectStatus();
-      const signOutRequired = Boolean(res.signOutRequired ?? base.signOutRequired);
+      const childSessionActive =
+        typeof res.childSessionActive === "boolean" ? res.childSessionActive : Boolean(base.childSessionActive);
+      const signOutRequired = childSessionActive ? false : Boolean(res.signOutRequired ?? base.signOutRequired);
       const elevationRequired = Boolean(res.requiresElevation ?? res.elevationRequired);
-      const ok = res.ok !== false && !signOutRequired && !elevationRequired;
+      const viewerOpen =
+        typeof res.viewerOpen === "boolean"
+          ? res.viewerOpen
+          : (res.ok !== false && !elevationRequired && (!signOutRequired || forceOpen)) || Boolean(base.viewerOpen);
+      const ok = res.ok !== false && !elevationRequired && (!signOutRequired || (forceOpen && viewerOpen));
       const status: BotLocalWinPipStatus = {
         ...base,
         signOutRequired,
-        viewerOpen: typeof res.viewerOpen === "boolean" ? res.viewerOpen : ok || Boolean(base.viewerOpen),
-        childSessionActive:
-          typeof res.childSessionActive === "boolean" ? res.childSessionActive : Boolean(base.childSessionActive),
+        viewerOpen,
+        childSessionActive,
       };
       const message =
         typeof res.message === "string" && res.message
           ? res.message
-          : signOutRequired
-            ? "已开启系统 Child Sessions，请注销并重新登录一次 Windows 以激活免密独立桌面"
-            : ok
-              ? "已打开 Windows 独立子会话桌面窗口"
-              : "请先开启系统 Child Sessions 后再打开独立桌面窗口";
+          : ok && signOutRequired
+            ? "已打开独立桌面窗口，请在 Windows 安全提示中输入账号密码完成连接"
+            : signOutRequired
+              ? "已开启系统 Child Sessions，请注销并重新登录一次 Windows 以激活免密独立桌面，或点击「免注销尝试连接」验证密码"
+              : ok
+                ? "已打开 Windows 独立子会话桌面窗口"
+                : "请先开启系统 Child Sessions 后再打开独立桌面窗口";
       return {
         ok,
         message,

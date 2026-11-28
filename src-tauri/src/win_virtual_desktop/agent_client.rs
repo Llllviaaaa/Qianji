@@ -131,8 +131,14 @@ pub fn send_loopback_json(
 pub(crate) fn probe_viewer_status() -> Option<ViewerProbe> {
     let ep = read_endpoint(&viewer_endpoint_path())?;
     let val = send_loopback_json(&ep, "GET", "/status", None, Duration::from_millis(350)).ok()?;
-    let width = val.get("sessionWidth").and_then(Value::as_u64).unwrap_or(1280) as u32;
-    let height = val.get("sessionHeight").and_then(Value::as_u64).unwrap_or(800) as u32;
+    let width = val
+        .get("sessionWidth")
+        .and_then(Value::as_u64)
+        .unwrap_or(1280) as u32;
+    let height = val
+        .get("sessionHeight")
+        .and_then(Value::as_u64)
+        .unwrap_or(800) as u32;
     Some(ViewerProbe { width, height })
 }
 
@@ -194,34 +200,51 @@ pub fn open_viewer(req: WinDesktopOpenViewerRequest) -> Result<WinDesktopOpenVie
         });
     }
 
+    let force_open = req.force_open == Some(true);
     let initial = query_status(&status_req);
     if !initial.pro_supported {
         return Err("Windows 家庭版不支持原生 Child Sessions 独立桌面。".to_string());
     }
     if !initial.child_session_enabled {
-        return Err("尚未开启 Windows Child Sessions，请先点击「开启 Windows 独立桌面」。".to_string());
+        return Err(
+            "尚未开启 Windows Child Sessions，请先点击「开启 Windows 独立桌面」。".to_string(),
+        );
     }
-    if initial.sign_out_required {
-        return Err("已开启系统 Child Sessions，请先注销并重新登录一次 Windows 以激活免密独立桌面。".to_string());
+    if initial.sign_out_required && !force_open {
+        return Err("已开启系统 Child Sessions，请先注销并重新登录一次 Windows 以激活免密独立桌面，或点击「免注销尝试连接」使用账号密码验证。".to_string());
     }
 
     if let Some(ep) = read_endpoint(&viewer_endpoint_path()) {
+        let existing_action = if action == "open" {
+            if force_open && !initial.child_session_active {
+                "connect"
+            } else {
+                "focus"
+            }
+        } else {
+            &action
+        };
         if send_loopback_json(
             &ep,
             "POST",
             "/action",
-            Some(&json!({ "action": if action == "open" { "focus" } else { &action } })),
+            Some(&json!({ "action": existing_action })),
             Duration::from_secs(2),
         )
         .is_ok()
         {
             let status = query_status(&status_req);
+            let msg = if status.sign_out_required && !status.child_session_active {
+                "已唤起独立桌面窗口，请在 Windows 安全提示中输入账号密码完成连接"
+            } else {
+                "已聚焦千机独立桌面窗口"
+            };
             return Ok(WinDesktopOpenViewerResult {
                 ok: true,
                 viewer_open: true,
                 action,
                 pid: Some(ep.pid),
-                message: Some("已聚焦千机独立桌面窗口".to_string()),
+                message: Some(msg.to_string()),
                 status,
             });
         }
@@ -247,12 +270,17 @@ pub fn open_viewer(req: WinDesktopOpenViewerRequest) -> Result<WinDesktopOpenVie
     }
 
     let status = query_status(&status_req);
+    let msg = if status.sign_out_required && !status.child_session_active {
+        "已打开独立桌面窗口，请在 Windows 安全提示中输入账号密码完成连接"
+    } else {
+        "已打开千机独立 Windows 子会话桌面窗口"
+    };
     Ok(WinDesktopOpenViewerResult {
         ok: true,
         viewer_open: status.viewer_open,
         action,
         pid: Some(spawned_pid),
-        message: Some("已打开千机独立 Windows 子会话桌面窗口".to_string()),
+        message: Some(msg.to_string()),
         status,
     })
 }
@@ -278,7 +306,9 @@ fn ensure_child_agent() -> Result<EndpointInfo, String> {
         return Err("Windows Child Sessions are disabled; enable Child Sessions first".to_string());
     }
     if status.sign_out_required {
-        return Err("Sign out and sign back in to Windows once to activate Child Sessions".to_string());
+        return Err(
+            "Sign out and sign back in to Windows once to activate Child Sessions".to_string(),
+        );
     }
 
     if !status.viewer_open {
@@ -336,8 +366,14 @@ pub fn capture_frame(req: WinDesktopCaptureRequest) -> Result<WinDesktopCaptureR
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let out_w = val.get("width").and_then(Value::as_u64).unwrap_or(u64::from(width)) as u32;
-    let out_h = val.get("height").and_then(Value::as_u64).unwrap_or(u64::from(height)) as u32;
+    let out_w = val
+        .get("width")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::from(width)) as u32;
+    let out_h = val
+        .get("height")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::from(height)) as u32;
     let mime = val
         .get("mimeType")
         .and_then(Value::as_str)
@@ -418,12 +454,21 @@ pub fn dispatch_input(req: WinDesktopInputRequest) -> Result<WinDesktopInputResu
         ),
         NormalizedInputOp::Key { key, modifiers } => {
             let (mod_vks, vk) = parse_virtual_key_combo(key, modifiers)?;
-            ("type", json!({ "op": "key", "vk": vk, "modifiers": mod_vks }))
+            (
+                "type",
+                json!({ "op": "key", "vk": vk, "modifiers": mod_vks }),
+            )
         }
         NormalizedInputOp::Text { text } => ("type", json!({ "op": "text", "text": text })),
     };
 
-    let val = send_loopback_json(&ep, "POST", "/input", Some(&payload), Duration::from_secs(5))?;
+    let val = send_loopback_json(
+        &ep,
+        "POST",
+        "/input",
+        Some(&payload),
+        Duration::from_secs(5),
+    )?;
     let cx = val
         .get("cursorX")
         .and_then(Value::as_i64)
@@ -461,7 +506,10 @@ pub fn is_chromium_executable_name(program: &str) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or(program.trim())
         .to_ascii_lowercase();
-    matches!(lower.as_str(), "browser" | "msedge" | "edge" | "chrome" | "chromium" | "brave")
+    matches!(
+        lower.as_str(),
+        "browser" | "msedge" | "edge" | "chrome" | "chromium" | "brave"
+    )
 }
 
 pub fn ensure_explorer_separate_args(args: &[String]) -> Vec<String> {
@@ -477,7 +525,11 @@ pub fn ensure_explorer_separate_args(args: &[String]) -> Vec<String> {
 }
 
 pub fn quote_win32_arg(arg: &str) -> String {
-    if !arg.is_empty() && !arg.chars().any(|c| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '"')) {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '"'))
+    {
         return arg.to_string();
     }
     let mut quoted = String::with_capacity(arg.len() + 2);
@@ -540,7 +592,10 @@ pub fn build_browser_isolation_args(
 }
 
 fn resolve_browser_path(hint: Option<&str>) -> String {
-    if let Some(h) = hint.map(str::trim).filter(|s| !s.is_empty() && Path::new(s).is_file()) {
+    if let Some(h) = hint
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && Path::new(s).is_file())
+    {
         return h.to_string();
     }
     for env_key in ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"] {
@@ -571,10 +626,8 @@ pub fn launch_process(req: WinDesktopLaunchRequest) -> Result<WinDesktopLaunchRe
                 .unwrap_or(req.url.is_some())
         });
 
-    let (profile_dir, _) = default_fenced_roots(
-        req.isolated_profile_dir.as_deref(),
-        req.cwd.as_deref(),
-    );
+    let (profile_dir, _) =
+        default_fenced_roots(req.isolated_profile_dir.as_deref(), req.cwd.as_deref());
 
     let (kind_str, exe_str, final_args, used_profile) = if is_browser {
         let exe = resolve_browser_path(req.app.as_deref());
@@ -591,12 +644,15 @@ pub fn launch_process(req: WinDesktopLaunchRequest) -> Result<WinDesktopLaunchRe
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| "win_desktop_launch requires 'app' or 'kind: \"browser\"'".to_string())?;
-        let args = if app.eq_ignore_ascii_case("explorer") || app.eq_ignore_ascii_case("explorer.exe") {
-            ensure_explorer_separate_args(&req.args)
-        } else {
-            req.args.clone()
-        };
+            .ok_or_else(|| {
+                "win_desktop_launch requires 'app' or 'kind: \"browser\"'".to_string()
+            })?;
+        let args =
+            if app.eq_ignore_ascii_case("explorer") || app.eq_ignore_ascii_case("explorer.exe") {
+                ensure_explorer_separate_args(&req.args)
+            } else {
+                req.args.clone()
+            };
         ("app".to_string(), app.to_string(), args, None)
     };
 
@@ -633,7 +689,9 @@ pub fn launch_process(req: WinDesktopLaunchRequest) -> Result<WinDesktopLaunchRe
     })
 }
 
-pub fn close_window(req: WinDesktopCloseWindowRequest) -> Result<WinDesktopCloseWindowResult, String> {
+pub fn close_window(
+    req: WinDesktopCloseWindowRequest,
+) -> Result<WinDesktopCloseWindowResult, String> {
     let ep_opt = get_test_agent_endpoint().or_else(|| read_endpoint(&child_agent_endpoint_path()));
     let Some(ep) = ep_opt else {
         return Ok(WinDesktopCloseWindowResult {

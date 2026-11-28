@@ -272,17 +272,22 @@ export function BotVirtualServerLocalSection({ ctx }: { readonly ctx?: Context }
               className="qj-bset-btn soft sm"
               disabled={studio.ui.busyAction === "enable-win-child-session" || studio.ui.busyAction === "open-native-desktop"}
               onClick={() =>
-                void studio.runEngineAction({
-                  engine: "local-win-pip",
-                  action:
-                    localWinPip?.childSessionEnabled && !localWinPip.signOutRequired
-                      ? "open-native-desktop"
-                      : "enable-win-child-session",
-                })
+                void studio.runEngineAction(
+                  localWinPip?.childSessionEnabled
+                    ? {
+                        engine: "local-win-pip",
+                        action: "open-native-desktop",
+                        ...(localWinPip.signOutRequired ? { forceOpen: true } : {}),
+                      }
+                    : {
+                        engine: "local-win-pip",
+                        action: "enable-win-child-session",
+                      },
+                )
               }
             >
               {localWinPip?.signOutRequired
-                ? "待注销重登生效"
+                ? "免注销密码直连"
                 : localWinPip?.childSessionEnabled
                   ? localWinPip.viewerOpen
                     ? "聚焦独立桌面窗口"

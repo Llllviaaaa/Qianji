@@ -10,6 +10,38 @@ namespace QianjiChildSessionSetup
 {
     internal static class Program
     {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LUID
+        {
+            public uint LowPart;
+            public int HighPart;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct TOKEN_STATISTICS
+        {
+            public LUID TokenId;
+            public LUID AuthenticationId;
+            public long ExpirationTime;
+            public int TokenType;
+            public int ImpersonationLevel;
+            public uint DynamicCharged;
+            public uint DynamicAvailable;
+            public uint GroupCount;
+            public uint PrivilegeCount;
+            public LUID ModifiedId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct TOKEN_LINKED_TOKEN
+        {
+            public IntPtr LinkedToken;
+        }
+
+        private const uint TOKEN_QUERY = 0x0008;
+        private const int TokenStatisticsClass = 10;
+        private const int TokenLinkedTokenClass = 19;
+
         [DllImport("wtsapi32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool WTSEnableChildSessions([MarshalAs(UnmanagedType.Bool)] bool enable);
@@ -18,12 +50,43 @@ namespace QianjiChildSessionSetup
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool WTSIsChildSessionsEnabled([MarshalAs(UnmanagedType.Bool)] out bool enabled);
 
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetTokenInformation(
+            IntPtr tokenHandle, int tokenInformationClass, out TOKEN_STATISTICS tokenInformation, int tokenInformationLength, out int returnLength);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetTokenInformation(
+            IntPtr tokenHandle, int tokenInformationClass, out TOKEN_LINKED_TOKEN tokenInformation, int tokenInformationLength, out int returnLength);
+
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr handle);
+
         private static string T(string zh, string en)
         {
             return CultureInfo.CurrentUICulture.Name.StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? zh : en;
         }
 
-        private static void RecordEnableTimestamp()
+        private static string QueryTokenAuthLuid(IntPtr token)
+        {
+            if (token == IntPtr.Zero) return null;
+            TOKEN_STATISTICS stats;
+            int retLen;
+            if (!GetTokenInformation(token, TokenStatisticsClass, out stats, Marshal.SizeOf(typeof(TOKEN_STATISTICS)), out retLen))
+                return null;
+            return stats.AuthenticationId.HighPart.ToString("x8") + ":" + stats.AuthenticationId.LowPart.ToString("x8");
+        }
+
+        private static void RecordEnableMarkers()
         {
             try
             {
@@ -37,6 +100,40 @@ namespace QianjiChildSessionSetup
                     Path.Combine(dir, "child-session-enabled-ts.txt"),
                     unixMs.ToString(CultureInfo.InvariantCulture),
                     Encoding.UTF8);
+
+                string markerPath = Path.Combine(dir, "child-session-marker.json");
+                if (!File.Exists(markerPath))
+                {
+                    IntPtr token = IntPtr.Zero;
+                    IntPtr linked = IntPtr.Zero;
+                    try
+                    {
+                        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, out token) && token != IntPtr.Zero)
+                        {
+                            string ownLuid = QueryTokenAuthLuid(token);
+                            string linkedLuid = null;
+                            TOKEN_LINKED_TOKEN lt;
+                            int retLen;
+                            if (GetTokenInformation(token, TokenLinkedTokenClass, out lt, Marshal.SizeOf(typeof(TOKEN_LINKED_TOKEN)), out retLen) && lt.LinkedToken != IntPtr.Zero)
+                            {
+                                linked = lt.LinkedToken;
+                                linkedLuid = QueryTokenAuthLuid(linked);
+                            }
+                            if (!string.IsNullOrEmpty(ownLuid) || !string.IsNullOrEmpty(linkedLuid))
+                            {
+                                string primary = !string.IsNullOrEmpty(linkedLuid) ? linkedLuid : ownLuid;
+                                string secondary = !string.IsNullOrEmpty(ownLuid) ? ownLuid : primary;
+                                string json = "{\"authLuid\":\"" + primary + "\",\"linkedAuthLuid\":\"" + secondary + "\"}";
+                                File.WriteAllText(markerPath, json, new UTF8Encoding(false));
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        if (linked != IntPtr.Zero) CloseHandle(linked);
+                        if (token != IntPtr.Zero) CloseHandle(token);
+                    }
+                }
             }
             catch
             {
@@ -72,7 +169,7 @@ namespace QianjiChildSessionSetup
 
                 if (!wasEnabled)
                 {
-                    RecordEnableTimestamp();
+                    RecordEnableMarkers();
                 }
 
                 if (!quiet)

@@ -48,10 +48,30 @@ fn classifies_windows_editions_and_sign_out_requirement() {
     ));
     assert!(classify_edition_pro_support(Some("ServerStandard"), 0, 3));
 
-    assert!(!compute_sign_out_required(false, false, Some("0000:1234"), Some("0000:1234")));
-    assert!(!compute_sign_out_required(true, true, Some("0000:1234"), Some("0000:1234")));
-    assert!(compute_sign_out_required(true, false, Some("0000:1234"), Some("0000:1234")));
-    assert!(!compute_sign_out_required(true, false, Some("0000:5678"), Some("0000:1234")));
+    assert!(!compute_sign_out_required(
+        false,
+        false,
+        Some("0000:1234"),
+        Some("0000:1234")
+    ));
+    assert!(!compute_sign_out_required(
+        true,
+        true,
+        Some("0000:1234"),
+        Some("0000:1234")
+    ));
+    assert!(compute_sign_out_required(
+        true,
+        false,
+        Some("0000:1234"),
+        Some("0000:1234")
+    ));
+    assert!(!compute_sign_out_required(
+        true,
+        false,
+        Some("0000:5678"),
+        Some("0000:1234")
+    ));
 }
 
 #[test]
@@ -64,19 +84,27 @@ fn builds_isolated_chromium_profile_flags_without_collision() {
     let args = build_browser_isolation_args(profile, Some("https://example.com/path?a=1"), &extra);
 
     assert_eq!(
-        args.iter().filter(|a| a.starts_with("--user-data-dir=")).count(),
+        args.iter()
+            .filter(|a| a.starts_with("--user-data-dir="))
+            .count(),
         1
     );
     assert!(args.contains(&"--no-first-run".to_string()));
     assert!(args.contains(&"--new-window".to_string()));
-    assert_eq!(args.last().map(String::as_str), Some("https://example.com/path?a=1"));
+    assert_eq!(
+        args.last().map(String::as_str),
+        Some("https://example.com/path?a=1")
+    );
 
     let cmd = build_win32_command_line(
         Path::new(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
         &args,
     );
     assert!(cmd.starts_with(r#""C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe""#));
-    assert_eq!(quote_win32_arg(r#"C:\dir with space\"#), r#""C:\dir with space\\""#);
+    assert_eq!(
+        quote_win32_arg(r#"C:\dir with space\"#),
+        r#""C:\dir with space\\""#
+    );
     assert!(is_chromium_executable_name("msedge.exe"));
     assert!(!is_chromium_executable_name("notepad.exe"));
     assert_eq!(
