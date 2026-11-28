@@ -5,7 +5,6 @@ import { useCallback, useEffect } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { useFrontendService } from "@qianji/client";
 import type {
-  BotComputerEngineActionParams,
   BotComputerEngineActionResult,
   BotComputerEngineId,
   BotComputerEventNotification,
@@ -33,6 +32,7 @@ import {
   syncComputerStudioFromBotSnapshot,
   useComputerStudioSnapshot,
   useComputerStudioUi,
+  type ExtendedEngineActionParams,
 } from "./computerStudioStore";
 
 function syncPtyInfoToStores(pty: BotComputerPtySessionInfo): void {
@@ -138,7 +138,7 @@ export function useComputerStudio(ctx?: Context) {
   );
 
   const runEngineAction = useCallback(
-    async (params: BotComputerEngineActionParams): Promise<BotComputerEngineActionResult | null> => {
+    async (params: ExtendedEngineActionParams): Promise<BotComputerEngineActionResult | null> => {
       patchComputerStudioUi({ busyAction: params.action, feedbackMessage: null });
       try {
         const res = await rpcService?.call<BotComputerEngineActionResult>("bot.computer.action", { ...params });
@@ -261,6 +261,7 @@ export function useComputerStudio(ctx?: Context) {
         },
       }));
       if (params.action === "start") setComputerScrubIndex(null);
+      if (params.action === "release") patchComputerStudioUi({ expandedDesktop: false });
       if (rpcService === undefined) return;
       try {
         const res = await rpcService.call<{ takeover: BotComputerTakeoverState; snapshot: BotComputerStudioSnapshot }>(
@@ -277,15 +278,15 @@ export function useComputerStudio(ctx?: Context) {
   );
 
   const openPty = useCallback(
-    async (cwd?: string) => {
+    async (cwd?: string, cols = 100, rows = 28) => {
       const engine = computerStudioSnapshotStore.get().activeEngine;
       if (rpcService === undefined) return null;
       try {
         const res = await rpcService.call<{ pty: BotComputerPtySessionInfo }>("bot.computer.pty.open", {
           engine,
           ...(cwd !== undefined ? { cwd } : {}),
-          cols: 100,
-          rows: 28,
+          cols: Math.max(20, Math.round(cols)),
+          rows: Math.max(6, Math.round(rows)),
         });
         if (res?.pty) {
           syncPtyInfoToStores(res.pty);
@@ -312,6 +313,24 @@ export function useComputerStudio(ctx?: Context) {
         if (res?.pty) syncPtyInfoToStores(res.pty);
       } catch (err) {
         patchComputerStudioUi({ feedbackMessage: err instanceof Error ? err.message : "终端命令发送失败" });
+      }
+    },
+    [rpcService],
+  );
+
+  const resizePty = useCallback(
+    async (cols: number, rows: number) => {
+      const cur = computerStudioSnapshotStore.get();
+      if (rpcService === undefined) return;
+      try {
+        await rpcService.call("bot.computer.pty.resize", {
+          engine: cur.activeEngine,
+          ...(cur.pty?.sessionId !== undefined ? { sessionId: cur.pty.sessionId } : {}),
+          cols: Math.max(20, Math.round(cols)),
+          rows: Math.max(6, Math.round(rows)),
+        });
+      } catch {
+        // Ignore transient resize errors.
       }
     },
     [rpcService],
@@ -370,6 +389,6 @@ export function useComputerStudio(ctx?: Context) {
 
   return {
     snapshot, ui, refreshSnapshot, selectStudio, runEngineAction, upsertRemoteNode, deleteRemoteNode,
-    sendInput, navigateUrl, triggerTakeover, openPty, writePty, clearPtyLocal, listFiles, readFile,
+    sendInput, navigateUrl, triggerTakeover, openPty, writePty, resizePty, clearPtyLocal, listFiles, readFile,
   };
 }

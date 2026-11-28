@@ -28,6 +28,7 @@ import {
 import { BotComputerStudioPane } from "./computer-studio/BotComputerStudioPane";
 import {
   clampStudioWidth,
+  closeComputerStudio,
   MAX_STUDIO_WIDTH,
   MIN_STUDIO_WIDTH,
   patchComputerStudioUi,
@@ -129,7 +130,11 @@ export function BotStage(
     }
   };
 
-  const showRight = ui.rightPanelOpen && ui.activeView === "chat";
+  // Strict 3-Column Layout: when `studioOpen` is true, `#bot-right-wrap`
+  // renders `BotComputerStudioPane` IN PLACE OF `BotCompanionPanel` (never 4 columns!).
+  const showStudioInRight = studioUi.studioOpen;
+  const showCompanionInRight = !showStudioInRight && ui.rightPanelOpen && ui.activeView === "chat";
+  const showRight = showStudioInRight || showCompanionInRight;
   const isDiscoveryView =
     ui.activeView === "feed" || ui.activeView === "ideas" || ui.activeView === "goals";
   const showSplitChat = isDiscoveryView && ui.splitChatOpen === true;
@@ -139,7 +144,7 @@ export function BotStage(
       id="pane-bot"
       className="qj-bot-stage"
       data-right-closed={showRight ? "false" : "true"}
-      data-studio-open={studioUi.studioOpen ? "true" : "false"}
+      data-studio-open={showStudioInRight ? "true" : "false"}
       data-bot-view={ui.activeView}
       data-testid="bot-stage"
       onPointerMove={(event) => applyStageGazeMove(event.clientX, event.clientY, event.currentTarget)}
@@ -178,33 +183,45 @@ export function BotStage(
           {ui.activeView === "spaces" && <BotCreateSpaceView ctx={ctx} cwd={cwd} />}
         </div>
 
-        {studioUi.studioOpen && (
-          <>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="调整千机的电脑分屏宽度"
-              aria-valuemin={MIN_STUDIO_WIDTH}
-              aria-valuemax={MAX_STUDIO_WIDTH}
-              aria-valuenow={studioUi.studioWidth}
-              tabIndex={0}
-              data-testid="bot-computer-studio-resizer"
-              className={`qj-bot-split-resizer${draggingStudio ? " is-dragging" : ""}`}
-              onPointerDown={handleStudioResizerPointerDown}
-              onKeyDown={handleStudioResizerKeyDown}
-            />
-            <div
-              className="qj-cs-split-pane"
-              style={{ width: `${studioUi.studioWidth}px`, flexBasis: `${studioUi.studioWidth}px` }}
-              data-testid="bot-computer-split-wrap"
-            >
-              <BotComputerStudioPane ctx={ctx} />
-            </div>
-          </>
-        )}
-
-        <div id="bot-right-wrap" className={`qj-bot-right-wrap${showRight ? "" : " closed"}`}>
-          <BotCompanionPanel ctx={ctx} />
+        <div
+          id="bot-right-wrap"
+          className={[
+            "qj-bot-right-wrap",
+            showRight ? "" : "closed",
+            showStudioInRight ? "is-computer-studio" : "",
+          ].filter(Boolean).join(" ")}
+          style={
+            showStudioInRight
+              ? { width: `${studioUi.studioWidth}px`, flexBasis: `${studioUi.studioWidth}px` }
+              : undefined
+          }
+        >
+          {showStudioInRight ? (
+            <>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整电脑面板宽度"
+                aria-valuemin={MIN_STUDIO_WIDTH}
+                aria-valuemax={MAX_STUDIO_WIDTH}
+                aria-valuenow={studioUi.studioWidth}
+                tabIndex={0}
+                data-testid="bot-computer-studio-resizer"
+                className={`qj-cs-left-resizer${draggingStudio ? " is-dragging" : ""}`}
+                onPointerDown={handleStudioResizerPointerDown}
+                onKeyDown={handleStudioResizerKeyDown}
+              />
+              <BotComputerStudioPane
+                ctx={ctx}
+                onClose={() => {
+                  closeComputerStudio();
+                  patchBotUi({ rightPanelOpen: true });
+                }}
+              />
+            </>
+          ) : (
+            <BotCompanionPanel ctx={ctx} />
+          )}
         </div>
       </div>
 

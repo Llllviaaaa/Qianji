@@ -1,8 +1,11 @@
 export * from "./computerStudioStore";
 export * from "./computerViewportInput";
 export * from "./useComputerStudio";
-export { BotComputerMiniPip } from "./BotComputerMiniPip";
+export * from "./vncConnection";
+export { BotComputerDesktopTab } from "./BotComputerDesktopTab";
+export { BotComputerFilesView } from "./BotComputerFilesView";
 export { BotComputerStudioPane } from "./BotComputerStudioPane";
-export { BotComputerViewport } from "./BotComputerViewport";
-export { BotComputerTerminalAndFiles } from "./BotComputerTerminalAndFiles";
 export { BotComputerTimelineBar } from "./BotComputerTimelineBar";
+export { BotComputerViewport } from "./BotComputerViewport";
+export { attachPtyXtermSession, BotComputerXtermView, canMountRealXterm } from "./BotComputerXtermView";
+export { BotVncCanvas } from "./BotVncCanvas";

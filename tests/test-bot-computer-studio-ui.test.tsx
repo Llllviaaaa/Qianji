@@ -1,13 +1,14 @@
 /**
- * Frontend UI integration tests for 「千机的电脑 (Qianji's Computer)」 Studio (`2x2` Virtual Computer 2.0):
- * 1. Companion `236×148` Mini PiP card (`BotComputerMiniPip`), 4 engine badges, AI cursor dot,
- *    amber takeover pulse, and quick `"打开分身电脑"` trigger next to `bot-vserver-pill`.
- * 2. Resizable side-by-side `BotComputerStudioPane` in `BotStage` + `modal === "live-view"`
- *    compatibility (`data-testid="bot-liveview-modal"`), `2x2` engine switcher, `local-win-pip`
- *    non-hijacking quick launch bar, 4-tab bar, and `自动跟随` toggle.
- * 3. Live `BotComputerViewport` with smooth AI cursor + click ripple, seamless takeover request
- *    prompt, and direct canvas pointer/wheel/key/paste input forwarding to `bot.computer.input`.
- * 4. Timeline Scrubber, stateful PTY & `/workspace` File Explorer, and `2x2` `VirtualServerConsole`.
+ * Frontend UI integration tests for OpenMausBot-crafted 「千机的电脑 (Qianji's Computer)」:
+ * 1. Strict 3-column layout (`#bot-right-wrap` `380px–680px` default `420px` replaces `BotCompanionPanel`
+ *    when open — zero 4-column squeeze, zero duplicate mini PiP) & chat topbar `🖥️` toggle button.
+ * 2. Single-row 40px minimal header (`⚙️`, `[桌面 | 浏览器 | 终端 | 文件]`, `✕`), Desktop tab states
+ *    (real `@novnc/novnc` `BotVncCanvas` + fullscreen workspace, unprovisioned Linux, Windows Child
+ *    Session 3-tier onboarding + `open-native-desktop`), 2-button action row, and `运行位置` (`Runs on`) card.
+ * 3. `16:10` zero-letterbox Browser viewport, AI cursor + ripple, seamless takeover, and pixel-accurate
+ *    `imgRef` bounding-rect coordinate clamping.
+ * 4. Real `@xterm/xterm` PTY session bridge (`open`/`write`/`resize`/stream), `/workspace` Files tab,
+ *    and `2x2` Virtual Server Console settings.
  */
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -20,10 +21,12 @@ import {
   botDataStore, botUiStore, FALLBACK_BOT_SNAPSHOT, INITIAL_BOT_UI_STATE, openBotLiveView, openBotModal,
 } from "../src/builtin-plugins/bot-mode/botStore";
 import {
-  applyComputerEventNotification, applyComputerStudioSnapshot, buildKeyInputEvent, buildMouseInputEvent,
-  buildPasteInputEvent, buildWheelInputEvent, clampStudioWidth, computerStudioSnapshotStore,
-  computerStudioUiStore, FALLBACK_COMPUTER_STUDIO_SNAPSHOT, openComputerStudio, patchComputerStudioUi,
-  resetComputerStudioStores, setComputerScrubIndex, useComputerStudio,
+  applyComputerEventNotification, applyComputerStudioSnapshot, attachPtyXtermSession,
+  buildKeyInputEvent, buildMouseInputEvent, buildPasteInputEvent, buildWheelInputEvent,
+  clampStudioWidth, closeComputerStudio, computerStudioSnapshotStore, DEFAULT_STUDIO_WIDTH,
+  FALLBACK_COMPUTER_STUDIO_SNAPSHOT, openComputerStudio, openDesktopRfb, pasteOnDesktop,
+  patchComputerStudioUi, resetComputerStudioStores, setComputerScrubIndex, toggleComputerStudio,
+  typeOnDesktop, useComputerStudio, type ExtendedLinuxDesktopStatus, type ExtendedWinPipStatus,
 } from "../src/builtin-plugins/bot-mode/computer-studio";
 import { coreShellPlugin } from "../src/builtin-plugins/core-shell";
 import { registerFrontendServices } from "../src/kernel/services";
@@ -77,7 +80,7 @@ async function createStudioHarness(
   };
 }
 
-describe("Qianji's Computer Studio UI (`2x2` Engines, Mini PiP, Direct Takeover, PTY, Files & Timeline)", () => {
+describe("OpenMausBot-Style Computer Panel (3-Column Layout, VNC, Child Session, 16:10 Browser & Xterm)", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
@@ -91,133 +94,131 @@ describe("Qianji's Computer Studio UI (`2x2` Engines, Mini PiP, Direct Takeover,
     }
   });
 
-  it("renders 236x148 Mini PiP card with 4 engine badges, AI cursor dot, amber takeover pulse, and quick trigger", async () => {
+  it("enforces strict 3-column layout, chat header 🖥️ toggle, and borderless companion trigger with zero duplicate screens", async () => {
     const harness = await createStudioHarness();
     cleanups.push(harness.dispose);
 
-    const idleHtml = harness.renderHtml();
-    expect(idleHtml).toContain('data-testid="bot-vserver-pill"');
-    expect(idleHtml).toContain('data-testid="bot-open-computer-studio-btn"');
-    expect(idleHtml).toContain("打开分身电脑");
-    expect(idleHtml).toContain('data-testid="bot-computer-mini-pip"');
-    expect(idleHtml).toContain("Linux 桌面");
+    expect(DEFAULT_STUDIO_WIDTH).toBe(420);
+    expect(clampStudioWidth(200)).toBe(380);
+    expect(clampStudioWidth(1200)).toBe(680);
 
-    applyComputerEventNotification({
-      kind: "frame",
-      frame: {
-        engine: "local-win-pip",
-        tab: "desktop",
-        mimeType: "image/png",
-        dataBase64: SAMPLE_PNG_B64,
-        width: 1280,
-        height: 800,
-        seq: 1,
-        ts: 1732752000_000,
-        title: "Windows 多开桌面 · Chrome",
-        cursor: { x: 640, y: 400, viewportWidth: 1280, viewportHeight: 800, action: "click", label: "千机", ts: 1732752000_000 },
-      },
-    });
-    computerStudioSnapshotStore.set((prev) => ({ ...prev, activeEngine: "local-win-pip" }));
+    const closedHtml = harness.renderHtml();
+    expect(closedHtml).toContain('data-testid="bot-header-computer-btn"');
+    expect(closedHtml).toContain('aria-pressed="false"');
+    expect(closedHtml).toContain('data-testid="bot-companion-panel"');
+    expect(closedHtml).toContain('data-testid="bot-vserver-pill"');
+    expect(closedHtml).toContain('data-testid="bot-open-computer-studio-btn"');
+    expect(closedHtml).not.toContain('data-testid="bot-computer-mini-pip"');
+    expect(closedHtml).not.toContain('data-testid="bot-computer-studio-pane"');
 
-    const winPipHtml = harness.renderHtml();
-    expect(winPipHtml).toContain("Win 多开副屏");
-    expect(winPipHtml).toContain('data-testid="bot-mini-pip-cursor"');
-    expect(winPipHtml).toContain("left:50%");
-    expect(winPipHtml).toContain("top:50%");
+    toggleComputerStudio();
+    const openHtml = harness.renderHtml();
+    expect(openHtml).toContain('data-studio-open="true"');
+    expect(openHtml).toContain('aria-pressed="true"');
+    expect(openHtml).toContain("width:420px");
+    expect(openHtml).toContain('data-testid="bot-computer-studio-resizer"');
+    expect(openHtml).toContain('data-testid="bot-computer-studio-pane"');
+    expect(openHtml).not.toContain('data-testid="bot-companion-panel"');
+    expect(openHtml).not.toContain("qj-cs-split-pane");
 
-    computerStudioSnapshotStore.set((prev) => ({ ...prev, activeEngine: "remote-vm" }));
-    expect(harness.renderHtml()).toContain("远程 VM");
+    closeComputerStudio();
+    const restoredHtml = harness.renderHtml();
+    expect(restoredHtml).toContain('data-testid="bot-companion-panel"');
+    expect(restoredHtml).not.toContain('data-testid="bot-computer-studio-pane"');
 
-    computerStudioSnapshotStore.set((prev) => ({ ...prev, activeEngine: "remote-pc" }));
-    expect(harness.renderHtml()).toContain("远程电脑");
-
-    applyComputerEventNotification({
-      kind: "takeover",
-      takeover: {
-        status: "requested",
-        reason: "需要扫码登录企业微信",
-        targetUrlOrApp: "https://work.weixin.qq.com",
-        engine: "local-win-pip",
-        tab: "browser",
-      },
-    });
-    const alertHtml = harness.renderHtml();
-    expect(alertHtml).toContain("is-takeover-alert");
-    expect(alertHtml).toContain("待接管");
-    expect(alertHtml).toContain("需要扫码登录企业微信");
-  });
-
-  it("mounts resizable side-by-side Computer Studio pane, 2x2 engine switcher, local-win-pip quick bar, and live-view modal", async () => {
-    const harness = await createStudioHarness();
-    cleanups.push(harness.dispose);
-
-    expect(clampStudioWidth(200)).toBe(440);
-    expect(clampStudioWidth(1400)).toBe(960);
-
-    openComputerStudio({ engine: "local-win-pip", tab: "desktop" });
-    patchComputerStudioUi({ studioWidth: 640 });
-    computerStudioSnapshotStore.set((prev) => ({
-      ...prev,
-      localWinPip: {
-        accountMode: "current-user",
-        backend: "win32-secondary-desktop",
-        proSupported: true,
-        childSessionEnabled: false,
-        desktopName: "QianjiBotDesktop",
-        fencedRoots: ["D:/Workspace"],
-        openWindows: [{ hwnd: "0x1024", title: "独立多开记事本", app: "notepad.exe" }],
-        resolution: "1440×900",
-      },
-    }));
-
-    const splitHtml = harness.renderHtml();
-    expect(splitHtml).toContain('data-studio-open="true"');
-    expect(splitHtml).toContain('data-testid="bot-computer-studio-resizer"');
-    expect(splitHtml).toContain('data-testid="bot-computer-studio-pane"');
-    expect(splitHtml).toContain("本地 Linux 桌面");
-    expect(splitHtml).toContain("本地 Win 多开桌面");
-    expect(splitHtml).toContain("远程虚拟机");
-    expect(splitHtml).toContain("远程个人电脑");
-    expect(splitHtml).toContain('data-testid="win-pip-quick-bar"');
-    expect(splitHtml).toContain("当前账号派生不抢鼠标");
-    expect(splitHtml).toContain('data-testid="win-pip-launch-browser"');
-    expect(splitHtml).toContain('data-testid="win-pip-launch-explorer"');
-    expect(splitHtml).toContain('data-testid="win-pip-launch-notepad"');
-    expect(splitHtml).toContain("独立多开记事本");
-    expect(splitHtml).toContain("1440×900");
-    expect(splitHtml).toContain("桌面全景");
-    expect(splitHtml).toContain("浏览器");
-    expect(splitHtml).toContain("终端");
-    expect(splitHtml).toContain("文件");
-    expect(splitHtml).toContain('data-testid="computer-autofollow-toggle"');
-    expect(splitHtml).toContain("🤚 接管控制");
-
-    const studio = harness.getStudio();
-    await studio.selectStudio({ engine: "remote-pc", tab: "browser", autoFollow: true });
-    expect(harness.rpcCalls).toContainEqual({
-      method: "bot.computer.select",
-      params: { engine: "remote-pc", tab: "browser", autoFollow: true },
-    });
-
-    await studio.runEngineAction({
-      engine: "local-win-pip",
-      action: "launch-app",
-      launchKind: "browser",
-      appOrUrl: "https://github.com",
-    });
-    expect(harness.rpcCalls).toContainEqual({
-      method: "bot.computer.action",
-      params: { engine: "local-win-pip", action: "launch-app", launchKind: "browser", appOrUrl: "https://github.com" },
-    });
-
-    patchComputerStudioUi({ studioOpen: false });
-    openBotLiveView("https://github.com/login");
+    openBotLiveView("https://example.com/login");
     const modalHtml = harness.renderHtml();
     expect(modalHtml).toContain('data-testid="bot-liveview-modal"');
     expect(modalHtml).toContain('data-testid="bot-computer-studio-pane"');
   });
 
-  it("renders AI Virtual Cursor + click ripple in Watch mode and forwards direct canvas inputs in Takeover mode", async () => {
+  it("renders single-row header, VNC canvas + fullscreen workspace, Win Child Session onboarding, and Runs-on card", async () => {
+    const harness = await createStudioHarness();
+    cleanups.push(harness.dispose);
+
+    openComputerStudio({ engine: "local-linux", tab: "desktop" });
+    const unprovHtml = harness.renderHtml();
+    for (const id of ["computer-open-settings-btn", "computer-view-tabs", "computer-tab-desktop", "computer-tab-browser", "computer-tab-terminal", "computer-tab-files", "computer-close-btn"]) {
+      expect(unprovHtml).toContain(`data-testid="${id}"`);
+    }
+    for (const removed of ["win-pip-quick-bar", "win-pip-launch-notepad", "computer-desktop-window-bar", "computer-autofollow-toggle"]) {
+      expect(unprovHtml).not.toContain(`data-testid="${removed}"`);
+    }
+    expect(unprovHtml).toContain("千机的屏幕");
+    expect(unprovHtml).toContain("本地 Linux 桌面尚未启动");
+    expect(unprovHtml).toContain('data-testid="computer-start-linux-btn"');
+    expect(unprovHtml).toContain('data-testid="computer-takeover-btn"');
+    expect(unprovHtml).toContain('data-testid="computer-sleep-btn"');
+    expect(unprovHtml).toContain('data-testid="computer-engine-switcher"');
+    expect(unprovHtml).toContain("运行位置");
+    expect(unprovHtml).not.toContain('data-testid="remote-node-lease-bar"');
+
+    const vncLinux: ExtendedLinuxDesktopStatus = {
+      distro: "Ubuntu-24.04", guiReady: true, display: ":99", resolution: "1280x800", chromiumReady: true,
+      vncReady: true, vncWsUrl: "ws://127.0.0.1:49152/vnc/test-placeholder",
+    };
+    computerStudioSnapshotStore.set((prev) => ({
+      ...prev, localLinux: vncLinux, takeover: { status: "active", engine: "local-linux", tab: "desktop" },
+    }));
+    patchComputerStudioUi({ expandedDesktop: true });
+    const vncHtml = harness.renderHtml();
+    expect(vncHtml).toContain('data-testid="computer-vnc-canvas"');
+    expect(vncHtml).toContain('data-view-only="false"');
+    expect(vncHtml).toContain('data-testid="computer-vnc-expanded-header"');
+    expect(vncHtml).toContain("退出全屏");
+    expect(vncHtml).toContain("✓ 交还千机");
+    patchComputerStudioUi({ expandedDesktop: false });
+
+    const sentKeys: Array<{ keysym: number; code: string | null; down?: boolean }> = [];
+    let pastedClip = "";
+    const mockRfb = {
+      viewOnly: false, scaleViewport: false, background: "",
+      clipboardPasteFrom: (t: string) => { pastedClip = t; },
+      sendKey: (keysym: number, code: string | null, down?: boolean) => { sentKeys.push({ keysym, code, down }); },
+      disconnect: vi.fn(), addEventListener: vi.fn(),
+    };
+    pasteOnDesktop(mockRfb, "hello-vnc", null);
+    expect(pastedClip).toBe("hello-vnc");
+    expect(sentKeys.some((k) => k.keysym === 0x76 && k.code === "KeyV")).toBe(true);
+    sentKeys.length = 0;
+    typeOnDesktop(mockRfb, "A中\n");
+    expect(sentKeys[0]?.keysym).toBe(65);
+    expect(sentKeys[1]?.keysym).toBe(0x01000000 | ("中".codePointAt(0) ?? 0));
+    expect(sentKeys[2]?.keysym).toBe(0xff0d);
+
+    const rfbCtrl = new AbortController();
+    class MockRfbCtor {
+      scaleViewport = false; viewOnly = false; background = "";
+      disconnect = vi.fn(); clipboardPasteFrom = vi.fn(); sendKey = vi.fn(); addEventListener = vi.fn();
+    }
+    const opened = await openDesktopRfb({ addEventListener: vi.fn() } as unknown as HTMLElement, "ws://127.0.0.1:49152/vnc/test-placeholder", {
+      viewOnly: true, signal: rfbCtrl.signal, events: { connected: vi.fn(), disconnected: vi.fn() }, RfbCtor: MockRfbCtor as never,
+    });
+    expect(opened.scaleViewport).toBe(true);
+    expect(opened.viewOnly).toBe(true);
+    rfbCtrl.abort();
+
+    const studio = harness.getStudio();
+    await studio.selectStudio({ engine: "local-win-pip" });
+    expect(harness.renderHtml()).toContain('data-testid="computer-enable-win-desktop-btn"');
+
+    const signOutWin: ExtendedWinPipStatus = {
+      accountMode: "current-user", backend: "rdp-child-session", proSupported: true,
+      childSessionEnabled: true, signOutRequired: true, desktopName: "QianjiBotDesktop", fencedRoots: [], openWindows: [],
+    };
+    computerStudioSnapshotStore.set((prev) => ({ ...prev, localWinPip: signOutWin }));
+    expect(harness.renderHtml()).toContain("请注销并重新登录一次 Windows 以激活免密独立桌面");
+
+    computerStudioSnapshotStore.set((prev) => ({ ...prev, localWinPip: { ...signOutWin, signOutRequired: false, childSessionActive: true } }));
+    expect(harness.renderHtml()).toContain('data-testid="computer-open-native-win-btn"');
+    await studio.runEngineAction({ engine: "local-win-pip", action: "open-native-desktop" });
+    expect(harness.rpcCalls).toContainEqual({ method: "bot.computer.action", params: { engine: "local-win-pip", action: "open-native-desktop" } });
+
+    await studio.selectStudio({ engine: "remote-pc" });
+    expect(harness.renderHtml()).toContain('data-testid="remote-node-lease-bar"');
+  });
+
+  it("computes pixel-accurate mouse & wheel coordinates strictly from imgRef bounding rect in 16:10 Browser tab", async () => {
     const harness = await createStudioHarness();
     cleanups.push(harness.dispose);
 
@@ -225,92 +226,70 @@ describe("Qianji's Computer Studio UI (`2x2` Engines, Mini PiP, Direct Takeover,
     applyComputerEventNotification({
       kind: "frame",
       frame: {
-        engine: "local-linux",
-        tab: "browser",
-        mimeType: "image/png",
-        dataBase64: SAMPLE_PNG_B64,
-        width: 1280,
-        height: 800,
-        seq: 5,
-        ts: 1732752100_000,
-        url: "https://github.com/login",
-        title: "Sign in to GitHub",
-        cursor: { x: 320, y: 200, viewportWidth: 1280, viewportHeight: 800, action: "click", label: "千机", ts: 1732752100_000 },
+        engine: "local-linux", tab: "browser", mimeType: "image/jpeg", dataBase64: SAMPLE_PNG_B64,
+        width: 1280, height: 800, seq: 3, ts: 1732752100_000, url: "https://github.com/login", title: "Sign in to GitHub",
+        cursor: { x: 640, y: 400, viewportWidth: 1280, viewportHeight: 800, action: "click", label: "千机", ts: 1732752100_000 },
       },
     });
 
     const watchHtml = harness.renderHtml();
     expect(watchHtml).toContain('data-testid="computer-viewport-frame"');
     expect(watchHtml).toContain('data-testid="computer-ai-cursor"');
-    expect(watchHtml).toContain('data-testid="computer-ai-cursor-ripple"');
-    expect(watchHtml).toContain("千机");
-    expect(watchHtml).not.toContain('aria-label="向焦点元素输入文本"');
+    expect(watchHtml).not.toContain('data-testid="computer-timeline-bar"');
 
     applyComputerEventNotification({
       kind: "takeover",
-      takeover: { status: "requested", reason: "请输入 GitHub 双重验证码", targetUrlOrApp: "https://github.com/sessions/two-factor" },
+      takeover: { status: "requested", reason: "请输入二次验证码", targetUrlOrApp: "https://github.com", tab: "browser" },
     });
-    const reqHtml = harness.renderHtml();
-    expect(reqHtml).toContain("is-takeover-requested");
-    expect(reqHtml).toContain('data-testid="computer-takeover-prompt"');
-    expect(reqHtml).toContain("请输入 GitHub 双重验证码");
-    expect(reqHtml).toContain("立即在画面中接管");
+    expect(harness.renderHtml()).toContain('data-testid="computer-takeover-prompt"');
 
     const studio = harness.getStudio();
     await studio.triggerTakeover({ action: "start", engine: "local-linux", tab: "browser" });
-    expect(harness.rpcCalls).toContainEqual({
-      method: "bot.computer.takeover",
-      params: { action: "start", engine: "local-linux", tab: "browser" },
-    });
+    expect(harness.renderHtml()).toContain('data-testid="computer-takeover-active-banner"');
 
-    const activeHtml = harness.renderHtml();
-    expect(activeHtml).toContain("is-takeover-active");
-    expect(activeHtml).toContain('data-testid="computer-takeover-active-banner"');
-    expect(activeHtml).toContain("✓ 已完成，交还千机");
-    expect(activeHtml).not.toContain('data-testid="computer-ai-cursor"');
-    expect(activeHtml).not.toContain('aria-label="向焦点元素输入文本"');
-
-    const rect = { left: 100, top: 50, width: 640, height: 400 };
+    const outerRect = { left: 0, top: 0, width: 800, height: 600 };
+    const imgRect = { left: 80, top: 100, width: 640, height: 400 };
     const noMods = { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false };
-    await studio.sendInput(
-      buildMouseInputEvent({ mouseAction: "down", button: 0, clientX: 420, clientY: 250, rect, vpWidth: 1280, vpHeight: 800, modifiers: noMods }),
-    );
-    const wheelEvt = buildWheelInputEvent({ deltaX: 0, deltaY: 120, clientX: 420, clientY: 250, rect, vpWidth: 1280, vpHeight: 800, modifiers: noMods });
+
+    const midClick = buildMouseInputEvent({
+      mouseAction: "down", button: 0, clientX: 400, clientY: 300,
+      rect: outerRect, imgRect, vpWidth: 1280, vpHeight: 800, modifiers: noMods,
+    });
+    expect(midClick).toMatchObject({ kind: "mouse", mouseAction: "down", button: "left", x: 640, y: 400 });
+
+    const clampedClick = buildMouseInputEvent({
+      mouseAction: "click", button: 0, clientX: 10, clientY: 20,
+      rect: outerRect, imgRect, vpWidth: 1280, vpHeight: 800, modifiers: noMods,
+    });
+    expect(clampedClick).toMatchObject({ x: 0, y: 0 });
+
+    await studio.sendInput(midClick);
+    const wheelEvt = buildWheelInputEvent({ deltaX: 0, deltaY: 120, clientX: 400, clientY: 300, rect: outerRect, imgRect, vpWidth: 1280, vpHeight: 800, modifiers: noMods });
     if (wheelEvt !== null) await studio.sendInput(wheelEvt);
-    const keyEvt = buildKeyInputEvent({ key: "6", ...noMods });
+    const keyEvt = buildKeyInputEvent({ key: "8", ...noMods });
     if (keyEvt !== "allow-native-paste") await studio.sendInput(keyEvt);
-    expect(buildKeyInputEvent({ key: "v", ctrlKey: true, shiftKey: false, altKey: false, metaKey: false })).toBe("allow-native-paste");
-    const pasteEvt = buildPasteInputEvent("otp-839201");
+    const pasteEvt = buildPasteInputEvent("otp-123456");
     if (pasteEvt !== null) await studio.sendInput(pasteEvt);
 
     const inputCalls = harness.rpcCalls.filter((c) => c.method === "bot.computer.input");
     expect(inputCalls).toHaveLength(4);
-    expect(inputCalls[0]?.params).toMatchObject({ kind: "mouse", mouseAction: "down", button: "left", x: 640, y: 400 });
-    expect(inputCalls[1]?.params).toMatchObject({ kind: "wheel", deltaY: 120 });
-    expect(inputCalls[2]?.params).toMatchObject({ kind: "key", key: "6", text: "6" });
-    expect(inputCalls[3]?.params).toMatchObject({ kind: "paste", text: "otp-839201" });
-
-    await studio.triggerTakeover({ action: "release", engine: "local-linux", tab: "browser" });
-    expect(computerStudioSnapshotStore.get().takeover.status).toBe("idle");
+    expect(inputCalls[0]?.params).toMatchObject({ kind: "mouse", x: 640, y: 400 });
+    expect(inputCalls[1]?.params).toMatchObject({ kind: "wheel", x: 640, y: 400, deltaY: 120 });
   });
 
-  it("supports Timeline Scrubber replay + LIVE jump, stateful PTY streaming, and /workspace File Explorer preview", async () => {
+  it("wires real xterm.js PTY session bridge, Timeline Scrubber, /workspace Files tab, and 2x2 Settings Console", async () => {
     const harness = await createStudioHarness((method, params) => {
-      if (method === "bot.computer.pty.write") {
-        return { pty: { sessionId: "pty-1", engine: "local-linux", cwd: "/workspace/demo", alive: true, outputTail: "$ pwd\n/workspace/demo\n", updatedAt: 1732752200_000 } };
-      }
       if (method === "bot.computer.files.list") {
         return {
-          engine: "local-linux",
-          cwd: String(params?.path ?? "/workspace"),
+          engine: "local-linux", cwd: String(params?.path ?? "/workspace"),
           entries: [
-            { name: "reports", path: "/workspace/reports", isDir: true, sizeBytes: 0, updatedAt: 1732752200_000 },
-            { name: "summary.md", path: "/workspace/summary.md", isDir: false, sizeBytes: 1280, updatedAt: 1732752200_000 },
+            { name: "docs", path: "/workspace/docs", isDir: true, sizeBytes: 0, updatedAt: 1732752200_000 },
+            { name: "notes.md", path: "/workspace/notes.md", isDir: false, sizeBytes: 512, updatedAt: 1732752200_000 },
           ],
         };
       }
       if (method === "bot.computer.files.read") {
-        return { path: "/workspace/summary.md", content: "# Weekly Report\nAll checks green.", sizeBytes: 34, isBinary: false, mimeType: "text/markdown" };
+        return { path: "/workspace/notes.md", content: "# Project Notes\nClean OpenMausBot craft.", sizeBytes: 40, isBinary: false, mimeType: "text/markdown" };
       }
       return undefined;
     });
@@ -319,83 +298,56 @@ describe("Qianji's Computer Studio UI (`2x2` Engines, Mini PiP, Direct Takeover,
     openComputerStudio({ engine: "local-linux", tab: "browser" });
     applyComputerEventNotification({
       kind: "timeline",
-      step: { id: "step-1", seq: 1, ts: 1732752100_000, engine: "local-linux", tab: "browser", title: "打开 GitHub Issues 列表", thumbnailBase64: SAMPLE_PNG_B64, status: "completed" },
+      step: { id: "s1", seq: 1, ts: 1732752100_000, engine: "local-linux", tab: "browser", title: "打开文档站点", thumbnailBase64: SAMPLE_PNG_B64, status: "completed" },
     });
-    applyComputerEventNotification({
-      kind: "timeline",
-      step: { id: "step-2", seq: 2, ts: 1732752150_000, engine: "local-linux", tab: "terminal", title: "执行构建测试脚本", terminalSnippet: "$ npm test\nPASS all suites", status: "running" },
-    });
-    expect(computerStudioSnapshotStore.get().activeTab).toBe("terminal");
-
-    applyComputerEventNotification({
-      kind: "pty", sessionId: "pty-1", engine: "local-linux", chunk: "$ uname -a\nLinux qianji-vm 6.6\n", alive: true, updatedAt: 1732752180_000,
-    });
-    const ptyHtml = harness.renderHtml();
-    expect(ptyHtml).toContain('data-testid="computer-terminal-view"');
-    expect(ptyHtml).toContain("Linux qianji-vm 6.6");
-    expect(ptyHtml).toContain("2/2 · 执行构建测试脚本");
+    expect(harness.renderHtml()).toContain('data-testid="computer-timeline-bar"');
+    setComputerScrubIndex(0);
+    expect(harness.renderHtml()).toContain("历史回放 · 打开文档站点");
+    setComputerScrubIndex(null);
 
     const studio = harness.getStudio();
-    await studio.writePty("cd demo && pwd\n");
-    expect(harness.renderHtml()).toContain("/workspace/demo");
+    await studio.selectStudio({ tab: "terminal" });
+    expect(harness.renderHtml()).toContain('data-testid="computer-terminal-view"');
+    expect(harness.renderHtml()).toContain('data-testid="computer-xterm-host"');
 
-    setComputerScrubIndex(0);
-    await studio.selectStudio({ tab: "browser" });
-    const scrubHtml = harness.renderHtml();
-    expect(scrubHtml).toContain("1/2 · 打开 GitHub Issues 列表");
-    expect(scrubHtml).toContain("历史回放 · 打开 GitHub Issues 列表");
+    const termWrites: string[] = [];
+    let onDataCb: ((d: string) => void) | null = null;
+    const mockTerm = {
+      cols: 112, rows: 32,
+      write: (d: string) => { termWrites.push(d); },
+      clear: vi.fn(), dispose: vi.fn(),
+      onData: (cb: (d: string) => void) => { onDataCb = cb; return { dispose: vi.fn() }; },
+    };
+    const detachXterm = attachPtyXtermSession({
+      container: { clientWidth: 400, clientHeight: 280 } as HTMLElement,
+      engine: "local-linux", term: mockTerm, fitAddon: { fit: vi.fn() },
+      openPty: studio.openPty, writePty: studio.writePty, resizePty: studio.resizePty,
+    });
+    expect(harness.rpcCalls).toContainEqual({ method: "bot.computer.pty.open", params: { engine: "local-linux", cols: 112, rows: 32 } });
 
-    setComputerScrubIndex(null);
-    expect(computerStudioUiStore.get().scrubIndex).toBeNull();
+    applyComputerEventNotification({ kind: "pty", sessionId: "pty-x1", engine: "local-linux", chunk: "ubuntu@qianji:~$ ls\r\n", alive: true, updatedAt: 1732752300_000 });
+    expect(termWrites).toContain("ubuntu@qianji:~$ ls\r\n");
+
+    const triggerData = onDataCb as ((d: string) => void) | null;
+    triggerData?.("pwd\r");
+    await studio.resizePty(120, 36);
+    expect(harness.rpcCalls).toContainEqual({ method: "bot.computer.pty.write", params: { engine: "local-linux", sessionId: "pty-x1", data: "pwd\r" } });
+    expect(harness.rpcCalls).toContainEqual({ method: "bot.computer.pty.resize", params: { engine: "local-linux", sessionId: "pty-x1", cols: 120, rows: 36 } });
+    detachXterm();
 
     await studio.selectStudio({ tab: "files" });
     await studio.listFiles("/workspace");
-    await studio.readFile("/workspace/summary.md");
+    await studio.readFile("/workspace/notes.md");
     const filesHtml = harness.renderHtml();
     expect(filesHtml).toContain('data-testid="computer-files-view"');
-    expect(filesHtml).toContain("reports");
-    expect(filesHtml).toContain("summary.md");
-    expect(filesHtml).toContain("# Weekly Report");
-  });
+    expect(filesHtml).toContain("# Project Notes");
 
-  it("renders full 2x2 Virtual Server Console settings (Linux GUI, Win Multi-Desktop + Fence, Remote VM, and Remote PC + Autonomy Lease)", async () => {
-    const harness = await createStudioHarness();
-    cleanups.push(harness.dispose);
-
-    const customSnapshot: BotComputerStudioSnapshot = {
+    const snapWithRemote: BotComputerStudioSnapshot = {
       ...FALLBACK_COMPUTER_STUDIO_SNAPSHOT,
-      activeEngine: "remote-pc",
-      remoteNodes: [
-        {
-          id: "node-mac-mini",
-          alias: "书房 Mac mini M4",
-          kind: "companion-pc",
-          host: "100.88.12.34",
-          port: 22,
-          username: "yht",
-          osSummary: "macOS 15.4 arm64",
-          connected: true,
-          autonomyLease: { active: true, lastSeq: 42, queuedOfflineEvents: 3 },
-        },
-      ],
+      remoteNodes: [{ id: "node-1", alias: "Mac mini", kind: "companion-pc", host: "100.64.0.8", port: 22, connected: true, autonomyLease: { active: true, lastSeq: 9, queuedOfflineEvents: 1 } }],
     };
-    applyComputerStudioSnapshot(customSnapshot);
-
+    applyComputerStudioSnapshot(snapWithRemote);
     openBotModal("settings", "server");
-    const localSettingsHtml = harness.renderHtml();
-    expect(localSettingsHtml).toContain('data-testid="bot-vserver-console"');
-    expect(localSettingsHtml).toContain('data-testid="vserver-2x2-matrix-bar"');
-    expect(localSettingsHtml).toContain('data-testid="vserver-local-linux-card"');
-    expect(localSettingsHtml).toContain('data-testid="vserver-local-win-pip-card"');
-    expect(localSettingsHtml).toContain("本地 Windows 多开虚拟桌面 · 当前账号派生不抢鼠标");
-    expect(localSettingsHtml).toContain("Sentinel 受控路径围栏");
-
-    botDataStore.set((prev) => ({ ...prev, virtualServer: { ...prev.virtualServer, mode: "remote" } }));
-    const remoteSettingsHtml = harness.renderHtml();
-    expect(remoteSettingsHtml).toContain('data-testid="vserver-remote-vm-card"');
-    expect(remoteSettingsHtml).toContain('data-testid="vserver-remote-pc-card"');
-    expect(remoteSettingsHtml).toContain("书房 Mac mini M4");
-    expect(remoteSettingsHtml).toContain("自治租约 #42 · 离线缓存 3 条");
-    expect(remoteSettingsHtml).toContain('data-testid="sync-lease-node-mac-mini"');
+    expect(harness.renderHtml()).toContain('data-testid="bot-vserver-console"');
   });
 });

@@ -1,6 +1,10 @@
 /**
  * Pure coordinate & input event translation helpers for `BotComputerViewport`
  * (`mouse`, `wheel`, `key`, `paste` -> `BotComputerInputEvent`).
+ *
+ * Strictly computes mouse & wheel coordinates from the rendered `<img>` bounding
+ * rectangle (`imgRef.current.getBoundingClientRect()`), clamping inside image bounds
+ * so clicks are 100% pixel-accurate with zero letterbox offset.
  */
 import type {
   BotComputerInputEvent,
@@ -38,6 +42,20 @@ export function mapMouseButton(button: number): BotComputerMouseButton {
   return "left";
 }
 
+/**
+ * Resolves the authoritative target bounding rect from `imgRef.current?.getBoundingClientRect()`,
+ * falling back to the stage container rect only when no `<img>` element is mounted.
+ */
+export function resolveTargetImageRect(
+  imgRect: ViewportRectLike | null | undefined,
+  fallbackSurfaceRect: ViewportRectLike,
+): ViewportRectLike {
+  if (imgRect !== null && imgRect !== undefined && imgRect.width > 0 && imgRect.height > 0) {
+    return imgRect;
+  }
+  return fallbackSurfaceRect;
+}
+
 export function computeViewportCoords(
   clientX: number,
   clientY: number,
@@ -65,14 +83,16 @@ export function buildMouseInputEvent(input: {
   readonly clientX: number;
   readonly clientY: number;
   readonly rect: ViewportRectLike;
+  readonly imgRect?: ViewportRectLike | null;
   readonly vpWidth: number;
   readonly vpHeight: number;
   readonly modifiers: ModifierFlagsLike;
 }): BotComputerInputEvent {
+  const targetRect = resolveTargetImageRect(input.imgRect, input.rect);
   const { x, y } = computeViewportCoords(
     input.clientX,
     input.clientY,
-    input.rect,
+    targetRect,
     input.vpWidth,
     input.vpHeight,
   );
@@ -94,15 +114,17 @@ export function buildWheelInputEvent(input: {
   readonly clientX: number;
   readonly clientY: number;
   readonly rect: ViewportRectLike;
+  readonly imgRect?: ViewportRectLike | null;
   readonly vpWidth: number;
   readonly vpHeight: number;
   readonly modifiers: ModifierFlagsLike;
 }): BotComputerInputEvent | null {
   if (input.deltaX === 0 && input.deltaY === 0) return null;
+  const targetRect = resolveTargetImageRect(input.imgRect, input.rect);
   const { x, y } = computeViewportCoords(
     input.clientX,
     input.clientY,
-    input.rect,
+    targetRect,
     input.vpWidth,
     input.vpHeight,
   );
