@@ -80,6 +80,39 @@ const CUSTOM_VISIBLE_CROP: VisibleArtCropRatio = {
 };
 
 let sharedWebGLRenderer: PIXI.Renderer | null = null;
+let cachedSoftwareWebGL: boolean | undefined;
+
+const SOFTWARE_GL_RE = /SwiftShader|Basic Render Driver|Software|llvmpipe|Subzero|Warp/i;
+
+export function isSoftwareWebGL(): boolean {
+  if (cachedSoftwareWebGL !== undefined) return cachedSoftwareWebGL;
+  if (typeof document === "undefined") {
+    cachedSoftwareWebGL = true;
+    return true;
+  }
+  try {
+    const probeCanvas = document.createElement("canvas");
+    probeCanvas.width = 1;
+    probeCanvas.height = 1;
+    const gl =
+      probeCanvas.getContext("webgl2", { failIfMajorPerformanceCaveat: false }) ??
+      probeCanvas.getContext("webgl", { failIfMajorPerformanceCaveat: false });
+    if (gl === null) {
+      cachedSoftwareWebGL = true;
+      return true;
+    }
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    const unmasked = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) ?? "") : "";
+    const generic = String(gl.getParameter(gl.RENDERER) ?? "");
+    const loseExt = gl.getExtension("WEBGL_lose_context");
+    loseExt?.loseContext();
+    cachedSoftwareWebGL = SOFTWARE_GL_RE.test(`${unmasked} ${generic}`);
+    return cachedSoftwareWebGL;
+  } catch {
+    cachedSoftwareWebGL = true;
+    return true;
+  }
+}
 
 function getSharedWebGLRenderer(): PIXI.Renderer | null {
   if (sharedWebGLRenderer !== null) {
@@ -301,7 +334,14 @@ export function createLive2DStageRuntime(params: {
       rootEl.style.setProperty("--l2d-py", (-smoothPy).toFixed(4));
     }
 
-    if (activeLoaded !== null && activeCtrl !== null && activeBounds !== null && viewCanvas.isConnected) {
+    if (
+      activeLoaded !== null &&
+      activeCtrl !== null &&
+      activeBounds !== null &&
+      viewCanvas.isConnected &&
+      (typeof document === "undefined" || !document.hidden) &&
+      (rootEl === null || rootEl.closest('.app-shell:not([data-shell-mode="bot"])') === null)
+    ) {
       activeCtrl.setLookAtTarget(rawNx, rawNy);
       const target = computeFramingTarget({
         bounds: activeBounds,
@@ -326,12 +366,12 @@ export function createLive2DStageRuntime(params: {
       const fgShiftY = cfg.stageVariant === "card-preview" ? 0 : -smoothPy * 3;
       m.position.set(centerX + fgShiftX, centerY + fgShiftY);
 
-      if (renderer.width !== renderW || renderer.height !== renderH) {
-        renderer.resize(renderW, renderH);
+      if (renderer.width < renderW || renderer.height < renderH) {
+        renderer.resize(Math.max(renderer.width, renderW), Math.max(renderer.height, renderH));
       }
       renderer.render(stage);
       ctx2d.clearRect(0, 0, renderW, renderH);
-      ctx2d.drawImage(renderer.view as HTMLCanvasElement, 0, 0);
+      ctx2d.drawImage(renderer.view as HTMLCanvasElement, 0, 0, renderW, renderH, 0, 0, renderW, renderH);
     }
   };
 

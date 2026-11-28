@@ -11,6 +11,7 @@
 import {
   useEffect,
   useRef,
+  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -23,6 +24,7 @@ import { loadLive2DModelInstance } from "./live2dLoader";
 import {
   clampUnit,
   createLive2DStageRuntime,
+  isSoftwareWebGL,
   type GazeInputState,
   type Live2DStageRuntime,
   type Live2DStageVariant,
@@ -82,6 +84,25 @@ export interface Live2DViewportProps {
 
 const WAIST_FEATHER_MASK =
   "linear-gradient(to bottom, #000000 0%, #000000 76%, rgba(0, 0, 0, 0) 100%)";
+
+function readShellAllowsLive2D(): boolean {
+  if (typeof document === "undefined") return false;
+  const shell = document.querySelector(".app-shell");
+  return shell === null || shell.getAttribute("data-shell-mode") === "bot";
+}
+
+function subscribeShellLive2D(onChange: () => void): () => void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+    return () => undefined;
+  }
+  const target = document.querySelector(".app-shell") ?? document.body;
+  if (target === null) return () => undefined;
+  const obs = new MutationObserver(onChange);
+  obs.observe(target, { attributes: true, attributeFilter: ["data-shell-mode"], subtree: target === document.body });
+  return () => obs.disconnect();
+}
+
+const getServerShellAllowsLive2D = (): boolean => false;
 
 export function Live2DViewport(props: Live2DViewportProps): ReactElement {
   const {
@@ -191,9 +212,17 @@ export function Live2DViewport(props: Live2DViewportProps): ReactElement {
     onHeadTrackingStatusChange,
   ]);
 
+  const shellAllowsLive2D = useSyncExternalStore(
+    subscribeShellLive2D,
+    readShellAllowsLive2D,
+    getServerShellAllowsLive2D,
+  );
+  const canRenderHardwareWebGL =
+    typeof window !== "undefined" && !isCustomRasterImage && shellAllowsLive2D && !isSoftwareWebGL();
+
   // 1. Mount Fresh `<canvas>` + Shared-WebGL 2x Supersampled Stage Runtime
   useEffect(() => {
-    if (typeof window === "undefined" || isCustomRasterImage) return undefined;
+    if (!canRenderHardwareWebGL) return undefined;
     const hostEl = canvasHostRef.current;
     if (hostEl === null) return undefined;
 
@@ -214,12 +243,12 @@ export function Live2DViewport(props: Live2DViewportProps): ReactElement {
       runtime?.dispose();
       runtimeRef.current = null;
     };
-  }, [safeWidth, safeHeight, stageVariant, isCustomRasterImage]);
+  }, [safeWidth, safeHeight, stageVariant, canRenderHardwareWebGL]);
 
   // 2. Load / Hot-Swap 4K Built-In or `.zip` Custom Live2D Model
   useEffect(() => {
     const rt = runtimeRef.current;
-    if (rt === null || isCustomRasterImage) return undefined;
+    if (rt === null || !canRenderHardwareWebGL) return undefined;
 
     const abortController = new AbortController();
     void loadLive2DModelInstance({
@@ -262,7 +291,7 @@ export function Live2DViewport(props: Live2DViewportProps): ReactElement {
     return () => {
       abortController.abort();
     };
-  }, [preset, effectiveCustomSource, isCustomRasterImage, safeWidth, safeHeight, stageVariant]);
+  }, [preset, effectiveCustomSource, canRenderHardwareWebGL, safeWidth, safeHeight, stageVariant]);
 
   // 3. Sync Presence State -> Expressions & Streaming Lip-Sync
   useEffect(() => {
