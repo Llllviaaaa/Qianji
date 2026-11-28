@@ -1,48 +1,29 @@
 /**
- * Clean 1:1+ Meta Muse Conversational Canvas (`BotChatColumn`).
+ * Clean 1:1+ Meta Muse & OpenMausBot Conversational Canvas (`BotChatColumn`).
  *
  * Pairs the slide-out Side-Chat Drawer (`BotSideChatDrawer`), floating top frosted
- * pills (`≡ 聊天`, character badge, `通话`), avatar-free `22px` bubbles with
- * `[[options: ...]]` quick-choice buttons, and the bottom docked pill composer.
+ * pills (`≡ 聊天`, model selector, `通话`, `🖥️` Computer toggle), avatar-free `22px`
+ * bubbles with `[[options: ...]]` quick-choice buttons, and the bottom docked composer.
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import { ArrowDown, ArrowUpRight } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import {
-  useAppStore,
-  useFrontendService,
-  useSessionHandle,
-  useSessionState,
-  type AttachmentPayload,
+  useAppStore, useFrontendService, useSessionHandle, useSessionState, type AttachmentPayload,
 } from "@qianji/client";
-import { CalendarTaskTileIcon } from "./BotAvatarArt";
-import { BotChatHeroStage } from "./BotCharacterStage";
 import { BotChatComposer } from "./BotChatComposer";
+import { BotChatMessageStream } from "./BotChatMessageStream";
 import { getMergedConnectorCatalog, resolveConnectorState } from "./botConnectorCatalog";
-import {
-  BotAssistantBubbleRow,
-  BotChatFloatingTopbar,
-  BotHistoryHydratingState,
-  BotLiveThinkingRow,
-  filterVisibleBotMessages,
-  stripBotThinking,
-} from "./BotChatThreadWidgets";
+import { BotChatFloatingTopbar, filterVisibleBotMessages } from "./BotChatThreadWidgets";
 import { encodeBotModelKey } from "./BotModelsSettingsPane";
 import { BotSideChatDrawer } from "./BotSideChatDrawer";
 import {
-  openBotConnector,
-  openBotModal,
-  patchBotUi,
-  useBotController,
-  useBotSnapshot,
-  useBotUiState,
+  openBotConnector, openBotModal, patchBotUi, useBotController, useBotSnapshot, useBotUiState,
 } from "./botStore";
 import {
-  formatBotDividerTimestamp,
-  resolveEffectiveBotModel,
-  resolvePendingAutoSend,
-  useBotChatScroll,
-} from "./useBotChatScroll";
+  toggleComputerStudio, useComputerStudioSnapshot, useComputerStudioUi,
+} from "./computer-studio/computerStudioStore";
+import { resolveEffectiveBotModel, resolvePendingAutoSend, useBotChatScroll } from "./useBotChatScroll";
 
 export { resolvePendingAutoSend };
 
@@ -53,6 +34,8 @@ export function BotChatColumn(props: {
 }): ReactElement {
   const { ctx, cwd, compactSplit = false } = props;
   const ui = useBotUiState();
+  const studioUi = useComputerStudioUi();
+  const studioSnap = useComputerStudioSnapshot();
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
   const sessionSnap = useSessionState(ctx);
@@ -119,29 +102,12 @@ export function BotChatColumn(props: {
       void retained.handle.setThinkingLevel("off").catch(() => undefined);
     }
     if (desiredProvider === "" || desiredModelId === "") return;
-    const needsSync =
-      currentModelId === "" ||
-      currentProvider !== desiredProvider ||
-      currentModelId !== desiredModelId;
-    if (needsSync) {
+    if (currentModelId === "" || currentProvider !== desiredProvider || currentModelId !== desiredModelId) {
       void retained.handle
-        .setModel({
-          id: desiredModelId,
-          name: resolvedBotModel.label || desiredModelId,
-          provider: desiredProvider,
-        })
+        .setModel({ id: desiredModelId, name: resolvedBotModel.label || desiredModelId, provider: desiredProvider })
         .catch(() => undefined);
     }
-  }, [
-    retained.handle,
-    handlePhase,
-    currentThinkingLevel,
-    currentProvider,
-    currentModelId,
-    desiredProvider,
-    desiredModelId,
-    resolvedBotModel.label,
-  ]);
+  }, [retained.handle, handlePhase, currentThinkingLevel, currentProvider, currentModelId, desiredProvider, desiredModelId, resolvedBotModel.label]);
 
   const messages = retained.snapshot?.messages ?? [];
   const isStreaming = retained.snapshot?.isStreaming === true;
@@ -234,8 +200,6 @@ export function BotChatColumn(props: {
     connected: resolveConnectorState(entry, snapshot, ui.mcpStatus, appSettings?.mcpServers ?? []).connected,
   }));
 
-  const topModelLabel = resolvedBotModel.label;
-
   const handleSelectPrimaryModel = async (next: { provider: string; model: string } | null) => {
     await ctrl.configureBot({ modelConfig: { primary: next } });
     const target =
@@ -317,9 +281,11 @@ export function BotChatColumn(props: {
           drawerVisible={drawerVisible}
           compactSplit={compactSplit}
           rightPanelOpen={ui.rightPanelOpen}
+          computerOpen={studioUi.studioOpen}
+          computerTakeoverAlert={studioSnap.takeover.status !== "idle"}
           voiceCallActive={ui.voiceCallActive}
           pendingApprovalsCount={pendingApprovalsCount}
-          modelLabel={topModelLabel}
+          modelLabel={resolvedBotModel.label}
           availableModels={availableModels}
           selectedPrimaryKey={encodeBotModelKey(snapshot.modelConfig.primary)}
           defaultModelLabel={
@@ -328,14 +294,15 @@ export function BotChatColumn(props: {
           onSelectPrimaryModel={(next) => void handleSelectPrimaryModel(next)}
           onOpenDrawer={() => patchBotUi({ chatDrawerOpen: true })}
           onOpenModels={() => openBotModal("settings", "models")}
-          onOpenApprovals={() =>
-            patchBotUi({ activeView: "chat", rightPanelOpen: true, rightTab: "approvals" })
-          }
+          onOpenApprovals={() => {
+            patchBotUi({ activeView: "chat", rightPanelOpen: true, rightTab: "approvals" });
+          }}
           onToggleVoice={() => {
             const next = !ui.voiceCallActive;
             patchBotUi({ voiceCallActive: next });
             navigationService?.showToast(next ? "实时语音模式已开启" : "已结束语音模式", "info");
           }}
+          onToggleComputer={() => toggleComputerStudio()}
           onOpenRightPanel={() => patchBotUi({ rightPanelOpen: true })}
         />
 
@@ -345,119 +312,46 @@ export function BotChatColumn(props: {
           className={`qj-bot-chat-scroll${isEmptyChat ? " is-empty" : ""}`}
         >
           <div ref={contentRef} className="qj-bot-chat-stream">
-            {isHydratingHistory ? (
-              <div className="qj-sanctuary-empty-stack">
-                <BotHistoryHydratingState />
-              </div>
-            ) : isEmptyChat ? (
-              <div className="qj-sanctuary-empty-stack">
-                <BotChatHeroStage
-                  isMain={isMain}
-                  topTitle={isMain ? "主聊天" : topTitle}
-                  isStreaming={isStreaming}
-                />
-              </div>
-            ) : (
-              <>
-                <div className="qj-muse-date-divider">{formatBotDividerTimestamp()}</div>
-
-                {visibleMessages.map((msg) => {
-                  if (msg.role === "user") {
-                    return (
-                      <div key={msg.id} className="qj-sanctuary-msg-user-row">
-                        <div className="qj-sanctuary-bubble-user">{msg.content}</div>
-                      </div>
-                    );
-                  }
-                  const cleanContent = stripBotThinking(msg.content);
-                  if (cleanContent.trim() === "") {
-                    return <BotLiveThinkingRow key={msg.id} />;
-                  }
-                  const reacted = reactedIds[msg.id] === true;
-                  const replyModel =
-                    typeof msg.model === "string" && msg.model !== "" && msg.model !== "bot-companion"
-                      ? msg.model
-                      : undefined;
-                  return (
-                    <BotAssistantBubbleRow
-                      key={msg.id}
-                      msgId={msg.id}
-                      cleanContent={cleanContent}
-                      replyModel={replyModel}
-                      isStreaming={isStreaming}
-                      reacted={reacted}
-                      moreOpen={moreMsgId === msg.id}
-                      onToggleReaction={() =>
-                        setReactedIds((prev) => ({ ...prev, [msg.id]: !reacted }))
-                      }
-                      onQuote={(snippet) => patchBotUi({ quotedText: snippet })}
-                      onToggleMore={() => setMoreMsgId((cur) => (cur === msg.id ? null : msg.id))}
-                      onCloseMore={() => setMoreMsgId(null)}
-                      onCopy={(body) => {
-                        setMoreMsgId(null);
-                        void navigator.clipboard?.writeText(body);
-                        navigationService?.showToast("已复制消息", "info");
-                      }}
-                      onBranchSideChat={(body) => {
-                        setMoreMsgId(null);
-                        patchBotUi({ quotedText: body.slice(0, 120) });
-                        void ctrl.createSideChat(body.replace(/\s+/g, " ").trim().slice(0, 22));
-                      }}
-                      onOpenInWorkbench={(body) => {
-                        setMoreMsgId(null);
-                        ctrl.triggerHandoff({
-                          id: `msg-${msg.id}`,
-                          title: body.slice(0, 32) || "对话任务接力",
-                          kindLabel: "对话上下文接力",
-                          summary: body.slice(0, 180),
-                          targetCwd: cwd || effectiveCwd,
-                        });
-                      }}
-                      onSelectQuickOption={handleSelectQuickOption}
-                    />
-                  );
-                })}
-
-                {showTrailingThinking && <BotLiveThinkingRow />}
-              </>
-            )}
-
-            {isMain &&
-              snapshot.embeddedTasks.map((task) => (
-                <div key={task.id} className="qj-msg-row qj-sanctuary-msg-bot-row" data-testid="bot-handoff-card">
-                  <div className="qj-sanctuary-handoff-card">
-                    <div className="qj-sanctuary-handoff-head">
-                      <CalendarTaskTileIcon />
-                      <div className="qj-sanctuary-handoff-titles">
-                        <div className="qj-sanctuary-handoff-title">{task.title}</div>
-                        <div className="qj-sanctuary-handoff-kind">{task.kindLabel}</div>
-                      </div>
-                    </div>
-                    <p className="qj-sanctuary-handoff-summary">{task.summary}</p>
-                    <button
-                      type="button"
-                      className="qj-sanctuary-handoff-btn"
-                      onClick={() => ctrl.triggerHandoff(task)}
-                    >
-                      <span>在 Agent 工作台中打开</span>
-                      <ArrowUpRight size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-            {runtimeError && (
-              <div className="qj-sanctuary-error-card">
-                <span>{runtimeError}</span>
-                <button
-                  type="button"
-                  className="qj-primary-pill-btn qj-sanctuary-error-btn"
-                  onClick={() => openBotModal("settings", "models")}
-                >
-                  配置模型服务
-                </button>
-              </div>
-            )}
+            <BotChatMessageStream
+              isMain={isMain}
+              topTitle={topTitle}
+              isHydratingHistory={isHydratingHistory}
+              isEmptyChat={isEmptyChat}
+              isStreaming={isStreaming}
+              showTrailingThinking={showTrailingThinking}
+              visibleMessages={visibleMessages}
+              embeddedTasks={snapshot.embeddedTasks}
+              runtimeError={runtimeError}
+              reactedIds={reactedIds}
+              moreMsgId={moreMsgId}
+              onToggleReaction={(msgId, cur) => setReactedIds((prev) => ({ ...prev, [msgId]: !cur }))}
+              onQuote={(snippet) => patchBotUi({ quotedText: snippet })}
+              onToggleMore={(msgId) => setMoreMsgId((cur) => (cur === msgId ? null : msgId))}
+              onCloseMore={() => setMoreMsgId(null)}
+              onCopy={(body) => {
+                setMoreMsgId(null);
+                void navigator.clipboard?.writeText(body);
+                navigationService?.showToast("已复制消息", "info");
+              }}
+              onBranchSideChat={(body) => {
+                setMoreMsgId(null);
+                patchBotUi({ quotedText: body.slice(0, 120) });
+                void ctrl.createSideChat(body.replace(/\s+/g, " ").trim().slice(0, 22));
+              }}
+              onOpenInWorkbench={(msgId, body) => {
+                setMoreMsgId(null);
+                ctrl.triggerHandoff({
+                  id: `msg-${msgId}`,
+                  title: body.slice(0, 32) || "对话任务接力",
+                  kindLabel: "对话上下文接力",
+                  summary: body.slice(0, 180),
+                  targetCwd: cwd || effectiveCwd,
+                });
+              }}
+              onSelectQuickOption={handleSelectQuickOption}
+              onTriggerHandoff={(task) => ctrl.triggerHandoff(task)}
+              onOpenModels={() => openBotModal("settings", "models")}
+            />
           </div>
         </div>
 

@@ -3,11 +3,14 @@
  *
  * Syncs `BotComputerStudioSnapshot` from both `botDataStore` (`snapshot.computerStudio` /
  * `snapshot.virtualServer.computerStudio`) and live `"bot/computer"` notifications,
- * while tracking studio split-pane geometry, timeline scrub index (`null` = LIVE),
- * pointer telemetry ripples, rolling PTY buffers, and fenced `/workspace` file explorer state.
+ * while tracking right-column panel geometry (`380px–680px`, default `420px`), expanded
+ * fullscreen desktop state, timeline scrub index (`null` = LIVE), pointer telemetry ripples,
+ * rolling PTY buffers, and fenced `/workspace` file explorer state.
  */
 import { createReactiveStore, useStoreValue } from "@qianji/client-store";
 import type {
+  BotComputerEngineActionKind,
+  BotComputerEngineActionParams,
   BotComputerEngineId,
   BotComputerEventNotification,
   BotComputerFileEntry,
@@ -16,14 +19,17 @@ import type {
   BotComputerStudioSnapshot,
   BotComputerTimelineStep,
   BotComputerViewTab,
+  BotLocalLinuxDesktopStatus,
+  BotLocalWinPipStatus,
+  BotRemoteComputerNode,
   BotSnapshotResult,
 } from "@qianji/protocol";
 import { FALLBACK_BOT_SNAPSHOT } from "../botFallbackData";
 import { botDataStore } from "../botUiAtoms";
 
-export const MIN_STUDIO_WIDTH = 440;
-export const MAX_STUDIO_WIDTH = 960;
-export const DEFAULT_STUDIO_WIDTH = 620;
+export const MIN_STUDIO_WIDTH = 380;
+export const MAX_STUDIO_WIDTH = 680;
+export const DEFAULT_STUDIO_WIDTH = 420;
 const MAX_PTY_BUFFER_CHARS = 32_768;
 
 export function clampStudioWidth(width: number): number {
@@ -31,43 +37,44 @@ export function clampStudioWidth(width: number): number {
   return Math.max(MIN_STUDIO_WIDTH, Math.min(MAX_STUDIO_WIDTH, Math.round(width)));
 }
 
+/** Protocol forward-compatible extensions for VNC WebSocket URL & Child Session states. */
+export type ExtendedLinuxDesktopStatus = BotLocalLinuxDesktopStatus & {
+  readonly vncWsUrl?: string;
+  readonly vncReady?: boolean;
+  readonly provisioningStep?: string;
+};
+
+export type ExtendedWinPipStatus = BotLocalWinPipStatus & {
+  readonly childSessionActive?: boolean;
+  readonly signOutRequired?: boolean;
+  readonly viewerOpen?: boolean;
+};
+
+export type ExtendedRemoteComputerNode = BotRemoteComputerNode & {
+  readonly vncWsUrl?: string;
+};
+
+export type ExtendedEngineActionKind = BotComputerEngineActionKind | "open-native-desktop";
+
+export interface ExtendedEngineActionParams extends Omit<BotComputerEngineActionParams, "action"> {
+  readonly action: ExtendedEngineActionKind;
+}
+
 export interface ComputerEngineCardMeta {
   readonly id: BotComputerEngineId;
+  readonly pillLabel: string;
   readonly badgeLabel: string;
+  readonly statusLabel: string;
   readonly title: string;
   readonly subtitle: string;
   readonly group: "local" | "remote";
 }
 
 export const COMPUTER_ENGINE_CARDS: readonly ComputerEngineCardMeta[] = [
-  {
-    id: "local-linux",
-    badgeLabel: "Linux 桌面",
-    title: "本地 Linux 桌面",
-    subtitle: "WSL2 GUI 沙盒 · Xvfb :99",
-    group: "local",
-  },
-  {
-    id: "local-win-pip",
-    badgeLabel: "Win 多开副屏",
-    title: "本地 Win 多开桌面",
-    subtitle: "当前账号派生 · 不抢鼠标",
-    group: "local",
-  },
-  {
-    id: "remote-vm",
-    badgeLabel: "远程 VM",
-    title: "远程虚拟机",
-    subtitle: "Linux VPS · OpenSSH 7×24h",
-    group: "remote",
-  },
-  {
-    id: "remote-pc",
-    badgeLabel: "远程电脑",
-    title: "远程个人电脑",
-    subtitle: "Mac mini / PC · 离线自治租约",
-    group: "remote",
-  },
+  { id: "local-linux", pillLabel: "Linux 桌面", badgeLabel: "Linux 桌面", statusLabel: "本地 Linux 桌面", title: "本地 Linux 桌面", subtitle: "WSL2 GUI 沙盒 · XFCE4 / VNC", group: "local" },
+  { id: "local-win-pip", pillLabel: "Win 独立桌面", badgeLabel: "Win 独立桌面", statusLabel: "Win 独立子会话", title: "本地 Win 多开桌面", subtitle: "当前账号派生 · 不抢鼠标", group: "local" },
+  { id: "remote-vm", pillLabel: "远程虚拟机", badgeLabel: "远程 VM", statusLabel: "远程虚拟机", title: "远程虚拟机", subtitle: "Linux VPS · OpenSSH 7×24h", group: "remote" },
+  { id: "remote-pc", pillLabel: "远程电脑", badgeLabel: "远程电脑", statusLabel: "远程电脑", title: "远程个人电脑", subtitle: "Mac mini / PC · 离线自治租约", group: "remote" },
 ];
 
 export function getEngineCardMeta(engineId: BotComputerEngineId): ComputerEngineCardMeta {
@@ -76,19 +83,19 @@ export function getEngineCardMeta(engineId: BotComputerEngineId): ComputerEngine
 
 export const FALLBACK_COMPUTER_STUDIO_SNAPSHOT: BotComputerStudioSnapshot = {
   activeEngine: "local-linux",
-  activeTab: "browser",
+  activeTab: "desktop",
   autoFollow: true,
   localLinux: {
-    distro: "qianji-bot-vm",
-    guiReady: true,
+    distro: "qianji-ubuntu-vm",
+    guiReady: false,
     display: ":99",
     resolution: "1280x800",
-    chromiumReady: true,
+    chromiumReady: false,
   },
   localWinPip: {
     accountMode: "current-user",
-    backend: "win32-secondary-desktop",
-    proSupported: false,
+    backend: "rdp-child-session",
+    proSupported: true,
     childSessionEnabled: false,
     desktopName: "QianjiBotDesktop",
     fencedRoots: [],
@@ -104,6 +111,7 @@ export const FALLBACK_COMPUTER_STUDIO_SNAPSHOT: BotComputerStudioSnapshot = {
 export interface ComputerStudioUiState {
   readonly studioOpen: boolean;
   readonly studioWidth: number;
+  readonly expandedDesktop: boolean;
   readonly scrubIndex: number | null;
   readonly latestPointer: BotComputerPointerTelemetry | null;
   readonly pointerClickSeq: number;
@@ -119,6 +127,7 @@ export interface ComputerStudioUiState {
 export const INITIAL_COMPUTER_STUDIO_UI_STATE: ComputerStudioUiState = {
   studioOpen: false,
   studioWidth: DEFAULT_STUDIO_WIDTH,
+  expandedDesktop: false,
   scrubIndex: null,
   latestPointer: null,
   pointerClickSeq: 0,
@@ -190,12 +199,12 @@ export function openComputerStudio(options?: {
 }
 
 export function closeComputerStudio(): void {
-  patchComputerStudioUi({ studioOpen: false });
+  patchComputerStudioUi({ studioOpen: false, expandedDesktop: false });
 }
 
 export function toggleComputerStudio(): void {
   const cur = computerStudioUiStore.get().studioOpen;
-  patchComputerStudioUi({ studioOpen: !cur });
+  patchComputerStudioUi({ studioOpen: !cur, ...(cur ? { expandedDesktop: false } : {}) });
 }
 
 export function setComputerScrubIndex(index: number | null): void {
