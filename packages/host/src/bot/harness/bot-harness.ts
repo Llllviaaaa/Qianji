@@ -57,6 +57,7 @@ export interface BotHarnessHost extends BotNativeToolsHost {
   readSoul(): string;
   readMemory(): string;
   persist(): void;
+  resolvePrimaryModel?(state: PersistedBotState): ModelRef | undefined;
   getReflectionModel(state: PersistedBotState): ModelRef | undefined;
   executeToolInVm(call: ToolCall, env: ToolEnv): Promise<ToolOutput | undefined>;
   recordTurnProgress(session: Session, options?: TurnRecordOptions): Promise<BotActivityEntry | undefined>;
@@ -225,14 +226,25 @@ export class BotCompanionHarness implements Agents {
       if (signal.aborted) return "aborted";
       this.emit(session, { type: "turn-start", turn });
 
+      const st = await this.host.ensureLoaded();
+      const preferredModel = this.host.resolvePrimaryModel?.(st);
+      if (
+        preferredModel !== undefined &&
+        preferredModel.provider !== "" &&
+        preferredModel.model !== "" &&
+        (session.state().model?.provider !== preferredModel.provider ||
+          session.state().model?.model !== preferredModel.model)
+      ) {
+        session.setModel({ provider: preferredModel.provider, model: preferredModel.model });
+      }
       const model = session.state().model;
       if (!model) throw new NoModelError(session.id);
-      const st = await this.host.ensureLoaded();
       const system = buildBotSystemPrompt({
         displayName: st.profile.displayName,
         soulMarkdown: this.host.readSoul(),
         memoryMarkdown: this.host.readMemory(),
         state: st,
+        activeModel: model,
         scheduledTasks: this.host.listScheduledTasks?.() ?? [],
       });
 

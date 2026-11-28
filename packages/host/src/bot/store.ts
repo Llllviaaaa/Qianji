@@ -130,6 +130,10 @@ export class BotStateStore {
   matchesBotWorkspace(cwd?: string): boolean { return Boolean(cwd && normalizeBotPath(cwd) === normalizeBotPath(this.botWorkspaceDir)); }
   readSoul(): string { return readBotSoulFile(this.soulFile); }
   readMemory(): string { return readBotMemoryFile(this.memoryFile); }
+  resolvePrimaryModel(st: PersistedBotState): ModelRef | undefined {
+    const chosen = st.modelConfig?.primary ?? this.config.defaultModel?.();
+    return chosen?.provider && chosen?.model ? { provider: chosen.provider, model: chosen.model } : undefined;
+  }
 
   private async syncRuntimePaths(st: PersistedBotState, prevWs: string, prevStorage: string, migrateFiles = true): Promise<void> {
     await syncBotRuntimePaths({
@@ -149,8 +153,20 @@ export class BotStateStore {
     const prevStorage = this.botStorageDir;
     this.config = { ...this.config, ...next };
     if (this.state !== undefined) {
-      applyBotConfigOverlay(this.state, this.config);
-      void this.syncRuntimePaths(this.state, prevWs, prevStorage).then(() => this.persistState()).catch(() => undefined);
+      const st = this.state;
+      applyBotConfigOverlay(st, this.config);
+      void this.syncRuntimePaths(st, prevWs, prevStorage)
+        .then(async () => {
+          const target = this.resolvePrimaryModel(st);
+          if (target) {
+            const mainSess = await this.sessions.get(st.mainSessionId).catch(() => undefined);
+            if (mainSess && (mainSess.state().model?.provider !== target.provider || mainSess.state().model?.model !== target.model)) {
+              mainSess.setModel(target);
+            }
+          }
+          this.persistState();
+        })
+        .catch(() => undefined);
     }
   }
 

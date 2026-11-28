@@ -87,6 +87,7 @@ export interface SessionPoolEntry {
   readonly sessionId: string;
   readonly isolated: boolean;
   refCount: number;
+  activate?(options?: RetainSessionOptions): void;
   getSnapshot(): SessionHandleSnapshot;
   subscribe(listener: () => void): () => void;
   sendMessage(

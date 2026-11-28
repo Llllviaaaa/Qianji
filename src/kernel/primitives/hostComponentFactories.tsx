@@ -66,6 +66,7 @@ export interface HostSettingsPageFactoryProps {
   readonly cwd?: string;
   readonly onClose?: () => void;
   readonly initialExpandPluginId?: string;
+  readonly hideDefaultPreferences?: boolean;
 }
 
 export interface HostHubPluginsFactoryProps {
@@ -130,9 +131,15 @@ function HostAppearanceSettingsFactory(): ReactElement {
   return createElement(AppearancePage, { form, update, catalog });
 }
 
-function HostProvidersSettingsFactory(): ReactElement {
+function HostProvidersSettingsFactory(
+  props: SlotComponentProps<HostSettingsPageFactoryProps, "root">,
+): ReactElement {
   const { form, update } = useLiveAppSettingsForm();
-  return createElement(ModelsPage, { form, update });
+  return createElement(ModelsPage, {
+    form,
+    update,
+    ...(props.hideDefaultPreferences === true ? { hideDefaultPreferences: true } : {}),
+  });
 }
 
 function HostPluginsSettingsFactory(
