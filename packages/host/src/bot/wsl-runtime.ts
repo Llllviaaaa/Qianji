@@ -20,6 +20,15 @@ export { runWslSubprocess, sharedFolderSlug, stripWslStderrNoise, winPathToWslMo
 
 const ALPINE_VERSION = "3.21.3";
 const CACHE_TTL_MS = 3_000;
+let hostWslSupportedCache: boolean | undefined;
+
+export function isWslStatusProbeOk(probe: {
+  readonly error?: Error | undefined;
+  readonly status: number | null;
+  readonly signal: NodeJS.Signals | null;
+}): boolean {
+  return probe.error === undefined && probe.status === 0 && probe.signal === null;
+}
 
 export interface WslInspectSnapshot {
   engine: BotLocalEngineKind;
@@ -177,17 +186,25 @@ export class WslContainerRuntime {
 
   isSupported(): boolean {
     if (this.supportedCache !== undefined) return this.supportedCache;
+    if (hostWslSupportedCache !== undefined) {
+      this.supportedCache = hostWslSupportedCache;
+      return this.supportedCache;
+    }
     if (process.platform !== "win32") {
       this.supportedCache = false;
+      hostWslSupportedCache = false;
       return false;
     }
     const probe = spawnSync("wsl.exe", ["--status"], {
       windowsHide: true,
-      timeout: 4_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 3_000,
       env: { ...process.env, WSL_UTF8: "1" },
     });
-    this.supportedCache = probe.error === undefined;
-    return this.supportedCache;
+    const supported = isWslStatusProbeOk(probe);
+    this.supportedCache = supported;
+    hostWslSupportedCache = supported;
+    return supported;
   }
 
   private async listDistros(): Promise<Array<{ name: string; state: string; version: string }>> {

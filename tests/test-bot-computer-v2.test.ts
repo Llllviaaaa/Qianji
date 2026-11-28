@@ -53,7 +53,7 @@ import { startVncWsProxy } from "../packages/host/src/bot/computer/vnc-ws-proxy"
 import { resolveWinInputAction } from "../packages/host/src/bot/computer/win-helper-client";
 import { BOT_NATIVE_TOOL_SCHEMAS, executeBotNativeTool } from "../packages/host/src/bot/harness/bot-tools";
 import { createBotHarnessHost } from "../packages/host/src/bot/harness/bot-tools-host";
-import type { WslContainerRuntime } from "../packages/host/src/bot/wsl-runtime";
+import { isWslStatusProbeOk, type WslContainerRuntime } from "../packages/host/src/bot/wsl-runtime";
 import { builtinFeatureDefinitions } from "../packages/host/src/builtin-feature-defs";
 import { harnessFromDesktop } from "../packages/host/src/desktop-settings";
 import { createHost, type Host } from "../packages/host/src/host";
@@ -934,6 +934,13 @@ describe("Virtual Computer 2.0 Host Engine (RFB VNC Proxy, Ubuntu XFCE4, CDP Scr
     expect(hasTrailingSafeRootPrefix(evilSibling, realWs)).toBe(false);
     expect(hasTrailingSafeRootPrefix(realProject, realWs)).toBe(true);
     expect(() => resolveFencedPath(join(evilSibling, "steal.txt"), aliasWs, [])).toThrow(/Sentinel Path Fence/);
+
+    // Windows Server / CI runners with inbox wsl.exe stub exiting non-zero must report WSL2 unsupported
+    expect(isWslStatusProbeOk({ error: undefined, status: 50, signal: null })).toBe(false);
+    expect(isWslStatusProbeOk({ error: undefined, status: -1, signal: null })).toBe(false);
+    expect(isWslStatusProbeOk({ error: undefined, status: null, signal: "SIGTERM" })).toBe(false);
+    expect(isWslStatusProbeOk({ error: new Error("ENOENT"), status: 0, signal: null })).toBe(false);
+    expect(isWslStatusProbeOk({ error: undefined, status: 0, signal: null })).toBe(true);
 
     if (process.platform === "win32") {
       const shortProbe = spawnSync("cmd.exe", ["/d", "/c", `for %I in ("${realBase}") do @echo %~sI`], {

@@ -71,7 +71,15 @@ function psQuote(val: string): string {
 }
 
 async function terminateChildProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  const destroyPipes = () => {
+    try { child.stdin.destroy(); } catch { /* Ignore */ }
+    try { child.stdout.destroy(); } catch { /* Ignore */ }
+    try { child.stderr.destroy(); } catch { /* Ignore */ }
+  };
+  if (child.exitCode !== null || child.signalCode !== null) {
+    destroyPipes();
+    return;
+  }
   const waitClose = (ms: number) =>
     new Promise<boolean>((res) => {
       if (child.exitCode !== null || child.signalCode !== null) { res(true); return; }
@@ -83,9 +91,9 @@ async function terminateChildProcess(child: ChildProcessWithoutNullStreams): Pro
     if (child.stdin.writable) child.stdin.write("\x03\nexit\n");
     child.stdin.end();
   } catch { /* Ignore */ }
-  if (await waitClose(400)) return;
+  if (await waitClose(400)) { destroyPipes(); return; }
   try { child.kill(); } catch { /* Ignore */ }
-  if (await waitClose(1_000)) return;
+  if (await waitClose(1_000)) { destroyPipes(); return; }
   if (process.platform === "win32" && child.pid !== undefined) {
     await new Promise<void>((res) => {
       const tk = spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
@@ -94,6 +102,7 @@ async function terminateChildProcess(child: ChildProcessWithoutNullStreams): Pro
     });
     await waitClose(800);
   }
+  destroyPipes();
 }
 
 export class PtySessionManager {

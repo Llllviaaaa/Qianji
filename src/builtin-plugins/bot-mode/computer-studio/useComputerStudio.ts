@@ -3,7 +3,7 @@
  */
 import { useCallback, useEffect } from "react";
 import type { Context } from "@deepseek-ai/cordis";
-import { useFrontendService } from "@qianji/client";
+import { useFrontendService, useNavigationState } from "@qianji/client";
 import type {
   BotComputerEngineActionParams,
   BotComputerEngineActionResult,
@@ -48,26 +48,32 @@ function syncPtyInfoToStores(pty: BotComputerPtySessionInfo): void {
 
 export function useComputerStudioRuntimeSync(ctx?: Context): void {
   const rpcService = useFrontendService("rpcService", ctx);
+  const navState = useNavigationState(ctx);
   const botUi = useBotUiState();
   const studioUi = useComputerStudioUi();
   const studioSnap = useComputerStudioSnapshot();
+  const shouldHydrateStudio =
+    navState?.shellMode === "bot" || studioUi.studioOpen || botUi.modal !== null;
 
   useEffect(() => {
     syncComputerStudioFromBotSnapshot(botDataStore.get());
     if (rpcService === undefined) return undefined;
-
-    void rpcService
-      .call<BotComputerStudioSnapshot>("bot.computer.getSnapshot", { includeFrame: true })
-      .then((res) => {
-        if (res && typeof res.activeEngine === "string") applyComputerStudioSnapshot(res);
-      })
-      .catch(() => undefined);
 
     const offComputer = rpcService.onNotification("bot/computer", (raw) => {
       applyComputerEventNotification(raw as BotComputerEventNotification);
     });
     return () => offComputer();
   }, [rpcService]);
+
+  useEffect(() => {
+    if (rpcService === undefined || !shouldHydrateStudio) return;
+    void rpcService
+      .call<BotComputerStudioSnapshot>("bot.computer.getSnapshot", { includeFrame: true })
+      .then((res) => {
+        if (res && typeof res.activeEngine === "string") applyComputerStudioSnapshot(res);
+      })
+      .catch(() => undefined);
+  }, [rpcService, shouldHydrateStudio]);
 
   const studioVisible = studioUi.studioOpen || botUi.modal === "live-view";
   const shouldStream =

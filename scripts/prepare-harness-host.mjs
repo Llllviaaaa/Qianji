@@ -77,7 +77,14 @@ function compileCSharpWinExe(csc, { outExe, manifestPath, references, sources, t
       ...sources,
       tempAsmInfo,
     ];
-    const res = spawnSync(csc, args, { cwd: repoRoot, stdio: "inherit" });
+    const res = spawnSync(csc, args, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (res.stdout) process.stdout.write(res.stdout);
+    if (res.stderr) process.stderr.write(res.stderr);
     if (res.error) throw res.error;
     if (res.status !== 0) {
       throw new Error(`csc.exe failed for ${title} with exit code ${res.status}`);
@@ -157,8 +164,12 @@ if (!harnessCached) {
   rmSync(staging, { force: true });
   const result = spawnSync(bunExecutable, ["build", "--compile", bundleFile, "--outfile", staging], {
     cwd: repoRoot,
-    stdio: "inherit",
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`bun build --compile exited with ${result.status}`);
   rmSync(executable, { force: true });
