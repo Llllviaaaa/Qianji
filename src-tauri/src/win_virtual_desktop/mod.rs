@@ -1,36 +1,30 @@
-//! Windows Multi-Instance Virtual Desktop backend (`local-win-pip`).
+//! Windows Child Session Virtual Desktop bridge (`local-win-pip`).
 //!
-//! Operates strictly under the current logged-in Windows user account without
-//! ever calling `SwitchDesktop`, `SetCursorPos`, or `SendInput`.
+//! Connects to `qianji-win-desktop.exe` (`MsRdpClient` `ConnectToChildSession`
+//! viewer + `--child-agent` loopback HTTP/JSON server running inside the Child
+//! Session) and `qianji-enable-child-sessions.exe` (`WTSEnableChildSessions`).
 
-pub mod input;
+pub mod agent_client;
 pub mod input_model;
-pub mod launcher;
 pub mod session;
-
-#[cfg(windows)]
-pub(crate) mod compositor;
-#[cfg(windows)]
-pub(crate) mod dib;
-#[cfg(windows)]
-pub(crate) mod win32_ffi;
 
 #[cfg(test)]
 mod tests;
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const BOT_DESKTOP_NAME: &str = "QianjiBotDesktop";
-pub const BOT_DESKTOP_STATION_PATH: &str = "winsta0\\QianjiBotDesktop";
+pub const BOT_DESKTOP_NAME: &str = "QianjiChildSession";
+pub const BOT_DESKTOP_STATION_PATH: &str = "localhost\\ChildSession";
 pub const DEFAULT_DESKTOP_WIDTH: u32 = 1280;
 pub const DEFAULT_DESKTOP_HEIGHT: u32 = 800;
-pub const TASKBAR_HEIGHT: i32 = 40;
+
+static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -70,17 +64,31 @@ pub struct WinDesktopStatus {
     pub elevated: bool,
     pub wts_api_available: bool,
     pub child_session_enabled: bool,
+    pub child_session_active: bool,
+    pub sign_out_required: bool,
+    pub viewer_open: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_session_id: Option<u32>,
     pub desktop_name: String,
     pub desktop_station_path: String,
     pub desktop_ready: bool,
+    pub resolution: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub isolated_profile_dir: Option<String>,
     pub fenced_roots: Vec<String>,
     pub open_windows: Vec<WinDesktopWindow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<WinDesktopCursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elevation_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WinDesktopStatusRequest {
+    pub isolated_profile_dir: Option<String>,
+    pub workspace_dir: Option<String>,
+    pub prompt_uac: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +96,7 @@ pub struct WinDesktopStatus {
 pub struct WinDesktopEnableChildSessionResult {
     pub enabled: bool,
     pub requires_elevation: bool,
+    pub sign_out_required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elevation_hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,9 +107,25 @@ pub struct WinDesktopEnableChildSessionResult {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct WinDesktopStatusRequest {
+pub struct WinDesktopOpenViewerRequest {
+    pub mode: Option<String>,
+    pub dynamic: Option<bool>,
     pub isolated_profile_dir: Option<String>,
     pub workspace_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinDesktopOpenViewerResult {
+    pub ok: bool,
+    pub viewer_open: bool,
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(flatten)]
+    pub status: WinDesktopStatus,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -108,6 +133,8 @@ pub struct WinDesktopStatusRequest {
 pub struct WinDesktopCaptureRequest {
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub format: Option<String>,
+    pub quality: Option<u8>,
     pub draw_cursor: Option<bool>,
     pub cursor_x: Option<i32>,
     pub cursor_y: Option<i32>,
@@ -137,6 +164,32 @@ pub struct WinDesktopCaptureResult {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct WinDesktopLaunchRequest {
+    pub kind: Option<String>,
+    #[serde(alias = "executable", alias = "command", alias = "program", alias = "target")]
+    pub app: Option<String>,
+    pub args: Vec<String>,
+    pub url: Option<String>,
+    pub cwd: Option<String>,
+    pub isolated_profile_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinDesktopLaunchResult {
+    pub ok: bool,
+    pub pid: u32,
+    pub kind: String,
+    pub executable: String,
+    pub command_line: String,
+    pub desktop_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub isolated_profile_dir: Option<String>,
+    pub open_windows: Vec<WinDesktopWindow>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct WinDesktopCloseWindowRequest {
     pub hwnd: Option<String>,
     pub title: Option<String>,
@@ -151,32 +204,6 @@ pub struct WinDesktopCloseWindowResult {
     pub open_windows: Vec<WinDesktopWindow>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub(crate) struct PersistedDesktopState {
-    pub cursor_x: i32,
-    pub cursor_y: i32,
-    pub cursor_initialized: bool,
-    pub last_action: String,
-    pub last_ts: u64,
-    pub last_hwnd: Option<String>,
-    pub frame_seq: u64,
-}
-
-impl Default for PersistedDesktopState {
-    fn default() -> Self {
-        Self {
-            cursor_x: (DEFAULT_DESKTOP_WIDTH / 2) as i32,
-            cursor_y: (DEFAULT_DESKTOP_HEIGHT / 2) as i32,
-            cursor_initialized: false,
-            last_action: "move".to_string(),
-            last_ts: 0,
-            last_hwnd: None,
-            frame_seq: 0,
-        }
-    }
-}
-
 pub(crate) fn now_epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -184,15 +211,15 @@ pub(crate) fn now_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn next_frame_seq() -> u64 {
+    FRAME_SEQ.fetch_add(1, Ordering::Relaxed) + 1
+}
+
 pub(crate) fn bot_desktop_root_dir() -> PathBuf {
     let base = dirs::data_local_dir()
         .or_else(dirs::config_dir)
         .unwrap_or_else(std::env::temp_dir);
     base.join("qianji").join("bot-desktop")
-}
-
-pub fn default_isolated_profile_dir() -> PathBuf {
-    bot_desktop_root_dir().join("browser-profile")
 }
 
 pub fn default_fenced_roots(
@@ -219,54 +246,12 @@ pub fn default_fenced_roots(
     (profile_dir, roots)
 }
 
-fn state_file_path() -> PathBuf {
-    bot_desktop_root_dir().join("virtual-desktop-state.json")
-}
-
-fn state_mutex() -> &'static Mutex<Option<PersistedDesktopState>> {
-    static STATE: OnceLock<Mutex<Option<PersistedDesktopState>>> = OnceLock::new();
-    STATE.get_or_init(|| Mutex::new(None))
-}
-
-pub(crate) fn load_desktop_state() -> PersistedDesktopState {
-    if let Ok(mut guard) = state_mutex().lock() {
-        if let Some(disk_raw) = fs::read_to_string(state_file_path()).ok() {
-            if let Ok(parsed) = serde_json::from_str::<PersistedDesktopState>(&disk_raw) {
-                *guard = Some(parsed.clone());
-                return parsed;
-            }
-        }
-        if let Some(mem) = guard.clone() {
-            return mem;
-        }
-    }
-    PersistedDesktopState::default()
-}
-
-pub(crate) fn update_desktop_state<F>(mutate: F) -> PersistedDesktopState
-where
-    F: FnOnce(&mut PersistedDesktopState),
-{
-    let mut state = load_desktop_state();
-    mutate(&mut state);
-    if let Ok(mut guard) = state_mutex().lock() {
-        *guard = Some(state.clone());
-    }
-    let path = state_file_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(raw) = serde_json::to_string(&state) {
-        let _ = fs::write(path, raw);
-    }
-    state
-}
-
 pub fn is_win_desktop_action(action: &str) -> bool {
     matches!(
         action,
         "win_desktop_status"
             | "win_desktop_enable_child_session"
+            | "win_desktop_open_viewer"
             | "win_desktop_launch"
             | "win_desktop_capture"
             | "win_desktop_input"
@@ -288,50 +273,43 @@ pub fn dispatch_helper_action(action: &str, payload: Value) -> Result<Value, Str
             serde_json::to_value(session::enable_child_session(&req))
                 .map_err(|e| format!("Could not serialize win_desktop_enable_child_session: {e}"))
         }
+        "win_desktop_open_viewer" => {
+            let req: WinDesktopOpenViewerRequest = serde_json::from_value(payload)
+                .map_err(|e| format!("Invalid win_desktop_open_viewer request: {e}"))?;
+            let result = agent_client::open_viewer(req)?;
+            serde_json::to_value(result)
+                .map_err(|e| format!("Could not serialize win_desktop_open_viewer: {e}"))
+        }
         "win_desktop_launch" => {
-            let req: launcher::WinDesktopLaunchRequest = serde_json::from_value(payload)
+            let req: WinDesktopLaunchRequest = serde_json::from_value(payload)
                 .map_err(|e| format!("Invalid win_desktop_launch request: {e}"))?;
-            let result = launcher::launch_process(req)?;
+            let result = agent_client::launch_process(req)?;
             serde_json::to_value(result)
                 .map_err(|e| format!("Could not serialize win_desktop_launch: {e}"))
         }
         "win_desktop_capture" => {
             let req: WinDesktopCaptureRequest = serde_json::from_value(payload)
                 .map_err(|e| format!("Invalid win_desktop_capture request: {e}"))?;
-            let result = capture_virtual_desktop(req)?;
+            let result = agent_client::capture_frame(req)?;
             serde_json::to_value(result)
                 .map_err(|e| format!("Could not serialize win_desktop_capture: {e}"))
         }
         "win_desktop_input" => {
-            let req: input::WinDesktopInputRequest = serde_json::from_value(payload)
+            let req: input_model::WinDesktopInputRequest = serde_json::from_value(payload)
                 .map_err(|e| format!("Invalid win_desktop_input request: {e}"))?;
-            let result = input::dispatch_input(req)?;
+            let result = agent_client::dispatch_input(req)?;
             serde_json::to_value(result)
                 .map_err(|e| format!("Could not serialize win_desktop_input: {e}"))
         }
         "win_desktop_close_window" => {
             let req: WinDesktopCloseWindowRequest = serde_json::from_value(payload)
                 .map_err(|e| format!("Invalid win_desktop_close_window request: {e}"))?;
-            let result = input::close_window(req)?;
+            let result = agent_client::close_window(req)?;
             serde_json::to_value(result)
                 .map_err(|e| format!("Could not serialize win_desktop_close_window: {e}"))
         }
         _ => Err(format!("Unsupported win_desktop action: {action}")),
     }
-}
-
-#[cfg(windows)]
-pub fn capture_virtual_desktop(
-    req: WinDesktopCaptureRequest,
-) -> Result<WinDesktopCaptureResult, String> {
-    compositor::capture_frame(req)
-}
-
-#[cfg(not(windows))]
-pub fn capture_virtual_desktop(
-    _req: WinDesktopCaptureRequest,
-) -> Result<WinDesktopCaptureResult, String> {
-    Err("Windows virtual desktop capture is only supported on Windows".to_string())
 }
 
 #[cfg(not(windows))]
