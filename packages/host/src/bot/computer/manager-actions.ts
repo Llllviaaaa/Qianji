@@ -19,6 +19,7 @@ import type { SshRemoteRuntime } from "../ssh-runtime.ts";
 import type { BotSecretVault } from "../store-proactive.ts";
 import { executeBotToolInVm, VM_BRIDGED_TOOLS } from "../vm-tool-bridge.ts";
 import type { WslContainerRuntime } from "../wsl-runtime.ts";
+import type { CdpScreencastController } from "./cdp-screencast.ts";
 import { executeFencedHostTool } from "./fenced-tool-bridge.ts";
 import type { LocalLinuxComputerEngine } from "./local-linux-engine.ts";
 import { nodeToSshEndpoint, type RemoteNodesEngine } from "./remote-nodes-engine.ts";
@@ -30,6 +31,7 @@ export interface ComputerActionContext {
   localLinux: LocalLinuxComputerEngine;
   winPip: WinPipComputerEngine;
   remoteNodes: RemoteNodesEngine;
+  cdpScreencast: CdpScreencastController;
   tracker: TimelineAndTakeoverTracker;
   wsl: WslContainerRuntime;
   ssh: SshRemoteRuntime;
@@ -77,6 +79,32 @@ export async function runComputerEngineAction(
     };
   }
 
+  if (action === "open-native-desktop") {
+    if (engine === "local-win-pip") {
+      const res = await ctx.winPip.openNativeViewer();
+      ctx.setWinPipStatus(res.status);
+      const snapshot = await ctx.getSnapshot({ engine: "local-win-pip" });
+      ctx.emitComputerEvent({ kind: "snapshot", snapshot });
+      return {
+        ok: res.ok,
+        message: res.message,
+        ...(res.elevationRequired ? { elevationRequired: true } : {}),
+        snapshot,
+      };
+    }
+    if (engine === "local-linux") {
+      const cur = await ctx.localLinux.inspectStatus(ctx.wsl, st.virtualServer);
+      const res = cur.vncReady ? { ok: true, message: "Linux 完整桌面视图已就绪", status: cur } : await ctx.localLinux.provisionGui(ctx.wsl, st.virtualServer);
+      ctx.setLocalLinuxStatus(res.status);
+      const snapshot = await ctx.getSnapshot({ engine: "local-linux" });
+      ctx.emitComputerEvent({ kind: "snapshot", snapshot });
+      return { ok: res.ok, message: res.message, snapshot };
+    }
+    const snapshot = await ctx.getSnapshot({ engine });
+    ctx.emitComputerEvent({ kind: "snapshot", snapshot });
+    return { ok: true, message: "远程桌面视图已就绪", snapshot };
+  }
+
   if (action === "launch-app") {
     if (engine === "local-win-pip") {
       const res = await ctx.winPip.launch({ launchKind: params.launchKind, appOrUrl: params.appOrUrl });
@@ -87,7 +115,7 @@ export async function runComputerEngineAction(
       ctx.tracker.appendStep(st, {
         engine: "local-win-pip",
         tab: "desktop",
-        title: params.launchKind === "browser" ? "启动独立配置浏览器" : "启动虚拟桌面应用",
+        title: params.launchKind === "browser" ? "启动独立配置浏览器" : "启动独立桌面应用",
         subtitle: params.appOrUrl ?? "",
         urlOrApp: params.appOrUrl,
         thumbnailBase64: frame.dataBase64,
@@ -107,7 +135,7 @@ export async function runComputerEngineAction(
     ctx.setLatestFrame(frame);
     ctx.emitComputerEvent({ kind: "frame", frame });
     const snapshot = await ctx.getSnapshot({ engine: "local-win-pip" });
-    return { ok: true, message: "已关闭虚拟桌面窗口", snapshot };
+    return { ok: true, message: "已关闭独立桌面窗口", snapshot };
   }
 
   if (action === "connect-remote" || action === "disconnect-remote" || action === "sync-autonomy-lease") {
@@ -135,9 +163,11 @@ export async function runComputerEngineAction(
 
   if (engine === "local-linux") {
     if (action === "stop") {
+      await ctx.localLinux.stop(ctx.wsl);
       await ctx.wsl.sleep();
       st.virtualServer.lifecycle = "sleeping";
     } else if (action === "restart") {
+      await ctx.localLinux.stop(ctx.wsl);
       await ctx.wsl.sleep();
       if (ctx.wsl.isSupported()) await ctx.wsl.wake();
       st.virtualServer.lifecycle = "running";
@@ -158,7 +188,7 @@ export async function runComputerEngineAction(
     );
     const snapshot = await ctx.getSnapshot({ engine: "local-win-pip" });
     ctx.emitComputerEvent({ kind: "snapshot", snapshot });
-    return { ok: true, message: `Windows 多开虚拟桌面已执行 ${action}`, snapshot };
+    return { ok: true, message: `Windows 独立子会话桌面已执行 ${action}`, snapshot };
   }
 
   const node = ctx.remoteNodes.resolveNodeForEngine(engine, cs.remoteNodes, params.remoteNodeId ?? cs.activeRemoteNodeId);
@@ -179,12 +209,18 @@ export async function runComputerEngineAction(
 export async function routeBotToolThroughComputer(
   call: ToolCall,
   env: ToolEnv,
-  ctx: Omit<ComputerActionContext, "nextFrameSeq" | "setLatestFrame" | "setLocalLinuxStatus" | "setWinPipStatus" | "emitComputerEvent" | "getSnapshot" | "navigate">,
+  ctx: Omit<
+    ComputerActionContext,
+    "nextFrameSeq" | "setLatestFrame" | "setLocalLinuxStatus" | "setWinPipStatus" | "emitComputerEvent" | "getSnapshot" | "navigate"
+  >,
 ): Promise<ToolOutput | undefined> {
   const { st } = ctx;
   const cs = ensureComputerStudioState(st);
 
   if (BOT_BROWSER_TOOLS.has(call.name)) {
+    const browser = ctx.liveView.getBrowserSessionForInput();
+    await browser.ensureStarted(true).catch(() => undefined);
+    await ctx.cdpScreencast.ensureViewport(browser);
     const out = await ctx.liveView.executeBrowserTool(call);
     ctx.tracker.recordToolCall(st, call, out);
     ctx.persist();

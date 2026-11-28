@@ -17,6 +17,7 @@ import type { BotLiveViewController } from "../live-view.ts";
 import type { SshRemoteRuntime } from "../ssh-runtime.ts";
 import type { BotSecretVault } from "../store-proactive.ts";
 import type { WslContainerRuntime } from "../wsl-runtime.ts";
+import { CdpScreencastController, STUDIO_BROWSER_HEIGHT, STUDIO_BROWSER_WIDTH } from "./cdp-screencast.ts";
 import { LocalLinuxComputerEngine } from "./local-linux-engine.ts";
 import { routeBotToolThroughComputer, runComputerEngineAction } from "./manager-actions.ts";
 import { PtySessionManager } from "./pty-manager.ts";
@@ -52,6 +53,7 @@ export class VirtualComputerManager {
   readonly localLinux: LocalLinuxComputerEngine;
   readonly winPip: WinPipComputerEngine;
   readonly remoteNodes: RemoteNodesEngine;
+  readonly cdpScreencast: CdpScreencastController;
   readonly pty: PtySessionManager;
   readonly tracker: TimelineAndTakeoverTracker;
 
@@ -86,10 +88,20 @@ export class VirtualComputerManager {
         this.emitComputerEvent({ kind: "frame", frame });
       },
     });
+    this.cdpScreencast = new CdpScreencastController({
+      getBrowser: () => deps.liveView.getBrowserSessionForInput(),
+      nextFrameSeq: () => this.frameSeq++,
+      getCursor: () => this.tracker.currentPointer,
+      onFrame: (frame) => {
+        this.latestFrame = frame;
+        this.emitComputerEvent({ kind: "frame", frame });
+      },
+    });
     this.pty = new PtySessionManager({
       getBotWorkspaceDir: () => deps.getBotWorkspaceDir(),
       getSharedFolders: () => this.currentStateRef?.virtualServer.local.sharedFolders ?? [],
       wsl: deps.wsl,
+      getLinuxDistro: () => this.localLinux.getActiveDistro(),
       remoteEngine: this.remoteNodes,
       resolveRemoteNode: (engine) => {
         const st = this.currentStateRef;
@@ -115,13 +127,14 @@ export class VirtualComputerManager {
     const localWinPip: BotLocalWinPipStatus = this.lastWinPipStatus
       ? { ...this.lastWinPipStatus, fencedRoots, isolatedProfileDir: this.winPip.isolatedProfileDir }
       : {
-          accountMode: "current-user", backend: process.platform === "win32" ? "win32-secondary-desktop" : "unavailable",
-          proSupported: process.platform === "win32", childSessionEnabled: false, desktopName: "QianjiBotDesktop",
+          accountMode: "current-user", backend: process.platform === "win32" ? "rdp-child-session" : "unavailable",
+          proSupported: process.platform === "win32", childSessionEnabled: false, childSessionActive: false,
+          signOutRequired: false, viewerOpen: false, desktopName: "QianjiChildSession",
           isolatedProfileDir: this.winPip.isolatedProfileDir, fencedRoots, openWindows: [], resolution: "1280x800",
         };
     const localLinux: BotLocalLinuxDesktopStatus = this.lastLocalLinuxStatus ?? {
       distro: st.virtualServer.local.distroName ?? this.deps.wsl.distroName,
-      guiReady: false, display: ":99", resolution: "1280x800", chromiumReady: true,
+      guiReady: false, vncReady: false, display: ":99", resolution: "1280x800", chromiumReady: true,
     };
     const ptyInfo = this.pty.getActiveInfo(cs.activeEngine);
     return {
@@ -179,9 +192,9 @@ export class VirtualComputerManager {
     return runComputerEngineAction(
       {
         st, localLinux: this.localLinux, winPip: this.winPip, remoteNodes: this.remoteNodes,
-        tracker: this.tracker, wsl: this.deps.wsl, ssh: this.deps.ssh, liveView: this.deps.liveView,
-        vault: this.deps.vault, getBotWorkspaceDir: () => this.deps.getBotWorkspaceDir(), persist: () => this.deps.persist(),
-        nextFrameSeq: () => this.frameSeq++,
+        cdpScreencast: this.cdpScreencast, tracker: this.tracker, wsl: this.deps.wsl, ssh: this.deps.ssh,
+        liveView: this.deps.liveView, vault: this.deps.vault, getBotWorkspaceDir: () => this.deps.getBotWorkspaceDir(),
+        persist: () => this.deps.persist(), nextFrameSeq: () => this.frameSeq++,
         setLatestFrame: (f) => { this.latestFrame = f; },
         setLocalLinuxStatus: (s) => { this.lastLocalLinuxStatus = s; },
         setWinPipStatus: (s) => { this.lastWinPipStatus = s; },
@@ -221,10 +234,16 @@ export class VirtualComputerManager {
   private async captureEngineFrame(st: PersistedBotState, engine: BotComputerEngineId, tab: BotComputerStreamTab): Promise<BotComputerStreamFrame> {
     const seq = this.frameSeq++;
     const cursor = this.tracker.currentPointer;
-    if (engine === "local-win-pip") return this.winPip.captureFrame(seq, cursor);
-    if (engine === "local-linux" || tab === "browser") {
-      const frame = await this.localLinux.captureFrame(tab, this.deps.liveView, this.deps.wsl, st.virtualServer, seq, cursor);
+    if (tab === "browser") {
+      const browser = this.deps.liveView.getBrowserSessionForInput();
+      await browser.ensureStarted(true).catch(() => undefined);
+      await this.cdpScreencast.ensureViewport(browser);
+      const frame = await this.localLinux.captureFrame("browser", this.deps.liveView, this.deps.wsl, st.virtualServer, seq, cursor);
       return { ...frame, engine };
+    }
+    if (engine === "local-win-pip") return this.winPip.captureFrame(seq, cursor);
+    if (engine === "local-linux") {
+      return this.localLinux.captureFrame("desktop", this.deps.liveView, this.deps.wsl, st.virtualServer, seq, cursor);
     }
     const cs = ensureComputerStudioState(st);
     const node = this.remoteNodes.resolveNodeForEngine(engine, cs.remoteNodes, cs.activeRemoteNodeId);
@@ -236,22 +255,35 @@ export class VirtualComputerManager {
       clearInterval(this.streamTimer);
       this.streamTimer = null;
     }
-    if (!params.active) return { ok: true };
+    if (!params.active) {
+      await this.cdpScreencast.stop();
+      return { ok: true };
+    }
     const st = await this.deps.ensureLoaded();
     this.currentStateRef = st;
     const cs = ensureComputerStudioState(st);
     const engine = params.engine ?? cs.activeEngine;
     const tab: BotComputerStreamTab = params.tab ?? (cs.activeTab === "browser" ? "browser" : "desktop");
-    const fps = Math.min(8, Math.max(1, Math.round(params.fps ?? 2)));
-    const pushFrame = async () => {
-      const curSt = await this.deps.ensureLoaded();
-      const frame = await this.captureEngineFrame(curSt, engine, tab);
-      this.latestFrame = frame;
-      this.emitComputerEvent({ kind: "frame", frame });
-    };
-    await pushFrame();
-    this.streamTimer = setInterval(() => { void pushFrame().catch(() => undefined); }, Math.round(1000 / fps));
-    this.streamTimer.unref?.();
+    if (tab === "browser") {
+      await this.cdpScreencast.start(engine);
+      return { ok: true };
+    }
+    await this.cdpScreencast.stop();
+    if (engine === "local-linux") {
+      this.lastLocalLinuxStatus = await this.localLinux.inspectStatus(this.deps.wsl, st.virtualServer);
+      return { ok: true };
+    }
+    if (engine === "local-win-pip") {
+      const fps = Math.min(4, Math.max(1, Math.round(params.fps ?? 2)));
+      const pushWinFrame = async () => {
+        const frame = await this.winPip.captureFrame(this.frameSeq++, this.tracker.currentPointer);
+        this.latestFrame = frame;
+        this.emitComputerEvent({ kind: "frame", frame });
+      };
+      await pushWinFrame();
+      this.streamTimer = setInterval(() => { void pushWinFrame().catch(() => undefined); }, Math.round(1000 / fps));
+      this.streamTimer.unref?.();
+    }
     return { ok: true };
   }
 
@@ -268,10 +300,21 @@ export class VirtualComputerManager {
       ...(typeof event.viewportHeight === "number" ? { viewportHeight: event.viewportHeight } : {}),
       ...(event.key ? { label: event.key } : {}),
     }, engine, viewTab);
+
+    if (viewTab === "browser") {
+      await this.cdpScreencast.dispatchInput(event);
+      if (this.cdpScreencast.isStreaming || event.mouseAction === "move") {
+        return { ok: true, ...(this.latestFrame ? { frame: this.latestFrame } : {}) };
+      }
+      const frame = await this.captureEngineFrame(st, engine, "browser");
+      this.latestFrame = frame;
+      this.emitComputerEvent({ kind: "frame", frame });
+      return { ok: true, frame };
+    }
     const seq = this.frameSeq++;
-    const rawFrame = engine === "local-win-pip" && viewTab !== "browser"
+    const rawFrame = engine === "local-win-pip"
       ? await this.winPip.dispatchInput(event, seq, cursor)
-      : await this.localLinux.dispatchBrowserInput(event, this.deps.liveView, this.deps.wsl, st.virtualServer, seq, cursor);
+      : await this.localLinux.dispatchDesktopInput(event, this.deps.wsl, st.virtualServer, seq, cursor);
     const taggedFrame: BotComputerStreamFrame = { ...rawFrame, engine };
     this.latestFrame = taggedFrame;
     this.emitComputerEvent({ kind: "frame", frame: taggedFrame });
@@ -288,10 +331,13 @@ export class VirtualComputerManager {
       await this.winPip.launch({ launchKind: "browser", appOrUrl: params.url });
       frame = await this.winPip.captureFrame(this.frameSeq++, this.tracker.currentPointer);
     } else {
+      const browser = this.deps.liveView.getBrowserSessionForInput();
+      await browser.ensureStarted(true);
+      await this.cdpScreencast.ensureViewport(browser);
       const snap = await this.deps.liveView.navigate(params.url, st.virtualServer);
       frame = {
         engine, tab: "browser", mimeType: "image/png", dataBase64: snap.screenshotBase64,
-        width: snap.viewport.width, height: snap.viewport.height, seq: this.frameSeq++, ts: Date.now(),
+        width: STUDIO_BROWSER_WIDTH, height: STUDIO_BROWSER_HEIGHT, seq: this.frameSeq++, ts: Date.now(),
         url: snap.url, title: snap.title, cursor: this.tracker.currentPointer,
       };
     }
@@ -367,8 +413,9 @@ export class VirtualComputerManager {
     this.currentStateRef = st;
     return routeBotToolThroughComputer(call, env, {
       st, localLinux: this.localLinux, winPip: this.winPip, remoteNodes: this.remoteNodes,
-      tracker: this.tracker, wsl: this.deps.wsl, ssh: this.deps.ssh, liveView: this.deps.liveView,
-      vault: this.deps.vault, getBotWorkspaceDir: () => this.deps.getBotWorkspaceDir(), persist: () => this.deps.persist(),
+      cdpScreencast: this.cdpScreencast, tracker: this.tracker, wsl: this.deps.wsl, ssh: this.deps.ssh,
+      liveView: this.deps.liveView, vault: this.deps.vault,
+      getBotWorkspaceDir: () => this.deps.getBotWorkspaceDir(), persist: () => this.deps.persist(),
     });
   }
 
@@ -377,6 +424,11 @@ export class VirtualComputerManager {
       clearInterval(this.streamTimer);
       this.streamTimer = null;
     }
-    await this.pty.closeAll();
+    await Promise.all([
+      this.cdpScreencast.dispose(),
+      this.localLinux.dispose(),
+      this.remoteNodes.dispose(),
+      this.pty.closeAll(),
+    ]);
   }
 }

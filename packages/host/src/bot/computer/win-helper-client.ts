@@ -83,7 +83,7 @@ export function normalizeOpenWindows(raw: unknown): BotWinOpenWindow[] {
 
 export function normalizeBackend(raw: unknown): BotWinDesktopBackend {
   if (raw === "rdp-child-session" || raw === "win32-secondary-desktop" || raw === "unavailable") return raw;
-  return process.platform === "win32" ? "win32-secondary-desktop" : "unavailable";
+  return process.platform === "win32" ? "rdp-child-session" : "unavailable";
 }
 
 export function isUrlLike(value: string | undefined): boolean {

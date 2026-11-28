@@ -1,15 +1,9 @@
 /**
  * `local-linux` Virtual Computer Engine (`packages/host/src/bot/computer/local-linux-engine.ts`).
  *
- * Upgrades local Linux sandbox support:
- * 1. Detects WSL2 Ubuntu/Alpine distros & GUI `Xvfb` (`:99`) / Chromium / VNC readiness.
- * 2. Fast `git worktree add --detach` isolated shared folder sync with `cpSync` fallback.
- * 3. Direct mouse/wheel/key/text/paste CDP input & live frame capture via `BrowserSession`.
- * 4. `/workspace` & `/shared` file listing and reading.
+ * Real WSL2 Ubuntu + XFCE4 + x11vnc + RFB WebSocket Proxy + `xdotool` Desktop Agent Engine.
  */
-import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 import { findBrowserExecutable } from "@qianji/browser";
 import type {
   BotComputerFilesListResult,
@@ -24,59 +18,29 @@ import type {
 } from "@qianji/protocol";
 import type { BotLiveViewController } from "../live-view.ts";
 import { runWslSubprocess, type WslContainerRuntime } from "../wsl-runtime.ts";
+import { STUDIO_BROWSER_HEIGHT, STUDIO_BROWSER_WIDTH } from "./cdp-screencast.ts";
+import {
+  buildUbuntuGuiProvisionScript,
+  buildXdotoolScript,
+  MINIMAL_PNG_BASE64,
+  parseWslVerboseList,
+  PREFERRED_UBUNTU_DISTROS,
+  selectPreferredUbuntuDistro,
+  syncIsolatedCopyWithWorktree,
+  type WslDistroEntry,
+} from "./linux-gui-helpers.ts";
 import { listFencedFiles, readFencedFile } from "./sentinel-fence.ts";
+import { startVncWsProxy, type VncWsProxyHandle } from "./vnc-ws-proxy.ts";
 
-/** Valid 1x1 dark slate PNG fallback frame when headless GUI/browser is initializing. */
-export const MINIMAL_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-
-/**
- * Syncs an `isolated-copy` shared folder using `git worktree add --detach` when `.git`
- * is present in the source repository, falling back to filtered `cpSync` otherwise.
- */
-export function syncIsolatedCopyWithWorktree(rule: BotSharedFolderRule, copyDir: string): string {
-  if (rule.access !== "isolated-copy" || !existsSync(rule.path)) return copyDir;
-  if (existsSync(copyDir)) {
-    try {
-      if (readdirSync(copyDir).length > 0) return copyDir;
-    } catch {
-      return copyDir;
-    }
-  }
-
-  const gitMarker = join(rule.path, ".git");
-  if (existsSync(gitMarker)) {
-    mkdirSync(join(copyDir, ".."), { recursive: true });
-    const wt = spawnSync(
-      "git",
-      ["-C", rule.path, "worktree", "add", "--detach", "--force", copyDir],
-      { windowsHide: true, timeout: 25_000 },
-    );
-    if (wt.error === undefined && wt.status === 0 && existsSync(copyDir)) {
-      return copyDir;
-    }
-  }
-
-  mkdirSync(copyDir, { recursive: true });
-  cpSync(rule.path, copyDir, {
-    recursive: true,
-    filter: (src) => !src.includes(join("node_modules")) && !src.includes("target") && !src.endsWith(".git"),
-  });
-  return copyDir;
-}
-
-interface CdpSendCapable {
-  connected?: boolean;
-  send?: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
-}
-
-function formatKeyCombo(key: string, modifiers?: readonly string[]): string {
-  if (!modifiers || modifiers.length === 0) return key;
-  const prefix = modifiers
-    .map((m) => (m === "ctrl" ? "Ctrl" : m === "shift" ? "Shift" : m === "alt" ? "Alt" : "Meta"))
-    .filter((m) => !key.toLowerCase().includes(m.toLowerCase()));
-  return prefix.length > 0 ? `${prefix.join("+")}+${key}` : key;
-}
+export {
+  buildXdotoolScript,
+  MINIMAL_PNG_BASE64,
+  parseWslVerboseList,
+  PREFERRED_UBUNTU_DISTROS,
+  selectPreferredUbuntuDistro,
+  syncIsolatedCopyWithWorktree,
+  type WslDistroEntry,
+};
 
 function isBrowserInstalledOnHost(): boolean {
   try {
@@ -86,65 +50,108 @@ function isBrowserInstalledOnHost(): boolean {
   }
 }
 
+export interface LocalLinuxEngineOptions {
+  wslRunner?: typeof runWslSubprocess;
+  vncTargetHost?: string;
+  vncTargetPort?: number;
+  enableDistroKeepalive?: boolean;
+}
+
 export class LocalLinuxComputerEngine {
   private guiProvisioned = false;
+  private activeGuiDistro: string | undefined;
+  private provisioningStep: string | undefined;
   private cachedGuiStatus: { ts: number; status: BotLocalLinuxDesktopStatus } | undefined;
+  private vncProxy: VncWsProxyHandle | null = null;
+  private keepaliveChild: ChildProcess | null = null;
+  private readonly wslRunner: typeof runWslSubprocess;
+  private readonly vncTargetHost: string;
+  private readonly vncTargetPort: number;
+  private readonly enableKeepalive: boolean;
+
+  constructor(options: LocalLinuxEngineOptions = {}) {
+    this.wslRunner = options.wslRunner ?? runWslSubprocess;
+    this.vncTargetHost = options.vncTargetHost ?? "127.0.0.1";
+    this.vncTargetPort = options.vncTargetPort ?? 5900;
+    this.enableKeepalive = options.enableDistroKeepalive ?? (options.wslRunner === undefined);
+  }
+
+  getActiveDistro(): string | undefined {
+    return this.activeGuiDistro;
+  }
+
+  private async ensureVncProxy(port = this.vncTargetPort): Promise<VncWsProxyHandle> {
+    if (this.vncProxy !== null) {
+      this.vncProxy.updateTarget(this.vncTargetHost, port);
+      return this.vncProxy;
+    }
+    this.vncProxy = await startVncWsProxy({ targetHost: this.vncTargetHost, targetPort: port });
+    return this.vncProxy;
+  }
+
+  private startDistroKeepalive(distro: string): void {
+    if (!this.enableKeepalive || this.keepaliveChild !== null) return;
+    const child = spawn("wsl.exe", ["-d", distro, "--cd", "/", "--", "/bin/sh", "-c", "exec sleep 86400"], {
+      detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env, WSL_UTF8: "1" },
+    });
+    child.on("exit", () => { if (this.keepaliveChild === child) this.keepaliveChild = null; });
+    child.on("error", () => { if (this.keepaliveChild === child) this.keepaliveChild = null; });
+    child.unref();
+    this.keepaliveChild = child;
+  }
+
+  async resolveGuiDistro(wsl: WslContainerRuntime, vs: BotVirtualServerStatus): Promise<{ distro: string; state: "running" | "stopped" | "not-installed" }> {
+    const fallback = vs.local.distroName || wsl.distroName || "Ubuntu-24.04";
+    const listRes = await this.wslRunner("wsl.exe", ["--list", "--verbose"], { timeoutMs: 6_000 });
+    return selectPreferredUbuntuDistro(parseWslVerboseList(listRes.stdout), fallback);
+  }
 
   async inspectStatus(wsl: WslContainerRuntime, vs: BotVirtualServerStatus): Promise<BotLocalLinuxDesktopStatus> {
-    if (this.cachedGuiStatus && Date.now() - this.cachedGuiStatus.ts < 4_000) {
+    if (this.cachedGuiStatus && Date.now() - this.cachedGuiStatus.ts < 3_500 && !this.provisioningStep) {
       return this.cachedGuiStatus.status;
     }
-
     const hostChromium = isBrowserInstalledOnHost();
     if (!wsl.isSupported()) {
+      const vncReady = this.guiProvisioned && this.vncProxy !== null;
       const fallback: BotLocalLinuxDesktopStatus = {
-        distro: process.platform === "linux" ? "host-linux-sandbox" : wsl.distroName,
+        distro: process.platform === "linux" ? "host-linux-sandbox" : (this.activeGuiDistro ?? wsl.distroName),
         guiReady: this.guiProvisioned || process.platform === "linux",
         display: ":99",
         resolution: "1280x800",
         chromiumReady: hostChromium,
-        ...(this.guiProvisioned ? { windowManager: "fluxbox", vncPort: 5900 } : {}),
-        ...(process.platform === "win32" ? { error: "WSL2 当前不可用，已回退至隔离浏览器与受控工作区" } : {}),
+        ...(this.guiProvisioned ? { windowManager: "xfce4", vncPort: this.vncTargetPort } : {}),
+        ...(vncReady && this.vncProxy ? { vncReady: true, vncWsUrl: this.vncProxy.wsUrl } : { vncReady: false }),
+        ...(this.provisioningStep ? { provisioningStep: this.provisioningStep } : {}),
+        ...(process.platform === "win32" && !this.guiProvisioned
+          ? { error: "WSL2 当前不可用，已回退至隔离浏览器与受控工作区" }
+          : {}),
       };
       this.cachedGuiStatus = { ts: Date.now(), status: fallback };
       return fallback;
     }
 
-    const wslSnap = await wsl.inspect();
-    let detectedDistro = wslSnap.distroName || vs.local.distroName || "qianji-bot-vm";
-    if (wslSnap.engineState === "not-installed") {
-      const listRes = await runWslSubprocess("wsl.exe", ["--list", "--quiet"], { timeoutMs: 4_000 });
-      const candidates = listRes.stdout
-        .replace(/\0/g, "")
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const preferred = candidates.find((c) => /ubuntu|alpine|debian/i.test(c));
-      if (preferred) detectedDistro = `${wsl.distroName} (可用基底: ${preferred})`;
-    }
-
-    if (wslSnap.engineState !== "running") {
+    const resolved = await this.resolveGuiDistro(wsl, vs);
+    const targetDistro = this.activeGuiDistro ?? resolved.distro;
+    if (resolved.state !== "running" && !this.guiProvisioned) {
       const stopped: BotLocalLinuxDesktopStatus = {
-        distro: detectedDistro,
-        guiReady: this.guiProvisioned,
-        display: ":99",
-        resolution: "1280x800",
-        chromiumReady: hostChromium,
+        distro: targetDistro, guiReady: false, display: ":99", resolution: "1280x800",
+        chromiumReady: hostChromium, vncReady: false,
+        ...(this.provisioningStep ? { provisioningStep: this.provisioningStep } : {}),
       };
       this.cachedGuiStatus = { ts: Date.now(), status: stopped };
       return stopped;
     }
 
-    const probe = await runWslSubprocess(
+    const probe = await this.wslRunner(
       "wsl.exe",
-      ["-d", wsl.distroName, "--cd", "/", "-u", "root", "--", "/bin/sh", "-s"],
+      ["-d", targetDistro, "--cd", "/", "-u", "root", "--", "/bin/sh", "-s"],
       {
         timeoutMs: 5_000,
         stdin: [
           "if [ -S /tmp/.X11-unix/X99 ] || pgrep -f 'Xvfb :99' >/dev/null 2>&1; then echo GUI=1; else echo GUI=0; fi",
-          "if command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1; then echo CHR=1; else echo CHR=0; fi",
-          "if command -v fluxbox >/dev/null 2>&1; then echo WM=fluxbox; elif command -v openbox >/dev/null 2>&1; then echo WM=openbox; else echo WM=; fi",
-          "if pgrep -f x11vnc >/dev/null 2>&1; then echo VNC=5900; else echo VNC=0; fi",
+          "if command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1; then echo CHR=1; else echo CHR=0; fi",
+          "if command -v startxfce4 >/dev/null 2>&1; then echo WM=xfce4; elif command -v fluxbox >/dev/null 2>&1; then echo WM=fluxbox; else echo WM=; fi",
+          `if pgrep -f 'x11vnc' >/dev/null 2>&1; then echo VNC=${this.vncTargetPort}; else echo VNC=0; fi`,
         ].join("\n") + "\n",
       },
     );
@@ -154,53 +161,93 @@ export class LocalLinuxComputerEngine {
     const chromiumReady = val("CHR") === "1" || hostChromium;
     const wm = val("WM");
     const vncPort = Number.parseInt(val("VNC"), 10);
+    const vncActive = Number.isFinite(vncPort) && vncPort > 0;
+    const proxy = vncActive ? await this.ensureVncProxy(vncPort) : null;
 
     const status: BotLocalLinuxDesktopStatus = {
-      distro: detectedDistro,
-      guiReady,
-      display: ":99",
-      resolution: "1280x800",
-      chromiumReady,
+      distro: targetDistro, guiReady, display: ":99", resolution: "1280x800", chromiumReady,
+      vncReady: Boolean(proxy),
       ...(wm ? { windowManager: wm } : {}),
-      ...(Number.isFinite(vncPort) && vncPort > 0 ? { vncPort } : {}),
+      ...(vncActive ? { vncPort } : {}),
+      ...(proxy ? { vncWsUrl: proxy.wsUrl } : {}),
+      ...(this.provisioningStep ? { provisioningStep: this.provisioningStep } : {}),
     };
     this.cachedGuiStatus = { ts: Date.now(), status };
     return status;
   }
 
-  async provisionGui(wsl: WslContainerRuntime, vs: BotVirtualServerStatus): Promise<{ ok: boolean; message: string; status: BotLocalLinuxDesktopStatus }> {
+  async provisionGui(
+    wsl: WslContainerRuntime,
+    vs: BotVirtualServerStatus,
+  ): Promise<{ ok: boolean; message: string; status: BotLocalLinuxDesktopStatus }> {
     this.cachedGuiStatus = undefined;
-    if (!wsl.isSupported()) {
+    try {
+      if (!wsl.isSupported()) {
+        this.provisioningStep = "starting-vnc";
+        const proxy = await this.ensureVncProxy(this.vncTargetPort);
+        this.guiProvisioned = true;
+        this.provisioningStep = undefined;
+        const status = await this.inspectStatus(wsl, vs);
+        return { ok: true, message: `已就绪本地 Linux 虚拟桌面通道 (:99 · ${proxy.wsUrl})`, status };
+      }
+
+      this.provisioningStep = "selecting-distro";
+      let resolved = await this.resolveGuiDistro(wsl, vs);
+      if (resolved.state === "not-installed") {
+        const snap = await wsl.wake();
+        resolved = { distro: snap.distroName, state: snap.engineState === "running" ? "running" : "stopped" };
+      } else if (resolved.state === "stopped") {
+        await this.wslRunner("wsl.exe", ["-d", resolved.distro, "--cd", "/", "-u", "root", "--", "true"], { timeoutMs: 20_000 });
+      }
+      const targetDistro = resolved.distro;
+      this.activeGuiDistro = targetDistro;
+      if (targetDistro.toLowerCase() !== wsl.distroName.toLowerCase()) {
+        this.startDistroKeepalive(targetDistro);
+      }
+
+      this.provisioningStep = "installing-packages";
+      await this.wslRunner(
+        "wsl.exe",
+        ["-d", targetDistro, "--cd", "/", "-u", "root", "--", "/bin/sh", "-s"],
+        { timeoutMs: 240_000, stdin: `${buildUbuntuGuiProvisionScript(this.vncTargetPort)}\n` },
+      );
+
+      this.provisioningStep = "starting-vnc";
+      const proxy = await this.ensureVncProxy(this.vncTargetPort);
       this.guiProvisioned = true;
+      this.provisioningStep = undefined;
+      this.cachedGuiStatus = undefined;
       const status = await this.inspectStatus(wsl, vs);
+      const readyStatus: BotLocalLinuxDesktopStatus = {
+        ...status, guiReady: true, vncReady: true, vncPort: this.vncTargetPort, vncWsUrl: proxy.wsUrl,
+      };
+      this.cachedGuiStatus = { ts: Date.now(), status: readyStatus };
       return {
         ok: true,
-        message: "已就绪本地隔离虚拟显示通道 (:99 · 1280x800) 与受控浏览器层",
-        status,
+        message: `Linux XFCE4 桌面 (${readyStatus.distro} · DISPLAY :99 · VNC) 已准备就绪`,
+        status: readyStatus,
       };
+    } finally {
+      this.provisioningStep = undefined;
     }
+  }
 
-    const snap = await wsl.wake();
-    if (snap.engineState === "running") {
-      const guiScript = [
-        "(apk add --no-cache xvfb fluxbox x11vnc scrot imagemagick >/dev/null 2>&1 || apt-get update && apt-get install -y xvfb fluxbox x11vnc scrot >/dev/null 2>&1) || true",
-        "if ! pgrep -f 'Xvfb :99' >/dev/null 2>&1; then nohup Xvfb :99 -screen 0 1280x800x24 -ac >/tmp/xvfb.log 2>&1 & sleep 0.4; fi",
-        "if command -v fluxbox >/dev/null 2>&1 && ! pgrep -f fluxbox >/dev/null 2>&1; then DISPLAY=:99 nohup fluxbox >/tmp/fluxbox.log 2>&1 & fi",
-        "if command -v x11vnc >/dev/null 2>&1 && ! pgrep -f x11vnc >/dev/null 2>&1; then DISPLAY=:99 nohup x11vnc -display :99 -forever -nopw -rfbport 5900 -quiet >/tmp/x11vnc.log 2>&1 & fi",
-      ].join("\n");
-      await runWslSubprocess(
-        "wsl.exe",
-        ["-d", wsl.distroName, "--cd", "/", "-u", "root", "--", "/bin/sh", "-s"],
-        { timeoutMs: 90_000, stdin: `${guiScript}\n` },
-      );
+  async dispatchDesktopInput(
+    event: BotComputerInputEvent,
+    wsl: WslContainerRuntime,
+    vs: BotVirtualServerStatus,
+    seq: number,
+    cursor?: BotComputerPointerTelemetry,
+  ): Promise<BotComputerStreamFrame> {
+    const script = buildXdotoolScript(event);
+    if (script && wsl.isSupported()) {
+      const targetDistro = this.activeGuiDistro ?? (await this.resolveGuiDistro(wsl, vs)).distro;
+      await this.wslRunner("wsl.exe", ["-d", targetDistro, "--cd", "/", "--", "/bin/sh", "-c", script], { timeoutMs: 8_000 });
     }
-    this.guiProvisioned = true;
-    this.cachedGuiStatus = undefined;
-    const status = await this.inspectStatus(wsl, vs);
     return {
-      ok: true,
-      message: `Linux 桌面环境 (${status.distro} · DISPLAY ${status.display}) 已准备就绪`,
-      status,
+      engine: "local-linux", tab: "desktop", mimeType: "image/png", dataBase64: MINIMAL_PNG_BASE64,
+      width: STUDIO_BROWSER_WIDTH, height: STUDIO_BROWSER_HEIGHT, seq, ts: Date.now(),
+      title: `${this.activeGuiDistro ?? wsl.distroName} · DISPLAY :99`, ...(cursor ? { cursor } : {}),
     };
   }
 
@@ -212,139 +259,55 @@ export class LocalLinuxComputerEngine {
     seq: number,
     cursor?: BotComputerPointerTelemetry,
   ): Promise<BotComputerStreamFrame> {
-    if (tab === "desktop" && wsl.isSupported()) {
-      const snap = await wsl.inspect();
-      if (snap.engineState === "running") {
-        const cap = await runWslSubprocess(
-          "wsl.exe",
-          ["-d", wsl.distroName, "--cd", "/tmp", "-u", "bot", "--", "/bin/sh", "-c", "if [ -S /tmp/.X11-unix/X99 ] && command -v scrot >/dev/null 2>&1; then DISPLAY=:99 scrot -o /tmp/.qj_desk.png && (base64 -w 0 /tmp/.qj_desk.png 2>/dev/null || base64 /tmp/.qj_desk.png | tr -d '\\r\\n'); fi"],
-          { timeoutMs: 4_000 },
-        );
-        const b64 = cap.stdout.trim();
-        if (cap.exitCode === 0 && b64.length > 64) {
-          return {
-            engine: "local-linux",
-            tab: "desktop",
-            mimeType: "image/png",
-            dataBase64: b64,
-            width: 1280,
-            height: 800,
-            seq,
-            ts: Date.now(),
-            title: `${wsl.distroName} · DISPLAY :99`,
-            ...(cursor ? { cursor } : {}),
-          };
-        }
-      }
+    if (tab === "desktop") {
+      return {
+        engine: "local-linux", tab: "desktop", mimeType: "image/png", dataBase64: MINIMAL_PNG_BASE64,
+        width: STUDIO_BROWSER_WIDTH, height: STUDIO_BROWSER_HEIGHT, seq, ts: Date.now(),
+        title: `${this.activeGuiDistro ?? wsl.distroName} · DISPLAY :99`, ...(cursor ? { cursor } : {}),
+      };
     }
-
     try {
       const snap = await liveView.getSnapshot(vs);
       return {
-        engine: "local-linux",
-        tab,
-        mimeType: "image/png",
+        engine: "local-linux", tab: "browser", mimeType: "image/png",
         dataBase64: snap.screenshotBase64 || MINIMAL_PNG_BASE64,
-        width: snap.viewport.width,
-        height: snap.viewport.height,
-        seq,
-        ts: Date.now(),
-        url: snap.url,
-        title: snap.title,
-        ...(cursor ? { cursor } : {}),
+        width: STUDIO_BROWSER_WIDTH, height: STUDIO_BROWSER_HEIGHT, seq, ts: Date.now(),
+        url: snap.url, title: snap.title, ...(cursor ? { cursor } : {}),
       };
     } catch {
       return {
-        engine: "local-linux",
-        tab,
-        mimeType: "image/png",
-        dataBase64: MINIMAL_PNG_BASE64,
-        width: 1280,
-        height: 800,
-        seq,
-        ts: Date.now(),
-        title: "Linux 隔离桌面待命",
-        ...(cursor ? { cursor } : {}),
+        engine: "local-linux", tab, mimeType: "image/png", dataBase64: MINIMAL_PNG_BASE64,
+        width: STUDIO_BROWSER_WIDTH, height: STUDIO_BROWSER_HEIGHT, seq, ts: Date.now(),
+        title: "Linux 隔离桌面待命", ...(cursor ? { cursor } : {}),
       };
     }
   }
 
-  async dispatchBrowserInput(
-    event: BotComputerInputEvent,
-    liveView: BotLiveViewController,
-    wsl: WslContainerRuntime,
-    vs: BotVirtualServerStatus,
-    seq: number,
-    cursor?: BotComputerPointerTelemetry,
-  ): Promise<BotComputerStreamFrame> {
-    const rawBrowser = liveView.getBrowserSessionForInput();
-    await rawBrowser.ensureStarted(true);
-    const cdp = (rawBrowser as unknown as { cdp?: CdpSendCapable }).cdp;
-    const x = Math.round(event.x ?? cursor?.x ?? 640);
-    const y = Math.round(event.y ?? cursor?.y ?? 400);
-    const button = event.button ?? "left";
-
-    if (event.kind === "mouse") {
-      const action = event.mouseAction ?? "click";
-      if (cdp?.connected && typeof cdp.send === "function") {
-        if (action === "move") {
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-        } else if (action === "down") {
-          await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 1 });
-        } else if (action === "up") {
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 1 });
-        } else if (action === "double-click") {
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-          await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 2 });
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 2 });
-        } else {
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-          await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 1 });
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 1 });
-        }
-      } else if (action !== "move" && action !== "up") {
-        await rawBrowser.clickAt(x, y);
-      }
-    } else if (event.kind === "wheel") {
-      const dx = Math.round(event.deltaX ?? 0);
-      const dy = Math.round(event.deltaY ?? 0);
-      if (cdp?.connected && typeof cdp.send === "function") {
-        await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy });
-      } else {
-        await rawBrowser.scroll(dx, dy);
-      }
-    } else if (event.kind === "text" || event.kind === "paste") {
-      const text = event.text ?? "";
-      if (text !== "") {
-        if (cdp?.connected && typeof cdp.send === "function") {
-          await cdp.send("Input.insertText", { text });
-        } else {
-          await rawBrowser.type(undefined, ":focus", text);
-        }
-      }
-    } else if (event.kind === "key" && event.key) {
-      const combo = formatKeyCombo(event.key, event.modifiers);
-      await rawBrowser.press(combo);
-    }
-
-    const tab: BotComputerStreamTab = event.tab === "desktop" ? "desktop" : "browser";
-    return this.captureFrame(tab, liveView, wsl, vs, seq, cursor);
-  }
-
-  listWorkspaceFiles(
-    rawPath: string | undefined,
-    botWorkspaceDir: string,
-    sharedFolders: readonly BotSharedFolderRule[],
-  ): BotComputerFilesListResult {
+  listWorkspaceFiles(rawPath: string | undefined, botWorkspaceDir: string, sharedFolders: readonly BotSharedFolderRule[]): BotComputerFilesListResult {
     return listFencedFiles("local-linux", rawPath, botWorkspaceDir, sharedFolders, false);
   }
 
-  readWorkspaceFile(
-    rawPath: string,
-    maxBytes: number | undefined,
-    botWorkspaceDir: string,
-    sharedFolders: readonly BotSharedFolderRule[],
-  ): BotComputerFilesReadResult {
+  readWorkspaceFile(rawPath: string, maxBytes: number | undefined, botWorkspaceDir: string, sharedFolders: readonly BotSharedFolderRule[]): BotComputerFilesReadResult {
     return readFencedFile(rawPath, maxBytes, botWorkspaceDir, sharedFolders, false);
+  }
+
+  async stop(wsl: WslContainerRuntime): Promise<void> {
+    this.guiProvisioned = false;
+    this.cachedGuiStatus = undefined;
+    await this.dispose();
+    if (wsl.isSupported() && this.activeGuiDistro && this.activeGuiDistro.toLowerCase() !== wsl.distroName.toLowerCase()) {
+      await this.wslRunner("wsl.exe", ["--terminate", this.activeGuiDistro], { timeoutMs: 10_000 });
+    }
+  }
+
+  async dispose(): Promise<void> {
+    if (this.keepaliveChild !== null) {
+      try { this.keepaliveChild.kill(); } catch { /* ignore */ }
+      this.keepaliveChild = null;
+    }
+    if (this.vncProxy !== null) {
+      await this.vncProxy.close();
+      this.vncProxy = null;
+    }
   }
 }

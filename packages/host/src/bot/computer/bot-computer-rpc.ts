@@ -34,6 +34,7 @@ const VALID_ACTIONS = new Set<BotComputerEngineActionKind>([
   "restart",
   "provision-linux-gui",
   "enable-win-child-session",
+  "open-native-desktop",
   "launch-app",
   "close-window",
   "connect-remote",

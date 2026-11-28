@@ -27,6 +27,9 @@ export interface BotLocalLinuxDesktopStatus {
   resolution: string;
   chromiumReady: boolean;
   vncPort?: number;
+  vncWsUrl?: string;
+  vncReady?: boolean;
+  provisioningStep?: string;
   windowManager?: string;
   error?: string;
 }
@@ -42,6 +45,9 @@ export interface BotLocalWinPipStatus {
   backend: BotWinDesktopBackend;
   proSupported: boolean;
   childSessionEnabled: boolean;
+  childSessionActive?: boolean;
+  signOutRequired?: boolean;
+  viewerOpen?: boolean;
   childSessionId?: number;
   desktopName: string;
   isolatedProfileDir?: string;
@@ -73,6 +79,7 @@ export interface BotRemoteComputerNode {
   osSummary?: string;
   connected: boolean;
   latencyMs?: number;
+  vncWsUrl?: string;
   autonomyLease: BotRemoteAutonomyLease;
   lastError?: string;
 }
@@ -208,6 +215,7 @@ export type BotComputerEngineActionKind =
   | "restart"
   | "provision-linux-gui"
   | "enable-win-child-session"
+  | "open-native-desktop"
   | "launch-app"
   | "close-window"
   | "connect-remote"

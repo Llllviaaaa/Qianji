@@ -2,7 +2,9 @@
  * `remote-vm` (`ssh-vm`) & `remote-pc` (`companion-pc`) Node Manager
  * (`packages/host/src/bot/computer/remote-nodes-engine.ts`).
  */
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createServer, type AddressInfo } from "node:net";
 import type {
   BotComputerEngineId,
   BotComputerFilesListResult,
@@ -24,6 +26,7 @@ import {
   syncNodeAutonomyLease,
   type QueuedAutonomyEvent,
 } from "./remote-lease.ts";
+import { startVncWsProxy, type VncWsProxyHandle } from "./vnc-ws-proxy.ts";
 
 export const DEFAULT_SSH_VM_NODE_ID = "default-ssh-vm";
 const LEGACY_SSH_SECRET_ID = "bot/remote-ssh-password";
@@ -43,8 +46,21 @@ export function nodeToSshEndpoint(node: BotRemoteComputerNode): SshEndpointConfi
   };
 }
 
+function allocateFreeLocalPort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const srv = createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address() as AddressInfo | string | null;
+      const port = addr !== null && typeof addr === "object" ? addr.port : 0;
+      srv.close(() => (port > 0 ? resolve(port) : reject(new Error("Failed to allocate local tunnel port"))));
+    });
+  });
+}
+
 export class RemoteNodesEngine {
   private readonly offlineRings = new Map<string, QueuedAutonomyEvent[]>();
+  private readonly vncBridges = new Map<string, { proxy: VncWsProxyHandle; tunnelChild?: ChildProcess }>();
 
   constructor(
     private readonly deps: {
@@ -54,6 +70,29 @@ export class RemoteNodesEngine {
       getMemory: () => string;
     },
   ) {}
+
+  private async closeNodeVncBridge(nodeId: string): Promise<void> {
+    const existing = this.vncBridges.get(nodeId);
+    if (!existing) return;
+    this.vncBridges.delete(nodeId);
+    if (existing.tunnelChild) {
+      try { existing.tunnelChild.kill(); } catch { /* ignore */ }
+    }
+    await existing.proxy.close();
+  }
+
+  async attachLocalTunnelVncProxy(node: BotRemoteComputerNode, localTunnelPort: number): Promise<string> {
+    const existing = this.vncBridges.get(node.id);
+    if (existing) {
+      existing.proxy.updateTarget("127.0.0.1", localTunnelPort);
+      node.vncWsUrl = existing.proxy.wsUrl;
+      return existing.proxy.wsUrl;
+    }
+    const proxy = await startVncWsProxy({ targetHost: "127.0.0.1", targetPort: localTunnelPort });
+    this.vncBridges.set(node.id, { proxy });
+    node.vncWsUrl = proxy.wsUrl;
+    return proxy.wsUrl;
+  }
 
   async syncLegacyRemoteWithNodes(
     vs: BotVirtualServerStatus,
@@ -109,6 +148,8 @@ export class RemoteNodesEngine {
     for (const node of next) {
       const ring = this.offlineRings.get(node.id);
       if (ring !== undefined) node.autonomyLease.queuedOfflineEvents = ring.length;
+      const bridge = this.vncBridges.get(node.id);
+      if (bridge !== undefined) node.vncWsUrl = bridge.proxy.wsUrl;
       if (node.id !== DEFAULT_SSH_VM_NODE_ID) {
         node.hasStoredSecret = await this.deps.vault.has(nodeSecretKey(node.id));
       }
@@ -178,6 +219,7 @@ export class RemoteNodesEngine {
       ...(existing?.osSummary ? { osSummary: existing.osSummary } : {}),
       connected: existing?.connected ?? false,
       ...(typeof existing?.latencyMs === "number" ? { latencyMs: existing.latencyMs } : {}),
+      ...(existing?.vncWsUrl ? { vncWsUrl: existing.vncWsUrl } : {}),
       autonomyLease: existing?.autonomyLease ?? { active: true, lastSeq: 0, queuedOfflineEvents: 0, updatedAt: Date.now() },
     };
 
@@ -191,6 +233,7 @@ export class RemoteNodesEngine {
   }
 
   async deleteNode(id: string, nodes: BotRemoteComputerNode[], vs: BotVirtualServerStatus): Promise<void> {
+    await this.closeNodeVncBridge(id);
     const idx = nodes.findIndex((n) => n.id === id);
     if (idx >= 0) nodes.splice(idx, 1);
     this.offlineRings.delete(id);
@@ -204,7 +247,8 @@ export class RemoteNodesEngine {
 
   async connectNode(node: BotRemoteComputerNode, vs: BotVirtualServerStatus): Promise<{ ok: boolean; message: string }> {
     const password = await this.getNodePassword(node);
-    const initRes = await this.deps.ssh.initEnvironment(nodeToSshEndpoint(node), this.deps.getSoul(), this.deps.getMemory(), password);
+    const ep = nodeToSshEndpoint(node);
+    const initRes = await this.deps.ssh.initEnvironment(ep, this.deps.getSoul(), this.deps.getMemory(), password);
     if (!initRes.ok) {
       node.connected = false;
       node.lastError = initRes.message;
@@ -221,11 +265,44 @@ export class RemoteNodesEngine {
       this.copyNodeToLegacyRemote(node, vs);
       vs.latencyMs = initRes.latencyMs;
     }
+    await this.tryEstablishSshVncTunnel(node, ep, password).catch(() => undefined);
     return { ok: true, message: initRes.message };
+  }
+
+  private async tryEstablishSshVncTunnel(
+    node: BotRemoteComputerNode,
+    ep: SshEndpointConfig,
+    password: string | undefined,
+  ): Promise<void> {
+    const vncProbe = await this.deps.ssh.exec(
+      ep,
+      "if ss -tln 2>/dev/null | grep -q ':5900 ' || netstat -tln 2>/dev/null | grep -q ':5900 '; then echo VNC=5900; fi",
+      { cwd: "~", password, timeoutMs: 5_000 },
+    );
+    if (!vncProbe.stdout.includes("VNC=5900")) return;
+    await this.closeNodeVncBridge(node.id);
+    const localPort = await allocateFreeLocalPort();
+    const args = [
+      "-N", "-L", `127.0.0.1:${localPort}:127.0.0.1:5900`,
+      "-p", String(ep.port),
+      "-o", "StrictHostKeyChecking=accept-new",
+      "-o", "ExitOnForwardFailure=yes",
+      "-o", "ServerAliveInterval=15",
+      ...(ep.authMethod !== "password" ? ["-o", "BatchMode=yes"] : []),
+      ...(ep.privateKeyPath?.trim() ? ["-i", ep.privateKeyPath.trim()] : []),
+      `${ep.username}@${ep.host}`,
+    ];
+    const tunnelChild = spawn("ssh", args, { windowsHide: true, stdio: "ignore" });
+    tunnelChild.unref();
+    const proxy = await startVncWsProxy({ targetHost: "127.0.0.1", targetPort: localPort });
+    this.vncBridges.set(node.id, { proxy, tunnelChild });
+    node.vncWsUrl = proxy.wsUrl;
   }
 
   disconnectNode(node: BotRemoteComputerNode, vs: BotVirtualServerStatus): { ok: boolean; message: string } {
     node.connected = false;
+    node.vncWsUrl = undefined;
+    void this.closeNodeVncBridge(node.id);
     node.autonomyLease.active = true;
     node.autonomyLease.updatedAt = Date.now();
     if (node.id === DEFAULT_SSH_VM_NODE_ID) {
@@ -300,5 +377,9 @@ export class RemoteNodesEngine {
       title: node ? `${node.alias} (${node.host || "待配置"})` : engine === "remote-pc" ? "远程个人电脑节点" : "远程 Linux 虚拟机",
       ...(cursor ? { cursor } : {}),
     };
+  }
+
+  async dispose(): Promise<void> {
+    await Promise.all([...this.vncBridges.keys()].map((id) => this.closeNodeVncBridge(id)));
   }
 }

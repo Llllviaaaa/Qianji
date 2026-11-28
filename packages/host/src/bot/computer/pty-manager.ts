@@ -100,6 +100,7 @@ export class PtySessionManager {
       getBotWorkspaceDir: () => string;
       getSharedFolders: () => readonly BotSharedFolderRule[];
       wsl: WslContainerRuntime;
+      getLinuxDistro?: () => string | undefined;
       remoteEngine: RemoteNodesEngine;
       resolveRemoteNode: (engine: BotComputerEngineId) => BotRemoteComputerNode | undefined;
       emitEvent: (ev: BotComputerEventNotification) => void;
@@ -152,14 +153,24 @@ export class PtySessionManager {
     let child: ChildProcessWithoutNullStreams;
     let shellKind: "sh" | "powershell";
     let initialDisplayCwd = fencedTarget.hostPath;
-    const wslRunning = engine === "local-linux" && this.deps.wsl.isSupported() && (await this.deps.wsl.inspect()).engineState === "running";
+    const activeGuiDistro = engine === "local-linux" ? this.deps.getLinuxDistro?.() : undefined;
+    const wslRunning =
+      engine === "local-linux" &&
+      this.deps.wsl.isSupported() &&
+      (Boolean(activeGuiDistro) || (await this.deps.wsl.inspect()).engineState === "running");
 
     if (wslRunning) {
       shellKind = "sh";
       initialDisplayCwd = fencedTarget.virtualPath;
-      child = spawn("wsl.exe", ["-d", this.deps.wsl.distroName, "--cd", "/workspace", "-u", "bot", "--", "/bin/sh"], {
-        windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, WSL_UTF8: "1" },
-      });
+      const targetDistro = activeGuiDistro ?? this.deps.wsl.distroName;
+      const useCustomUbuntu = Boolean(activeGuiDistro && activeGuiDistro.toLowerCase() !== this.deps.wsl.distroName.toLowerCase());
+      child = useCustomUbuntu
+        ? spawn("wsl.exe", ["-d", targetDistro, "--", "env", "DISPLAY=:99", "/bin/sh"], {
+            cwd: fencedTarget.hostPath, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, WSL_UTF8: "1" },
+          })
+        : spawn("wsl.exe", ["-d", targetDistro, "--cd", "/workspace", "-u", "bot", "--", "env", "DISPLAY=:99", "/bin/sh"], {
+            windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, WSL_UTF8: "1" },
+          });
     } else if (process.platform === "win32") {
       shellKind = "powershell";
       child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"], {
