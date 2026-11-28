@@ -50,11 +50,13 @@ export type {
 
 export { NavigationService } from "./navigationService";
 export type {
+  BotTaskHandoffPayload,
   NavigationHubView,
   NavigationRoute,
   NavigationServiceOptions,
   NavigationSnapshot,
   SettingsPageId,
+  UiShellMode,
 } from "./navigationService";
 
 export { ThemeService } from "./themeService";

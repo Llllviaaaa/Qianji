@@ -249,6 +249,7 @@ export function filterRegisteredPanes(
 }
 
 const PRIMARY_WORKBENCH_PANE_KEYS = new Set(["files", "editor", "code", "terminal", "review", "preview"]);
+const SESSION_SCOPED_HIDDEN_EXTENSION_PANES = new Set(["swarm"]);
 
 /** Discover registered non-primary extension pane IDs dynamically from `workbench.panes`. */
 export function listRegisteredExtensionPaneIds(registry: SlotRegistry | undefined): string[] {
@@ -259,7 +260,15 @@ export function listRegisteredExtensionPaneIds(registry: SlotRegistry | undefine
     if (registry.abdication.isAbdicated("workbench.panes", entry.id, entry.pluginId)) continue;
     for (const rawKey of entry.keys ?? []) {
       const key = rawKey.trim();
-      if (key === "" || key === "*" || key.endsWith("*") || PRIMARY_WORKBENCH_PANE_KEYS.has(key)) continue;
+      if (
+        key === ""
+        || key === "*"
+        || key.endsWith("*")
+        || PRIMARY_WORKBENCH_PANE_KEYS.has(key)
+        || SESSION_SCOPED_HIDDEN_EXTENSION_PANES.has(key)
+      ) {
+        continue;
+      }
       if (!seen.has(key)) {
         seen.add(key);
         ids.push(key);
@@ -297,6 +306,7 @@ const KNOWN_PANE_TITLES: Readonly<Record<string, string>> = {
   preview: "浏览器预览",
   "side-chat": "侧边对话",
   "intelligent-ui-canvas": "画布",
+  swarm: "蜂群",
 };
 
 export function resolvePaneTitle(

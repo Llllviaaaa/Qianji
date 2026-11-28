@@ -7,7 +7,6 @@
  * - fiber-isolated fault tolerance with transactional HMR rollback (ADR 0016).
  */
 import { existsSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import type { Context, Plugin } from "@deepseek-ai/cordis";
 import {
   WorkspacePluginScope,
@@ -26,14 +25,17 @@ import {
   type PluginInstallParams,
   type PluginMutationResult,
   type PluginStatus,
+  type PluginTargetMode,
   type PluginTier,
   type WorkspaceTrustChangedNotification,
   type WorkspaceTrustListResult,
 } from "@qianji/protocol";
 import "@qianji/ui";
 import type { BuiltinPluginDefinition } from "./agent-plugins.ts";
+import { listConnectorsForPlugin } from "./bot/plugin-connector-rpc.ts";
 import { ClientBundleRegistry, createPluginsHttpHandler, type ClientRouteTarget } from "./client-bundles.ts";
 import { importExternalModule, installHostModuleBridge } from "./plugin-bridge.ts";
+import { HostConnectorsService } from "./plugin-connectors.ts";
 import { installPlugin, removeUserPluginFiles, updateInstalledPlugin } from "./plugin-installer.ts";
 import {
   canonicalPath,
@@ -42,10 +44,17 @@ import {
   scanPluginsDirectory,
 } from "./plugin-manifest.ts";
 import {
+  buildUntrustedWorkspaceOverlay,
+  getCurrentMountingPluginId,
+  matchPluginIdFromErrorStack,
+  runWithPluginId,
+  writePluginScopePatch,
+} from "./plugin-scopes.ts";
+import {
   inspectWorkspaceTrust,
-  resolveWorkspacePluginsDir,
   isWorkspaceTrusted,
   readPluginsStore,
+  resolveWorkspacePluginsDir,
   setWorkspaceTrust,
   updatePluginsStore,
   workspacePluginKey,
@@ -54,7 +63,6 @@ import { collectActivePluginSkillRoots, resolveCandidates, type ActivePluginSkil
 import {
   errorDetailWithStack,
   errorMessage,
-  extractStackFrameComparisonKeys,
   flushImmediate,
   resolveCordisPluginExport,
   signatureOf,
@@ -124,6 +132,13 @@ export class PluginManager {
     private readonly ctx: Context,
     private readonly options: PluginManagerOptions,
   ) {
+    if (!ctx.get("connectors")) {
+      ctx.plugin(HostConnectorsService);
+    }
+    ctx.get("tools")?.setPluginIdResolver(getCurrentMountingPluginId);
+    ctx.inject(["tools"], (tCtx) => {
+      tCtx.tools.setPluginIdResolver(getCurrentMountingPluginId);
+    });
     this.watcherController = new PluginWatcherController({
       ctx,
       watchDebounceMs: options.watchDebounceMs,
@@ -187,8 +202,18 @@ export class PluginManager {
     return isWorkspaceTrusted(this.options.dataDir, this.activeWorkspace) ? this.activeWorkspace : undefined;
   }
 
-  activeSkillRoots(cwd?: string): ActivePluginSkillRoot[] {
-    return collectActivePluginSkillRoots(this.latestCandidates, this.errors, cwd, this.currentTrustedWorkspace);
+  activeSkillRoots(cwd?: string, mode?: PluginTargetMode): ActivePluginSkillRoot[] {
+    return collectActivePluginSkillRoots(this.latestCandidates, this.errors, cwd, this.currentTrustedWorkspace, mode);
+  }
+
+  getCandidate(id: string): ResolvedCandidate | undefined {
+    return this.latestCandidates.find((c) => c.id === id);
+  }
+
+  isPluginEnabledForMode(id: string, mode: PluginTargetMode): boolean {
+    const cand = this.latestCandidates.find((c) => c.id === id);
+    if (cand === undefined) return true;
+    return cand.enabled && cand.scopes[mode];
   }
 
   /** Register an additional read-only `bundled-plugins` directory at runtime (e.g. from desktop handshake). */
@@ -239,48 +264,9 @@ export class PluginManager {
     reason: unknown,
   ): { pluginId: string; alreadyCircuitBroken: boolean } | undefined {
     if (this.disposed || this.latestCandidates.length === 0) return undefined;
-    const stackText = reason instanceof Error
-      ? `${reason.name}: ${reason.message}\n${reason.stack ?? ""}`
-      : String(reason);
-    const haystack = process.platform === "win32" ? stackText.toLowerCase() : stackText;
-    let frameKeys: string[] | undefined;
+    const pluginId = matchPluginIdFromErrorStack(reason, this.latestCandidates);
+    if (pluginId === undefined) return undefined;
 
-    let bestMatch: { id: string; len: number } | undefined;
-    for (const candidate of this.latestCandidates) {
-      if (!candidate.enabled || candidate.dir === undefined || candidate.builtinPlugin !== undefined) continue;
-      const fsDir = candidate.dir.replace(/[\\/]+$/, "");
-      if (fsDir === "") continue;
-      const slashDir = fsDir.replace(/\\/g, "/");
-      const rawFileUrl = pathToFileURL(fsDir).href.replace(/\/+$/, "");
-      const boundaryNeedles = [
-        `${slashDir}/`,
-        `${rawFileUrl}/`,
-        ...(process.platform === "win32" ? [`${fsDir}\\`] : []),
-      ].map((item) => (process.platform === "win32" ? item.toLowerCase() : item));
-      let matched = false;
-      for (const needle of boundaryNeedles) {
-        if (needle.length > 1 && haystack.includes(needle)) {
-          matched = true;
-          if (bestMatch === undefined || fsDir.length > bestMatch.len) {
-            bestMatch = { id: candidate.id, len: fsDir.length };
-          }
-        }
-      }
-      if (!matched) {
-        frameKeys ??= extractStackFrameComparisonKeys(stackText);
-        if (frameKeys.length > 0) {
-          const dirKey = pathComparisonKey(fsDir);
-          if (dirKey !== "" && frameKeys.some((fk) => fk === dirKey || fk.startsWith(`${dirKey}/`))) {
-            if (bestMatch === undefined || dirKey.length > bestMatch.len) {
-              bestMatch = { id: candidate.id, len: dirKey.length };
-            }
-          }
-        }
-      }
-    }
-    if (bestMatch === undefined) return undefined;
-
-    const pluginId = bestMatch.id;
     const alreadyCircuitBroken = this.circuitBroken.has(pluginId);
     if (alreadyCircuitBroken) {
       return { pluginId, alreadyCircuitBroken: true };
@@ -307,11 +293,8 @@ export class PluginManager {
       this.loggedClientErrorKeys.clear();
       return;
     }
-    const prefix = `${id}\0`;
     for (const key of [...this.loggedClientErrorKeys]) {
-      if (key.startsWith(prefix)) {
-        this.loggedClientErrorKeys.delete(key);
-      }
+      if (key.startsWith(`${id}\0`)) this.loggedClientErrorKeys.delete(key);
     }
   }
 
@@ -479,15 +462,11 @@ export class PluginManager {
   }
 
   private isProtectedBuiltin(id: string): boolean {
-    return (this.options.builtins?.(this.currentTrustedWorkspace) ?? []).some(
-      (entry) => entry.id === id && entry.canDisable === false,
-    );
+    return (this.options.builtins?.(this.currentTrustedWorkspace) ?? []).some((e) => e.id === id && e.canDisable === false);
   }
 
   private isPinnedGateway(id: string): boolean {
-    return (this.options.builtins?.(this.currentTrustedWorkspace) ?? []).some(
-      (entry) => entry.id === id && entry.canDisable === false && entry.canOverride !== true,
-    );
+    return (this.options.builtins?.(this.currentTrustedWorkspace) ?? []).some((e) => e.id === id && e.canDisable === false && e.canOverride !== true);
   }
 
   async setEnabled(id: string, enabled: boolean, options: { workspace?: string; watch?: boolean } = {}): Promise<PluginMutationResult> {
@@ -500,9 +479,11 @@ export class PluginManager {
         const key = workspacePluginKey(ws, id);
         updatePluginsStore(this.options.dataDir, (store) => {
           const prev = store.workspacePlugins[key];
+          const resetScopes = enabled && prev?.scopes?.agent === false && prev?.scopes?.bot === false;
           store.workspacePlugins[key] = {
             ...prev,
             enabled,
+            ...(resetScopes ? { scopes: undefined } : {}),
             ...(options.watch === undefined ? {} : { watch: options.watch }),
           };
         });
@@ -513,9 +494,11 @@ export class PluginManager {
         }
         updatePluginsStore(this.options.dataDir, (store) => {
           const prev = store.plugins[id];
+          const resetScopes = enabled && prev?.scopes?.agent === false && prev?.scopes?.bot === false;
           store.plugins[id] = {
             ...prev,
             enabled,
+            ...(resetScopes ? { scopes: undefined } : {}),
             ...(options.watch === undefined ? {} : { watch: options.watch }),
           };
         });
@@ -530,6 +513,52 @@ export class PluginManager {
       await this.syncNow({ reason: "toggled", forceIds: new Set([id]), ...(options.workspace === undefined ? {} : { workspace: options.workspace }) });
     });
     const plugins = await this.list(options.workspace);
+    const plugin = plugins.find((entry) => entry.id === id);
+    return { ...(plugin === undefined ? {} : { plugin }), plugins };
+  }
+
+  async setScope(
+    id: string,
+    mode: PluginTargetMode,
+    modeEnabled: boolean,
+    workspace?: string,
+  ): Promise<PluginMutationResult> {
+    await this.enqueue(async () => {
+      if (this.latestCandidates.length === 0 && !this.disposed) {
+        await this.syncNow(workspace === undefined ? {} : { workspace });
+      }
+      const cand = this.latestCandidates.find((c) => c.id === id);
+      if (cand === undefined) throw new Error(`Unknown plugin "${id}"`);
+      if (!cand.targets.includes(mode)) {
+        throw new Error(`插件 "${cand.name}" 不支持 ${mode === "bot" ? "Bot 分身" : "Agent 工作台"} 形态`);
+      }
+      if (!modeEnabled && !cand.canDisable) {
+        throw new Error(`Plugin "${id}" cannot be disabled`);
+      }
+      let normWs: string | undefined;
+      if (workspace !== undefined && workspace.trim() !== "") {
+        normWs = canonicalPath(workspace);
+        if (!isWorkspaceTrusted(this.options.dataDir, normWs)) {
+          throw new Error(`Workspace is not trusted: ${normWs}`);
+        }
+        this.activeWorkspace = normWs;
+      }
+      const nextScopes = { ...cand.scopes, [mode]: modeEnabled };
+      writePluginScopePatch({
+        dataDir: this.options.dataDir,
+        id,
+        ...(normWs === undefined ? {} : { workspace: normWs }),
+        canDisable: cand.canDisable,
+        nextScopes,
+      });
+      this.circuitBroken.delete(id);
+      await this.syncNow({
+        reason: "toggled",
+        forceIds: new Set([id]),
+        ...(workspace === undefined ? {} : { workspace }),
+      });
+    });
+    const plugins = await this.list(workspace);
     const plugin = plugins.find((entry) => entry.id === id);
     return { ...(plugin === undefined ? {} : { plugin }), plugins };
   }
@@ -745,54 +774,25 @@ export class PluginManager {
   }
 
   private withUntrustedWorkspaceOverlay(base: readonly PluginInfo[], workspacePath: string): PluginInfo[] {
-    if (isWorkspaceTrusted(this.options.dataDir, workspacePath)) {
-      return [...base];
-    }
-    const pluginsDir = resolveWorkspacePluginsDir(workspacePath);
-    const scanned = scanPluginsDirectory(pluginsDir, "workspace", workspacePath);
-    if (scanned.manifests.length === 0) return [...base];
     const builtins = new Set([
       ...(this.options.builtins?.(undefined) ?? []).map((item) => item.id),
       ...this.latestCandidates.filter((item) => item.tier === "builtin").map((item) => item.id),
     ]);
-    const extras: PluginInfo[] = scanned.manifests
-      .filter(
-        (manifest) =>
-          !base.some(
-            (existing) =>
-              existing.id === manifest.id
-              && (existing.tier === "workspace"
-                || (existing.dir !== undefined && pathComparisonKey(existing.dir) === pathComparisonKey(manifest.dir))),
-          ),
-      )
-      .map((manifest) => ({
-        id: manifest.id,
-        name: manifest.name,
-        version: manifest.version,
-        ...(manifest.description === undefined ? {} : { description: manifest.description }),
-        tier: "workspace",
-        status: "untrusted",
-        enabled: false,
-        overridesBuiltin: builtins.has(manifest.id),
-        removable: false,
-        hasHost: manifest.hostEntry !== undefined,
-        hasClient: manifest.clientEntry !== undefined,
-        ...(manifest.skillsDir === undefined ? {} : { hasSkills: true }),
-        dir: manifest.dir,
-        workspace: workspacePath,
-        watch: false,
-        ...(manifest.configSchema === undefined ? {} : { configSchema: manifest.configSchema }),
-        ...(manifest.inject !== undefined && manifest.inject.length > 0 ? { inject: [...manifest.inject] } : {}),
-        ...(manifest.provides !== undefined && manifest.provides.length > 0 ? { provides: [...manifest.provides] } : {}),
-      }));
-    return [...extras, ...base];
+    return buildUntrustedWorkspaceOverlay(base, workspacePath, this.options.dataDir, builtins);
   }
 
   private buildSnapshot(candidates: readonly ResolvedCandidate[]): PluginInfo[] {
+    const connectorsSvc = this.ctx.get("connectors") as HostConnectorsService | undefined;
     return candidates.map((candidate): PluginInfo => {
       const err = this.errors.get(candidate.id);
       const clientErr = candidate.enabled ? this.clientErrors.get(candidate.id) : undefined;
       const mounted = this.mounted.get(candidate.id);
+      const mergedConnectors = listConnectorsForPlugin(
+        candidate.id,
+        candidate.name,
+        candidate.connectors,
+        connectorsSvc,
+      );
       let status: PluginStatus;
       let missingInject: string[] | undefined;
 
@@ -847,6 +847,9 @@ export class PluginManager {
         ...(missingInject === undefined ? {} : { missingInject }),
         ...(err === undefined ? {} : { error: err }),
         ...(clientErr === undefined ? {} : { clientError: clientErr }),
+        targets: [...candidate.targets],
+        scopes: { ...candidate.scopes },
+        ...(mergedConnectors.length > 0 ? { connectors: mergedConnectors } : {}),
       };
     });
   }
@@ -1121,7 +1124,9 @@ export class PluginManager {
 
         let nextFiber: { dispose(): unknown } | undefined;
         try {
-          nextFiber = targetCtx.plugin(pluginToMount, candidate.effectiveConfig);
+          nextFiber = runWithPluginId(candidate.id, () =>
+            targetCtx.plugin(pluginToMount, candidate.effectiveConfig),
+          );
           await nextFiber;
           this.mounted.set(candidate.id, {
             id: candidate.id,

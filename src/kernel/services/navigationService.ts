@@ -23,6 +23,7 @@ import {
   resolveSettingsPageId,
   type SettingsPageId,
 } from "../../lib/shellBridge";
+import type { BotTaskHandoffPayload, UiShellMode } from "@qianji/protocol";
 import { useAppStore } from "../../store";
 import type {
   AppNotification,
@@ -31,7 +32,7 @@ import type {
 } from "../../types";
 import { ServiceEmitter, shallowEqualObject, trackContextEffect } from "./shared";
 
-export type { SettingsPageId };
+export type { BotTaskHandoffPayload, SettingsPageId, UiShellMode };
 
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -48,6 +49,9 @@ export type NavigationRoute =
   | { readonly kind: "plugin-page"; readonly pageId: string };
 
 export interface NavigationSnapshot {
+  readonly shellMode: UiShellMode;
+  readonly activeBotHandoff: BotTaskHandoffPayload | null;
+  readonly handoffBannerText: string | null;
   readonly activeRoute: NavigationRoute;
   readonly hubView: NavigationHubView | null;
   readonly newTask: boolean;
@@ -88,6 +92,11 @@ function normalizePluginPageId(raw: string): string {
 }
 
 interface NavigationInternalState {
+  shellMode: UiShellMode;
+  syncedInitialSettingsMode: boolean;
+  activeBotHandoff: BotTaskHandoffPayload | null;
+  handoffBannerText: string | null;
+  handoffBannerTimer: ReturnType<typeof setTimeout> | null;
   activeRoute: NavigationRoute;
   hubView: NavigationHubView | null;
   draftMode: boolean;
@@ -116,6 +125,11 @@ export class NavigationService extends Service {
       : { kind: "session", cwd: app.cwd, file: app.sessionFile };
 
     this.internal = {
+      shellMode: app.settings?.uiShellMode === "bot" ? "bot" : "agent",
+      syncedInitialSettingsMode: app.settings !== null,
+      activeBotHandoff: null,
+      handoffBannerText: null,
+      handoffBannerTimer: null,
       activeRoute: initialRoute,
       hubView: null,
       draftMode: initialDraft,
@@ -138,6 +152,10 @@ export class NavigationService extends Service {
 
     const offStore = useAppStore.subscribe(() => {
       const app = useAppStore.getState();
+      if (!this.internal.syncedInitialSettingsMode && app.settings !== null) {
+        this.internal.syncedInitialSettingsMode = true;
+        this.internal.shellMode = app.settings.uiShellMode === "bot" ? "bot" : "agent";
+      }
       if (!this.internal.draftMode && this.internal.hubView === null && app.sessionFile !== null) {
         if (
           this.internal.activeRoute.kind !== "session"
@@ -152,6 +170,10 @@ export class NavigationService extends Service {
 
     ctx.effect(() => () => {
       offStore();
+      if (this.internal.handoffBannerTimer !== null) {
+        clearTimeout(this.internal.handoffBannerTimer);
+        this.internal.handoffBannerTimer = null;
+      }
       this.internal.emitter.clear();
     });
   }
@@ -159,6 +181,9 @@ export class NavigationService extends Service {
   private computeSnapshot(): NavigationSnapshot {
     const app = useAppStore.getState();
     return {
+      shellMode: this.internal.shellMode,
+      activeBotHandoff: this.internal.activeBotHandoff,
+      handoffBannerText: this.internal.handoffBannerText,
       activeRoute: this.internal.activeRoute,
       hubView: this.internal.hubView,
       newTask: this.internal.draftMode,
@@ -380,6 +405,49 @@ export class NavigationService extends Service {
     if (typeof window !== "undefined") {
       writeStoredSize(SIDEBAR_WIDTH_KEY, clamped);
     }
+    this.publish();
+  }
+
+  setShellMode(mode: UiShellMode, options?: { persist?: boolean }): void {
+    if (this.internal.shellMode === mode) return;
+    this.internal.shellMode = mode;
+    this.internal.syncedInitialSettingsMode = true;
+    this.publish();
+    if (options?.persist !== false) {
+      const app = useAppStore.getState();
+      if (app.settings !== null && app.settings.uiShellMode !== mode) {
+        void app.saveSettings({ ...app.settings, uiShellMode: mode });
+      }
+    }
+  }
+
+  toggleShellMode(): void {
+    this.setShellMode(this.internal.shellMode === "agent" ? "bot" : "agent");
+  }
+
+  private flashHandoffBanner(text: string): void {
+    if (this.internal.handoffBannerTimer !== null) {
+      clearTimeout(this.internal.handoffBannerTimer);
+    }
+    this.internal.handoffBannerText = text;
+    this.internal.handoffBannerTimer = setTimeout(() => {
+      this.internal.handoffBannerTimer = null;
+      this.internal.handoffBannerText = null;
+      this.publish();
+    }, 2400);
+  }
+
+  beginBotHandoff(payload: BotTaskHandoffPayload): void {
+    this.internal.activeBotHandoff = payload;
+    this.flashHandoffBanner(`已携带任务上下文切入工作台 · ${payload.title}`);
+    this.setShellMode("agent");
+    this.publish();
+  }
+
+  finishBotHandoff(bannerText?: string): void {
+    this.internal.activeBotHandoff = null;
+    this.flashHandoffBanner(bannerText ?? "已将完成摘要回传千机 Bot");
+    this.setShellMode("bot");
     this.publish();
   }
 

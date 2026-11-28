@@ -164,8 +164,22 @@ fn request_app_exit(app: AppHandle, already_confirmed: bool) {
 
 fn initialize_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "tray_show", "打开 千机", true, None::<&str>)?;
+    let show_bot = MenuItem::with_id(
+        app,
+        "tray_show_bot",
+        "进入 Bot 分身形态",
+        true,
+        None::<&str>,
+    )?;
+    let show_agent = MenuItem::with_id(
+        app,
+        "tray_show_agent",
+        "进入 Agent 工作台",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &show_bot, &show_agent, &quit])?;
 
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("千机")
@@ -173,6 +187,22 @@ fn initialize_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "tray_show" => show_main_window(app),
+            "tray_show_bot" => {
+                show_main_window(app);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(
+                        "window.dispatchEvent(new CustomEvent('qianji:set-shell-mode', { detail: 'bot' }));",
+                    );
+                }
+            }
+            "tray_show_agent" => {
+                show_main_window(app);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(
+                        "window.dispatchEvent(new CustomEvent('qianji:set-shell-mode', { detail: 'agent' }));",
+                    );
+                }
+            }
             "tray_quit" => request_app_exit(app.clone(), false),
             _ => {}
         })
@@ -326,7 +356,21 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
                 api.prevent_close();
-                let _ = window.hide();
+                let hide_to_tray = window
+                    .app_handle()
+                    .try_state::<AppState>()
+                    .and_then(|st| {
+                        st.settings
+                            .lock()
+                            .ok()
+                            .map(|s| s.ui_shell_mode != "bot" || s.close_to_tray_in_bot_mode)
+                    })
+                    .unwrap_or(true);
+                if hide_to_tray {
+                    let _ = window.hide();
+                } else {
+                    request_app_exit(window.app_handle().clone(), false);
+                }
             }
             tauri::WindowEvent::Destroyed => {
                 webview_guard::mark_detached(window.label());

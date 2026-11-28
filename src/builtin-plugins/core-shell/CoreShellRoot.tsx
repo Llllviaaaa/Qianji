@@ -6,19 +6,17 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
-  useClientContributions,
   useFrontendService,
   useNavigationState,
-  useRpcState,
   useSessionState,
   useThemeState,
   useWorkbenchState,
   useWorkspaceState,
 } from "@qianji/client";
 import type { CoreRootSlotProps, SlotComponentProps } from "@qianji/client-slots";
+import { CoreShellGlobalChrome, CoreShellStatusbar } from "./CoreShellModeSwitch";
 import {
   clampPanelSize,
-  LegacyContributionHost,
   resolveActiveSessionTitle,
   SIDEBAR_BOUNDS,
 } from "./shellHelpers";
@@ -27,19 +25,16 @@ import { useCorePanelResize } from "./useCorePanelResize";
 const NOOP_UNSUB = (): void => undefined;
 
 export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root">) {
-  const { renderSlot, renderSlotChain, ctx } = props;
+  const { renderSlot, renderSlotChain, renderFactory, ctx } = props;
 
   const navigationService = useFrontendService("navigationService", ctx);
   const themeService = useFrontendService("themeService", ctx);
-  const rpcService = useFrontendService("rpcService", ctx);
 
   const navSnap = useNavigationState(ctx);
   const sessionSnap = useSessionState(ctx);
   const workspaceSnap = useWorkspaceState(ctx);
   const workbenchSnap = useWorkbenchState(ctx);
   const themeSnap = useThemeState(ctx);
-  const rpcSnap = useRpcState(ctx);
-  const contributions = useClientContributions();
 
   const slotsRegistry = ctx?.slots?.registry;
   const subscribeSlots = useCallback(
@@ -62,7 +57,6 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
   const hubView = navSnap?.hubView ?? null;
   const draftMode = navSnap?.draftMode ?? true;
   const activeRoute = navSnap?.activeRoute ?? { kind: "home" as const, workspace: workspaceSnap?.cwd ?? "" };
-  const toasts = navSnap?.toasts ?? [];
 
   const effectiveCwd = draftMode
     ? (workspaceSnap?.draftWorkspace || workspaceSnap?.cwd || sessionSnap?.cwd || "")
@@ -259,16 +253,20 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
     onSidebarWidthChange: handleSidebarWidthChange,
   });
 
+  const botAvailable = (slotsRegistry?.getFactoryCandidates("bot.stage").length ?? 0) > 0;
+  const effectiveShellMode = botAvailable && navSnap?.shellMode === "bot" ? "bot" : "agent";
+  const isBotMode = effectiveShellMode === "bot";
+
   const sidebarRendered = sidebarVisible || sidebarHoverPreview;
+  const panelOpen = !isBotMode && sidebarRendered;
   const hasSlotStatusbarItems = (slotsRegistry?.getEntries("shell.statusbar").length ?? 0) > 0;
-  const leftLegacyStatusItems = contributions.statusBarItems.filter((item) => item.align !== "right");
-  const rightLegacyStatusItems = contributions.statusBarItems.filter((item) => item.align === "right");
-  const showStatusbar = hasSlotStatusbarItems || contributions.statusBarItems.length > 0;
 
   return (
     <div
       className="app-shell codex-shot"
       data-core-plugin="core-shell"
+      data-shell-mode={effectiveShellMode}
+      data-bot-available={botAvailable ? "true" : undefined}
       data-safe-mode={props.safeMode ? "true" : undefined}
       style={{ ["--sidebar-width" as string]: `${sidebarWidth}px` }}
     >
@@ -285,7 +283,7 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
           ["--workspace-panel-width" as string]: `${resize.workspacePanelWidth}px`,
         }}
       >
-        {!sidebarVisible && !settingsOpen && (
+        {!isBotMode && !sidebarVisible && !settingsOpen && (
           <div
             aria-hidden="true"
             className="sidebar-hover-zone"
@@ -295,11 +293,13 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
         )}
 
         <div
-          className={`primary-sidebar-panel${sidebarRendered ? " open" : ""}${!sidebarVisible && sidebarHoverPreview ? " hover-preview" : ""}`}
+          className={`primary-sidebar-panel${panelOpen ? " open" : ""}${!isBotMode && !sidebarVisible && sidebarHoverPreview ? " hover-preview" : ""}`}
           data-panel=""
-          data-sidebar-panel-state={sidebarVisible ? "pinned" : sidebarHoverPreview ? "preview" : "closed"}
-          onMouseEnter={cancelHoverClose}
-          onMouseLeave={!sidebarVisible ? scheduleHoverClose : undefined}
+          data-sidebar-panel-state={
+            isBotMode ? "closed" : sidebarVisible ? "pinned" : sidebarHoverPreview ? "preview" : "closed"
+          }
+          onMouseEnter={!isBotMode ? cancelHoverClose : undefined}
+          onMouseLeave={!isBotMode && !sidebarVisible ? scheduleHoverClose : undefined}
         >
           {sidebarRendered &&
             renderSlot("shell.sidebar", {
@@ -309,7 +309,7 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
             })}
         </div>
 
-        {sidebarVisible && (
+        {!isBotMode && sidebarVisible && (
           <div
             className="sidebar-resizer"
             role="separator"
@@ -351,38 +351,12 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
               activeTab: workbenchSnap?.activeBottomTab ?? "terminal",
             })}
 
-            {showStatusbar && (
-              <footer className="qj-workspace-statusbar" role="status" aria-label="工作区状态栏">
-                <div style={{ display: "inline-flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                  {renderSlot("shell.statusbar", { cwd: effectiveCwd, sessionFile, align: "left" })}
-                  {leftLegacyStatusItems.map((item) => (
-                    <LegacyContributionHost
-                      key={item.id}
-                      id={item.id}
-                      pluginId={item.pluginId}
-                      slotKey="status.bar"
-                      renderFn={item.render}
-                      context={{ cwd: effectiveCwd, sessionFile }}
-                      compact
-                    />
-                  ))}
-                </div>
-                <div style={{ display: "inline-flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                  {renderSlot("shell.statusbar", { cwd: effectiveCwd, sessionFile, align: "right" })}
-                  {rightLegacyStatusItems.map((item) => (
-                    <LegacyContributionHost
-                      key={item.id}
-                      id={item.id}
-                      pluginId={item.pluginId}
-                      slotKey="status.bar"
-                      renderFn={item.render}
-                      context={{ cwd: effectiveCwd, sessionFile }}
-                      compact
-                    />
-                  ))}
-                </div>
-              </footer>
-            )}
+            <CoreShellStatusbar
+              effectiveCwd={effectiveCwd}
+              sessionFile={sessionFile}
+              renderSlot={renderSlot}
+              hasSlotStatusbarItems={hasSlotStatusbarItems}
+            />
           </div>
 
           {renderSlot("shell.workbench.right", {
@@ -391,60 +365,24 @@ export function CoreShellRoot(props: SlotComponentProps<CoreRootSlotProps, "root
             open: rightOpen,
             maximized: workbenchSnap?.rightMaximized ?? false,
           })}
-        </div>
-      </div>
 
-      {/* Global overlays slot root enforces pointer-events: none (ADR 0016 / ADR 0023) */}
-      <div
-        className="client-plugin-overlay-slot"
-        data-slot="shell.overlays"
-        style={{ pointerEvents: "none" }}
-      >
-        {renderSlot("shell.overlays", { cwd: effectiveCwd, sessionFile })}
-        {contributions.overlays.map((overlay) => (
-          <LegacyContributionHost
-            key={overlay.id}
-            id={overlay.id}
-            pluginId={overlay.pluginId}
-            slotKey="overlays"
-            renderFn={overlay.render}
-            context={{ cwd: effectiveCwd, sessionFile }}
-          />
-        ))}
-      </div>
-
-      {renderSlot("shell.modals", { cwd: effectiveCwd, sessionFile })}
-
-      {rpcSnap !== undefined && rpcSnap.hostStatus !== "connected" && (
-        <div
-          className={`host-status-banner${rpcSnap.hostStatus === "failed" ? " failed" : ""}`}
-          role="status"
-        >
-          <span>
-            {rpcSnap.hostStatus === "failed"
-              ? "Harness 多次崩溃，已停止自动重启"
-              : "Harness 已断开，正在重连…"}
-          </span>
-          {rpcSnap.hostStatus === "failed" && (
-            <button type="button" onClick={() => void rpcService?.restartHost()}>
-              重新启动
-            </button>
+          {botAvailable && (
+            <div className="qj-stage-pane-bot" aria-hidden={!isBotMode}>
+              <div className="qj-bot-rail-layer" aria-hidden={!isBotMode}>
+                {renderFactory("bot.rail", { active: isBotMode })}
+              </div>
+              {renderFactory("bot.stage", { active: isBotMode, cwd: effectiveCwd })}
+            </div>
           )}
         </div>
-      )}
-
-      <div className="toast-stack" aria-live="polite">
-        {toasts.map((toast) => (
-          <button
-            key={toast.id}
-            type="button"
-            className={`toast ${toast.kind}`}
-            onClick={() => navigationService?.dismissToast(toast.id)}
-          >
-            {toast.message}
-          </button>
-        ))}
       </div>
+
+      <CoreShellGlobalChrome
+        ctx={ctx}
+        effectiveCwd={effectiveCwd}
+        sessionFile={sessionFile}
+        renderSlot={renderSlot}
+      />
     </div>
   );
 }

@@ -1,0 +1,27 @@
+{
+  "name": "@qianji/swarm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Native Hub-and-Board multi-agent swarm orchestration, shared CAS task board, role-based worktree isolation, and stall watchdog",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@qianji/agent": "*",
+    "@qianji/commands": "*",
+    "@qianji/llm": "*",
+    "@qianji/pricing": "*",
+    "@qianji/protocol": "*",
+    "@qianji/session": "*",
+    "@qianji/subagents": "*",
+    "@qianji/system-prompt": "*",
+    "@qianji/tools": "*",
+    "@qianji/ui": "*"
+  },
+  "devDependencies": {
+    "@qianji/agent-loop": "*",
+    "@qianji/testkit": "*"
+  }
+}

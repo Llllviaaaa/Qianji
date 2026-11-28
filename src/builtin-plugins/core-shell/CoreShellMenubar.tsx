@@ -12,6 +12,7 @@ import {
   type ResolvedMenuItem,
 } from "@qianji/client";
 import type { CoreShellMenubarProps, SlotComponentProps } from "@qianji/client-slots";
+import { CoreShellModeSwitch } from "./CoreShellModeSwitch";
 import {
   DockLeftIcon,
   TRANSCRIPT_DENSITY_LABELS,
@@ -419,6 +420,10 @@ export function CoreShellMenubar(props: SlotComponentProps<CoreShellMenubarProps
             {appMenu === "tools" && renderPluginMenuItems(getMenuItems("menubar.tools"), closeMenu, false)}
           </div>
         )}
+      </div>
+
+      <div className="window-menubar-center" data-tauri-drag-region="">
+        <CoreShellModeSwitch ctx={props.ctx} />
       </div>
 
       <div className="window-menubar-right" data-tauri-drag-region="">

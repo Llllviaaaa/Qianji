@@ -64,6 +64,7 @@ export interface ThemeServiceSnapshot {
   readonly shortcutSettings: string;
   readonly shortcutTerminal: string;
   readonly shortcutChanges: string;
+  readonly shortcutToggleShellMode: string;
   readonly showThinking: boolean;
 }
 
@@ -224,6 +225,7 @@ export class ThemeService extends Service {
       shortcutSettings: settings?.shortcutSettings?.trim() || "Ctrl+,",
       shortcutTerminal: settings?.shortcutTerminal?.trim() || "Ctrl+Shift+T",
       shortcutChanges: settings?.shortcutChanges?.trim() || "Ctrl+Shift+G",
+      shortcutToggleShellMode: settings?.shortcutToggleShellMode?.trim() || "Ctrl+Shift+M",
       showThinking: settings?.showThinking !== false,
     };
   }

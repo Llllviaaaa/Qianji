@@ -70,6 +70,10 @@ export interface ToolDefinition<Args extends Record<string, unknown> = Record<st
   parameters: Record<string, unknown> & { type: "object" };
   /** Optional capability group (e.g. `"browser"`, `"computer"`) for batch on-demand activation. */
   group?: string;
+  /** Optional owning plugin identifier stamped automatically by `PluginManager`. */
+  pluginId?: string;
+  /** Optional connector identifier when this tool belongs to a specific Connector. */
+  connectorId?: string;
   /** Short summary shown in `activate_tools` when this tool's group is deferred. */
   groupDescription?: string;
   /**
@@ -135,6 +139,8 @@ export class Tools extends Service {
   private readonly restrictions = new Map<string, ReadonlySet<string>>();
   /** sessionId → deferred tool names activated for that session. */
   private readonly activated = new Map<string, Set<string>>();
+  private pluginIdResolver: (() => string | undefined) | undefined;
+  private sessionFilter: ((sessionId: string, definition: ToolDefinition) => boolean) | undefined;
 
   constructor(ctx: Context) {
     super(ctx, "tools");
@@ -143,12 +149,27 @@ export class Tools extends Service {
     }) as never);
   }
 
+  /** Set ambient plugin-ID resolver used to stamp `definition.pluginId` during `register()`. */
+  setPluginIdResolver(resolver: (() => string | undefined) | undefined): void {
+    this.pluginIdResolver = resolver;
+  }
+
+  /** Set dynamic per-session visibility gate (`Agent` vs `Bot` scopes & connected plugin connectors). */
+  setSessionFilter(filter: ((sessionId: string, definition: ToolDefinition) => boolean) | undefined): void {
+    this.sessionFilter = filter;
+  }
+
   /** Offer a tool to every session. Automatically cleans up with the caller's Cordis fiber. */
   register<Args extends Record<string, unknown>>(definition: ToolDefinition<Args>): () => void {
     if (definition.name === ACTIVATE_TOOLS_NAME || this.definitions.has(definition.name)) {
       throw new Error(`Tool ${definition.name} is already registered`);
     }
-    const entry = definition as unknown as ToolDefinition;
+    const rawEntry = definition as unknown as ToolDefinition;
+    const ambientPluginId = rawEntry.pluginId ?? this.pluginIdResolver?.();
+    const entry: ToolDefinition =
+      ambientPluginId !== undefined && rawEntry.pluginId === undefined
+        ? { ...rawEntry, pluginId: ambientPluginId }
+        : rawEntry;
     this.definitions.set(definition.name, entry);
     return bindCallerEffect(
       this.ctx,
@@ -221,7 +242,12 @@ export class Tools extends Service {
   /** Whether `sessionId` may use `name`. */
   allows(sessionId: string | undefined, name: string): boolean {
     const allowed = sessionId === undefined ? undefined : this.restrictions.get(sessionId);
-    return allowed === undefined || allowed.has(name);
+    if (allowed !== undefined && !allowed.has(name)) return false;
+    if (sessionId !== undefined && this.sessionFilter !== undefined) {
+      const def = this.definitions.get(name);
+      if (def !== undefined && !this.sessionFilter(sessionId, def)) return false;
+    }
+    return true;
   }
 
   /**

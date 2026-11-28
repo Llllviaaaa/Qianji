@@ -16,41 +16,17 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { Service, type Context } from "@deepseek-ai/cordis";
 import "@qianji/agent";
-import { ErrorCode, type SandboxConfigKind, type SandboxGenerateConfigResult } from "@qianji/protocol";
+import { ErrorCode, type SandboxConfigKind, type SandboxGenerateConfigResult, type SwarmMemberDeltaNotification, type SwarmUpdatedNotification } from "@qianji/protocol";
 import { RpcError } from "@qianji/rpc";
 import "@qianji/session";
 import { textOutput, type ToolDefinition } from "@qianji/tools";
-import { BackgroundProcessManager, bgProcessTool, bindAsyncJobObjectDisposer } from "./background.ts";
-import {
-  DEFAULT_TIMEOUT_SECONDS,
-  MAX_BUFFER_BYTES,
-  MAX_OUTPUT_BYTES,
-  MAX_OUTPUT_LINES,
-  POST_EXIT_PIPE_DRAIN_MS,
-  POST_KILL_GRACE_MS,
-  killTree,
-  tail,
-} from "./proc.ts";
-import {
-  attachWindowsJobObject,
-  buildSandboxedEnv,
-  generateDevContainerConfig,
-  generateWindowsSandboxConfig,
-  inspectSelfKillCommand,
-} from "./sandbox.ts";
+import { BackgroundProcessManager, bgProcessTool, bindAsyncJobObjectDisposer, type AsyncJobObjectBinding, type BgProcessArgs, type BgProcessSnapshot, type BgStartOptions, type BgWaitResult } from "./background.ts";
+import { DEFAULT_TIMEOUT_SECONDS, MAX_BUFFER_BYTES, MAX_OUTPUT_BYTES, MAX_OUTPUT_LINES, POST_EXIT_PIPE_DRAIN_MS, POST_KILL_GRACE_MS, killTree, tail } from "./proc.ts";
+import { attachWindowsJobObject, buildSandboxedEnv, generateDevContainerConfig, generateWindowsSandboxConfig, inspectSelfKillCommand } from "./sandbox.ts";
 import { createProgressReporter, spillTruncatedOutput } from "./spill.ts";
 import { isReadOnlyShellCommand } from "./readonly-shell.ts";
 
-export {
-  BackgroundProcessManager,
-  bgProcessTool,
-  bindAsyncJobObjectDisposer,
-  type AsyncJobObjectBinding,
-  type BgProcessArgs,
-  type BgProcessSnapshot,
-  type BgStartOptions,
-  type BgWaitResult,
-} from "./background.ts";
+export { BackgroundProcessManager, bgProcessTool, bindAsyncJobObjectDisposer, type AsyncJobObjectBinding, type BgProcessArgs, type BgProcessSnapshot, type BgStartOptions, type BgWaitResult };
 export * from "./sandbox.ts";
 export * from "./spill.ts";
 export { isReadOnlyShellCommand } from "./readonly-shell.ts";
@@ -426,12 +402,7 @@ export function bashTool(config: Config = {}, isSandboxed?: () => boolean, optio
   return shellTool("bash", config, isSandboxed, undefined, options);
 }
 
-export function powershellTool(
-  config: Config = {},
-  isSandboxed?: () => boolean,
-  shellPath?: string,
-  options?: ShellToolOptions,
-): ToolDefinition<ShellToolArgs> {
+export function powershellTool(config: Config = {}, isSandboxed?: () => boolean, shellPath?: string, options?: ShellToolOptions): ToolDefinition<ShellToolArgs> {
   return shellTool("powershell", config, isSandboxed, shellPath, options);
 }
 
@@ -439,57 +410,59 @@ export function apply(ctx: Context, config: Config = {}): void {
   // Decided once per load: a machine that gains Git Bash gets the bash tool on the next reload.
   const chosen = chooseShell(config);
   const manager = new BackgroundProcessManager();
-  ctx.effect(
-    () => ctx.tools.register(shellTool(chosen.kind, config, () => ctx.get("bashSandbox")?.enabled === true, chosen.path, { manager, ctx })),
-    `${name}: ${chosen.kind}`,
-  );
+  ctx.effect(() => ctx.tools.register(shellTool(chosen.kind, config, () => ctx.get("bashSandbox")?.enabled === true, chosen.path, { manager, ctx })), `${name}: ${chosen.kind}`);
   ctx.effect(() => ctx.tools.register(bgProcessTool(manager)), `${name}: bg_process`);
+  const isActiveSwarmWorker = (sessionId: string): boolean =>
+    (ctx as { get?: (k: string) => { isActiveWorkerSession?: (id: string) => boolean } | undefined }).get?.("swarm")?.isActiveWorkerSession?.(sessionId) === true;
+
   ctx.on("session/deleted", (sessionId) => manager.stopSession(sessionId));
   ctx.on("session/unloaded", (sessionId) => manager.stopSession(sessionId));
   ctx.on("agent/settled", async (session) => {
-    if (session.header.parent !== undefined) manager.stopSession(session.id);
+    if (session.header.parent !== undefined && !isActiveSwarmWorker(session.id)) manager.stopSession(session.id);
+  });
+  const dynamicEvents = ctx as unknown as { on(event: string, listener: (payload: unknown) => void): () => void };
+  dynamicEvents.on("swarm/updated", (raw) => {
+    const payload = raw as SwarmUpdatedNotification | undefined;
+    if (payload?.snapshot === undefined) return;
+    const runEnded = payload.snapshot.run.status === "stopped" || payload.snapshot.run.status === "completed";
+    for (const member of payload.snapshot.members) {
+      if (member.role !== "coordinator" && (runEnded || member.killed || member.state === "killed" || member.state === "stopped" || !isActiveSwarmWorker(member.sessionId))) {
+        manager.stopSession(member.sessionId);
+      }
+    }
+  });
+  dynamicEvents.on("swarm/memberDelta", (raw) => {
+    const member = (raw as SwarmMemberDeltaNotification | undefined)?.member;
+    if (member !== undefined && member.role !== "coordinator" && (member.killed || member.state === "killed" || member.state === "stopped")) {
+      manager.stopSession(member.sessionId);
+    }
   });
   ctx.effect(() => () => manager.stopAll(), `${name}: bg-cleanup`);
 
   ctx.inject(["rpc"], (rpcCtx) => {
-    rpcCtx.effect(
-      () =>
-        rpcCtx.rpc.method("sandbox.generateConfig", (params): SandboxGenerateConfigResult => {
-          if (params !== undefined && params !== null && (typeof params !== "object" || Array.isArray(params))) {
-            throw new RpcError(ErrorCode.InvalidParams, "params must be an object");
-          }
-          const p = (params ?? {}) as Record<string, unknown>;
-          const requiredStr = (key: string): string => {
-            const raw = p[key];
-            if (typeof raw !== "string" || raw.trim() === "") {
-              throw new RpcError(ErrorCode.InvalidParams, `${key} must be a non-empty string`);
-            }
-            return raw.trim();
-          };
-          const kindRaw = requiredStr("kind");
-          if (kindRaw !== "wsb" && kindRaw !== "devcontainer") {
-            throw new RpcError(ErrorCode.InvalidParams, "kind must be 'wsb' or 'devcontainer'");
-          }
-          const kind: SandboxConfigKind = kindRaw;
-          const cwd = resolvePath(requiredStr("cwd"));
-          const overwrite = p.overwrite === true;
-          if (kind === "wsb") {
-            const target = join(cwd, ".qianji", "sandbox.wsb");
-            const content = generateWindowsSandboxConfig(cwd);
-            mkdirSync(dirname(target), { recursive: true });
-            writeFileSync(target, content, "utf8");
-            return { kind, path: target, content };
-          }
-          const primaryTarget = join(cwd, ".devcontainer", "devcontainer.json");
-          const target = !overwrite && existsSync(primaryTarget)
-            ? join(cwd, ".qianji", "devcontainer.generated.json")
-            : primaryTarget;
-          const content = generateDevContainerConfig(cwd);
-          mkdirSync(dirname(target), { recursive: true });
-          writeFileSync(target, content, "utf8");
-          return { kind, path: target, content };
-        }),
-      `${name}: sandbox.generateConfig`,
-    );
+    rpcCtx.effect(() => rpcCtx.rpc.method("sandbox.generateConfig", (params): SandboxGenerateConfigResult => {
+      if (params !== undefined && params !== null && (typeof params !== "object" || Array.isArray(params))) {
+        throw new RpcError(ErrorCode.InvalidParams, "params must be an object");
+      }
+      const p = (params ?? {}) as Record<string, unknown>;
+      const requiredStr = (key: string): string => {
+        const raw = p[key];
+        if (typeof raw !== "string" || raw.trim() === "") throw new RpcError(ErrorCode.InvalidParams, `${key} must be a non-empty string`);
+        return raw.trim();
+      };
+      const kindRaw = requiredStr("kind");
+      if (kindRaw !== "wsb" && kindRaw !== "devcontainer") throw new RpcError(ErrorCode.InvalidParams, "kind must be 'wsb' or 'devcontainer'");
+      const kind: SandboxConfigKind = kindRaw;
+      const cwd = resolvePath(requiredStr("cwd"));
+      const overwrite = p.overwrite === true;
+      const primaryTarget = kind === "wsb" ? join(cwd, ".qianji", "sandbox.wsb") : join(cwd, ".devcontainer", "devcontainer.json");
+      const target = kind === "devcontainer" && !overwrite && existsSync(primaryTarget)
+        ? join(cwd, ".qianji", "devcontainer.generated.json")
+        : primaryTarget;
+      const content = kind === "wsb" ? generateWindowsSandboxConfig(cwd) : generateDevContainerConfig(cwd);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, content, "utf8");
+      return { kind, path: target, content };
+    }), `${name}: sandbox.generateConfig`);
   });
 }

@@ -5,13 +5,26 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { textOutput, type ToolDefinition, type ToolEnv } from "@qianji/tools";
-import { clipLine, displayPath, matchesGlob, resolvePath, walkFiles } from "./shared.ts";
+import {
+  clipLine,
+  displayPath,
+  isWindowsDeviceBaseName,
+  matchesGlob,
+  resolvePath,
+  walkFiles,
+} from "./shared.ts";
 
 export const MAX_FIND_RESULTS = 1000;
 export const MAX_GREP_MATCHES = 100;
+export const MAX_SCAN_FILES = 25_000;
+export const MAX_SCAN_DURATION_MS = 15_000;
 const MAX_GREP_FILE_BYTES = 2 * 1024 * 1024;
+const YIELD_BUDGET_MS = 20;
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 let cachedRg: string | null | undefined;
 
@@ -34,11 +47,26 @@ export const find: ToolDefinition<{ pattern: string; path?: string }> = {
     },
     required: ["pattern"],
   },
-  execute({ pattern, path }, env) {
+  async execute({ pattern, path }, env) {
     const root = resolvePath(env.cwd, path ?? ".");
     const found: string[] = [];
     let more = false;
+    let scanned = 0;
+    let capped = false;
+    const startedAt = performance.now();
+    let sliceStart = startedAt;
     for (const file of walkFiles(root, env.signal)) {
+      scanned += 1;
+      const now = performance.now();
+      if (now - sliceStart >= YIELD_BUDGET_MS) {
+        await yieldToEventLoop();
+        if (env.signal.aborted) break;
+        sliceStart = performance.now();
+      }
+      if (scanned > MAX_SCAN_FILES || now - startedAt > MAX_SCAN_DURATION_MS) {
+        capped = true;
+        break;
+      }
       const rel = displayPath(root, file);
       if (!matchesGlob(pattern, rel)) continue;
       if (found.length >= MAX_FIND_RESULTS) {
@@ -47,9 +75,20 @@ export const find: ToolDefinition<{ pattern: string; path?: string }> = {
       }
       found.push(rel);
     }
-    if (found.length === 0) return textOutput("No files found.");
+    if (found.length === 0) {
+      return textOutput(
+        capped
+          ? `No matching files found before reaching scan limit (${MAX_SCAN_FILES} files / ${MAX_SCAN_DURATION_MS / 1000}s); pass a narrower \`path\`.`
+          : "No files found.",
+      );
+    }
     found.sort((a, b) => a.localeCompare(b));
-    return textOutput(found.join("\n") + (more ? `\n[More than ${MAX_FIND_RESULTS} files; narrow the pattern.]` : ""));
+    const tail = more
+      ? `\n[More than ${MAX_FIND_RESULTS} files; narrow the pattern.]`
+      : capped
+        ? `\n[Search stopped at scan limit (${MAX_SCAN_FILES} files / ${MAX_SCAN_DURATION_MS / 1000}s); pass a narrower \`path\`.]`
+        : "";
+    return textOutput(found.join("\n") + tail);
   },
 };
 
@@ -62,25 +101,79 @@ export type GrepParams = {
   limit?: number;
 };
 
-/** Pure-Node grep implementation used as fallback when `rg` is absent or incompatible. */
-export function grepWithNode(params: GrepParams, env: Pick<ToolEnv, "cwd" | "signal">): { matches: string[]; more: boolean; error?: string } {
-  let regex: RegExp;
+export interface GrepScanLimits {
+  maxFiles?: number;
+  maxDurationMs?: number;
+}
+
+export interface GrepRunResult {
+  matches: string[];
+  more: boolean;
+  capped?: boolean;
+  error?: string;
+}
+
+function compileGrepRegex(params: GrepParams): RegExp | { error: string } {
   try {
-    regex = new RegExp(
+    return new RegExp(
       params.literal ? params.pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : params.pattern,
       params.ignoreCase ? "i" : "",
     );
   } catch (error) {
-    return { matches: [], more: false, error: `Invalid pattern: ${(error as Error).message}` };
+    return { error: `Invalid pattern: ${(error as Error).message}` };
   }
+}
+
+function collectBufferMatches(
+  buffer: Buffer,
+  rel: string,
+  regex: RegExp,
+  max: number,
+  matches: string[],
+): boolean {
+  if (buffer.subarray(0, 8192).includes(0)) return false;
+  const lines = buffer.toString("utf8").split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = (lines[index] as string).replace(/\r$/, "");
+    if (!regex.test(line)) continue;
+    if (matches.length >= max) {
+      return true;
+    }
+    matches.push(`${rel}:${index + 1}: ${clipLine(line)}`);
+  }
+  return false;
+}
+
+/** Pure-Node synchronous grep implementation retained for direct unit tests. */
+export function grepWithNode(
+  params: GrepParams,
+  env: Pick<ToolEnv, "cwd" | "signal">,
+  limits?: GrepScanLimits,
+): GrepRunResult {
+  const compiled = compileGrepRegex(params);
+  if ("error" in compiled) return { matches: [], more: false, error: compiled.error };
   const target = resolvePath(env.cwd, params.path ?? ".");
+  if (isWindowsDeviceBaseName(basename(target))) {
+    return { matches: [], more: false, error: `Cannot search Windows reserved device name: ${basename(target)}` };
+  }
   const single = statSync(target).isFile();
   const base = single ? dirname(target) : target;
   const files = single ? [target] : walkFiles(target, env.signal);
   const max = Math.max(1, params.limit ?? MAX_GREP_MATCHES);
+  const maxFiles = limits?.maxFiles ?? MAX_SCAN_FILES;
+  const maxDurationMs = limits?.maxDurationMs ?? MAX_SCAN_DURATION_MS;
+  const startedAt = performance.now();
   const matches: string[] = [];
   let more = false;
-  outer: for (const file of files) {
+  let capped = false;
+  let scanned = 0;
+  for (const file of files) {
+    if (env.signal.aborted) break;
+    scanned += 1;
+    if (scanned > maxFiles || performance.now() - startedAt > maxDurationMs) {
+      capped = true;
+      break;
+    }
     const rel = displayPath(base, file);
     if (params.glob !== undefined && !matchesGlob(params.glob, rel)) continue;
     let buffer: Buffer;
@@ -90,19 +183,77 @@ export function grepWithNode(params: GrepParams, env: Pick<ToolEnv, "cwd" | "sig
     } catch {
       continue;
     }
-    if (buffer.subarray(0, 8192).includes(0)) continue;
-    const lines = buffer.toString("utf8").split("\n");
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = (lines[index] as string).replace(/\r$/, "");
-      if (!regex.test(line)) continue;
-      if (matches.length >= max) {
-        more = true;
-        break outer;
-      }
-      matches.push(`${rel}:${index + 1}: ${clipLine(line)}`);
+    if (collectBufferMatches(buffer, rel, compiled, max, matches)) {
+      more = true;
+      break;
     }
   }
-  return { matches, more };
+  return { matches, more, ...(capped ? { capped: true } : {}) };
+}
+
+/**
+ * Cooperative async fallback grep used by the live `grep` tool when `rg` is
+ * unavailable: yields to the JS event loop every ~20ms and reads files via
+ * libuv worker threads so large workspaces never freeze Harness RPCs.
+ */
+export async function grepWithNodeAsync(
+  params: GrepParams,
+  env: Pick<ToolEnv, "cwd" | "signal">,
+  limits?: GrepScanLimits,
+): Promise<GrepRunResult> {
+  const compiled = compileGrepRegex(params);
+  if ("error" in compiled) return { matches: [], more: false, error: compiled.error };
+  const target = resolvePath(env.cwd, params.path ?? ".");
+  if (isWindowsDeviceBaseName(basename(target))) {
+    return { matches: [], more: false, error: `Cannot search Windows reserved device name: ${basename(target)}` };
+  }
+  let single: boolean;
+  try {
+    single = (await stat(target)).isFile();
+  } catch (error) {
+    return { matches: [], more: false, error: (error as Error).message };
+  }
+  const base = single ? dirname(target) : target;
+  const files = single ? [target] : walkFiles(target, env.signal);
+  const max = Math.max(1, params.limit ?? MAX_GREP_MATCHES);
+  const maxFiles = limits?.maxFiles ?? MAX_SCAN_FILES;
+  const maxDurationMs = limits?.maxDurationMs ?? MAX_SCAN_DURATION_MS;
+  const startedAt = performance.now();
+  let sliceStart = startedAt;
+  const matches: string[] = [];
+  let more = false;
+  let capped = false;
+  let scanned = 0;
+
+  for (const file of files) {
+    if (env.signal.aborted) break;
+    scanned += 1;
+    const now = performance.now();
+    if (now - sliceStart >= YIELD_BUDGET_MS) {
+      await yieldToEventLoop();
+      if (env.signal.aborted) break;
+      sliceStart = performance.now();
+    }
+    if (scanned > maxFiles || performance.now() - startedAt > maxDurationMs) {
+      capped = true;
+      break;
+    }
+    const rel = displayPath(base, file);
+    if (params.glob !== undefined && !matchesGlob(params.glob, rel)) continue;
+    let buffer: Buffer;
+    try {
+      const info = await stat(file);
+      if (info.size > MAX_GREP_FILE_BYTES) continue;
+      buffer = await readFile(file);
+    } catch {
+      continue;
+    }
+    if (collectBufferMatches(buffer, rel, compiled, max, matches)) {
+      more = true;
+      break;
+    }
+  }
+  return { matches, more, ...(capped ? { capped: true } : {}) };
 }
 
 interface RgMatchData {
@@ -119,6 +270,10 @@ export function grepWithRipgrep(
 ): Promise<{ matches: string[]; more: boolean } | undefined> {
   return new Promise((resolve) => {
     const target = resolvePath(env.cwd, params.path ?? ".");
+    if (isWindowsDeviceBaseName(basename(target))) {
+      resolve(undefined);
+      return;
+    }
     let single: boolean;
     try {
       single = statSync(target).isFile();
@@ -140,6 +295,10 @@ export function grepWithRipgrep(
       "--glob", "!node_modules/**",
       "--glob", "!.hg/**",
       "--glob", "!.svn/**",
+      "--glob", "!.ccache/**",
+      ...(process.platform === "win32"
+        ? ["--glob", "!**/CON", "--glob", "!**/PRN", "--glob", "!**/AUX", "--glob", "!**/NUL"]
+        : []),
     ];
     if (params.literal) args.push("-F");
     if (params.ignoreCase) args.push("-i");
@@ -241,11 +400,22 @@ export const grep: ToolDefinition<GrepParams> = {
     const max = Math.max(1, params.limit ?? MAX_GREP_MATCHES);
     const rg = findRipgrep();
     const rgResult = rg !== undefined ? await grepWithRipgrep(rg, params, env) : undefined;
-    const result: { matches: string[]; more: boolean; error?: string } = rgResult ?? grepWithNode(params, env);
+    const result: GrepRunResult = rgResult ?? await grepWithNodeAsync(params, env);
     if (typeof result.error === "string") {
       return textOutput(result.error, true);
     }
-    if (result.matches.length === 0) return textOutput("No matches.");
-    return textOutput(result.matches.join("\n") + (result.more ? `\n[Stopped at ${max} matches; narrow the search.]` : ""));
+    if (result.matches.length === 0) {
+      return textOutput(
+        result.capped === true
+          ? `No matches found before reaching scan limit (${MAX_SCAN_FILES} files / ${MAX_SCAN_DURATION_MS / 1000}s); pass a narrower \`path\` or \`glob\`.`
+          : "No matches.",
+      );
+    }
+    const tail = result.more
+      ? `\n[Stopped at ${max} matches; narrow the search.]`
+      : result.capped === true
+        ? `\n[Search stopped at scan limit (${MAX_SCAN_FILES} files / ${MAX_SCAN_DURATION_MS / 1000}s); pass a narrower \`path\` or \`glob\`.]`
+        : "";
+    return textOutput(result.matches.join("\n") + tail);
   },
 };

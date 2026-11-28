@@ -8,57 +8,39 @@
  * filesystem/shell tool, Git checkpointing, security policy, and HTTP/WebSocket
  * RPC gateway are first-class `PluginManager`-managed plugins (`builtinPluginDefinitions`).
  */
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "@deepseek-ai/cordis";
 import { AgentLoop } from "@qianji/agent-loop";
-import * as browser from "@qianji/browser";
 import * as checkpoints from "@qianji/checkpoints";
 import { Commands } from "@qianji/commands";
-import * as computer from "@qianji/computer";
-import * as hooks from "@qianji/hooks";
-import * as intelligentUi from "@qianji/intelligent-ui";
 import { Credentials, LlmService, type LlmServiceConfig } from "@qianji/llm";
 import * as llmAnthropic from "@qianji/llm-anthropic";
 import * as llmGemini from "@qianji/llm-gemini";
 import * as llmOpenaiCompat from "@qianji/llm-openai-compat";
 import * as llmOpenaiResponses from "@qianji/llm-openai-responses";
-import { Mcp, type McpServerConfig } from "@qianji/mcp";
-import * as memory from "@qianji/memory";
-import { Permissions, type PermissionMode } from "@qianji/permissions";
-import * as plan from "@qianji/plan";
+import type { PermissionMode } from "@qianji/permissions";
 import { Pricing } from "@qianji/pricing";
-import * as promptContext from "@qianji/prompt-context";
-import { Schedule } from "@qianji/schedule";
 import { Sessions } from "@qianji/session";
 import * as sessionJsonl from "@qianji/session-jsonl";
 import * as sessionSearchFts from "@qianji/session-search-fts";
-import * as subagents from "@qianji/subagents";
 import { SystemPrompt } from "@qianji/system-prompt";
 import * as toolBash from "@qianji/tool-bash";
 import * as toolFs from "@qianji/tool-fs";
-import * as toolGuards from "@qianji/tool-guards";
-import * as toolOutput from "@qianji/tool-output";
 import { Tools } from "@qianji/tools";
 import { Ui } from "@qianji/ui";
-import * as commandsRpc from "./commands-rpc.ts";
-import { resolveDesktopBundledSkillRoots, resolveDesktopPluginTypesDir } from "./control.ts";
-import * as diagnostics from "./diagnostics.ts";
-import { bashSandboxPlugin, configRpcPlugin, secretStore } from "./host-plugins.ts";
+import { builtinFeatureDefinitions, withMcpSecrets } from "./builtin-feature-defs.ts";
+import { gatewayRpcDefinitions } from "./gateway-rpc-plugins.ts";
 import type { HarnessConfig } from "./harness-config.ts";
+import { secretStore } from "./host-plugins.ts";
 import type { PluginEntry } from "./host.ts";
-import * as llmRpc from "./llm-rpc.ts";
-import * as pluginDevTools from "./plugin-dev-tools.ts";
 import type { PluginManager } from "./plugin-manager.ts";
-import * as providerAdmin from "./provider-admin.ts";
-import * as providers from "./providers.ts";
 import type { ReloadableEntry } from "./reloadable.ts";
 import { RpcGateway } from "./rpc.ts";
-import { readSecretFile, type McpServerSecrets, type SecretCodec } from "./secrets.ts";
-import * as sessionsRpc from "./sessions-rpc.ts";
-import * as uiRpc from "./ui-rpc.ts";
+import type { SecretCodec } from "./secrets.ts";
+import * as swarmRpcPlugin from "./swarm-rpc.ts";
 import { WebServer } from "./web-server.ts";
-import * as workbenchRpc from "./workbench-rpc.ts";
+
+export { builtinFeatureDefinitions, swarmRpcPlugin, withMcpSecrets };
 
 export interface CoreOptions {
   /** DPAPI, when the host runs in Bun on Windows; `{ secret }` refs then resolve against secrets.dat. */
@@ -102,23 +84,6 @@ export interface FeatureOptions {
   pluginTypesDir?: string | (() => string | undefined);
 }
 
-/** MCP servers with their env and headers from the desktop's encrypted secrets, in memory only. */
-export function withMcpSecrets(servers: readonly McpServerConfig[], secrets: Record<string, McpServerSecrets>): McpServerConfig[] {
-  return servers.map((server) => {
-    const stored = secrets[server.id];
-    if (stored === undefined) return server;
-    return { ...server, env: { ...server.env, ...stored.env }, headers: { ...server.headers, ...stored.headers } };
-  });
-}
-
-function fileRevision(file: string): string {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
-}
-
 export interface BuiltinPluginDefinition {
   id: string;
   name: string;
@@ -136,228 +101,6 @@ export interface BuiltinPluginDefinition {
   provides?: readonly string[];
 }
 
-/** Built-in capability & policy plugins configured via `harness.json` and `providers.json`. */
-export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig, options: FeatureOptions = {}): BuiltinPluginDefinition[] {
-  const providersFile = join(dataDir, "providers.json");
-  const permissions = options.permission === undefined ? config.permissions : { ...config.permissions, defaultPermission: options.permission };
-  const { secretsFile, ...mcpConfig } = config.mcp;
-  const mcpSecrets = secretsFile !== undefined && options.codec !== undefined
-    ? readSecretFile<Record<string, McpServerSecrets>>(secretsFile, options.codec)
-    : {};
-
-  const definitions: Array<BuiltinPluginDefinition | false> = [
-    {
-      id: "providers",
-      name: "模型服务商路由 (providers)",
-      description: "加载 providers.json 并按已启用协议插件动态实例化模型适配器与密钥解析",
-      // The file's text is part of the config so an edited providers.json reloads the adapters.
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: providers,
-      inject: ["llm", "credentials"],
-      config: {
-        file: providersFile,
-        revision: fileRevision(providersFile),
-        ...(options.autoRegisterBuiltinProtocols === undefined ? {} : { autoRegisterBuiltinProtocols: options.autoRegisterBuiltinProtocols }),
-        ...(config.llm === undefined ? {} : { llm: config.llm }),
-      },
-    },
-    {
-      id: "permissions",
-      name: "工具权限策略 (permissions)",
-      description: "执行会话读写、命令白名单与自定义工具审批门禁",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: Permissions,
-      inject: ["sessions", "tools", "ui", "systemPrompt"],
-      provides: ["permissions"],
-      config: permissions,
-    },
-    {
-      id: "prompt-context",
-      name: "上下文与技能管理 (prompt-context)",
-      description: "注入工作区上下文（AGENTS.md / CLAUDE.md / .local 与 @path 引用）、路径规则（rules）、技能与 /init 指令",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: promptContext,
-      inject: ["systemPrompt"],
-      config: {
-        dataDir,
-        contextFiles: config.contextFiles.enabled,
-        instructions: config.prompt.instructions,
-        bundledSkillsDirs: options.bundledSkillsDirs ?? (() => resolveDesktopBundledSkillRoots()),
-        pluginSkills: (cwd?: string) => {
-          const manager = options.pluginManager?.();
-          if (!manager) return [];
-          return manager.activeSkillRoots(cwd).map((root) => ({
-            pluginId: root.pluginId,
-            dir: root.dir,
-            scope: root.tier === "workspace" ? "project" : root.tier === "builtin" ? "builtin" : "user",
-          }));
-        },
-      },
-    },
-    {
-      id: "plugin-dev-tools",
-      name: "Agent 插件自省与开发工具 (plugin-dev-tools)",
-      description: "提供免审运行时自省工具 qianji_inspect 与按需加载的插件生命周期管理工具 plugin_manager",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: pluginDevTools,
-      inject: ["tools", "sessions", "ui"],
-      config: {
-        manager: options.pluginManager ?? (() => undefined),
-        pluginTypesDir: options.pluginTypesDir ?? (() => resolveDesktopPluginTypesDir()),
-      },
-    },
-    {
-      id: "tool-output",
-      name: "工具输出上限 (tool-output)",
-      description: "截断超长的工具输出，全文存到 spill 目录，避免一次工具调用撑爆上下文",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: toolOutput,
-      inject: ["tools"],
-      config: { spillDir: join(dataDir, "spill") },
-    },
-    {
-      id: "tool-guards",
-      name: "工具调用保护 (tool-guards)",
-      description: "给工具调用设时限，并在模型连续重复完全相同的调用时提醒它换个办法",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: toolGuards,
-      inject: ["tools"],
-      config: {},
-    },
-    {
-      id: "plan",
-      name: "任务计划追踪 (plan)",
-      description: "提供 update_plan 工具并在对话提示词中维护分步计划状态",
-      enabled: config.plan.enabled,
-      hasHost: true,
-      hasClient: false,
-      plugin: plan,
-      inject: ["sessions", "tools", "systemPrompt"],
-    },
-    {
-      id: "intelligent-ui",
-      name: "Intelligent UI 交互式界面 (intelligent-ui)",
-      description: "支持在对话流内生成可交互计算器、动态图表、参数表单与安全沙箱微应用，支持多版本切换与右侧画布展开",
-      enabled: config.intelligentUi.enabled,
-      hasHost: true,
-      hasClient: true,
-      plugin: intelligentUi,
-      inject: ["sessions", "tools", "systemPrompt"],
-    },
-    {
-      id: "memory",
-      name: "本地长期记忆 (memory)",
-      description: "维护并向系统提示词注入持久化的全局与项目记忆文件",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: memory,
-      inject: ["tools", "systemPrompt"],
-      config: {
-        file: config.memory.file ?? join(dataDir, "memory.md"),
-        userEnabled: config.memory.enabled,
-        projectEnabled: config.memory.projectEnabled ?? config.memory.enabled,
-        ...(config.memory.inlineMaxChars === undefined ? {} : { inlineMaxChars: config.memory.inlineMaxChars }),
-        ...(options.isWorkspaceTrusted === undefined ? {} : { isTrusted: options.isWorkspaceTrusted }),
-      },
-    },
-    {
-      id: "subagents",
-      name: "并行子代理 (subagents)",
-      description: "支持派发受并发控制的子会话代理执行独立探索或编码子任务",
-      enabled: config.subagents.enabled,
-      hasHost: true,
-      hasClient: false,
-      plugin: subagents,
-      inject: ["sessions", "agents", "tools"],
-      config: config.subagents,
-    },
-    {
-      id: "mcp",
-      name: "MCP 服务器桥接 (mcp)",
-      description: "连接 STDIO 与 HTTP MCP 服务器并将其工具暴露给模型",
-      enabled: config.mcp.enabled !== false,
-      hasHost: true,
-      hasClient: false,
-      plugin: Mcp,
-      inject: ["sessions", "tools", "ui"],
-      provides: ["mcp"],
-      config: { ...mcpConfig, servers: withMcpSecrets(mcpConfig.servers ?? [], mcpSecrets) },
-    },
-    {
-      id: "computer",
-      name: "本机桌面控制 (computer)",
-      description: "提供桌面截图、窗口焦点与键鼠自动化工具",
-      enabled: config.computer.enabled,
-      hasHost: true,
-      hasClient: false,
-      plugin: computer,
-      inject: ["tools", "ui", "sessions"],
-      config: { ...config.computer, helper: config.computer.helper ?? options.computerHelper },
-    },
-    {
-      id: "browser",
-      name: "内置自动化浏览器 (browser)",
-      description: "基于本机 Edge/Chrome CDP 提供网页浏览与交互工具",
-      enabled: config.browser.enabled,
-      hasHost: true,
-      hasClient: false,
-      plugin: browser,
-      inject: ["tools", "ui", "sessions"],
-      config: config.browser,
-    },
-    {
-      id: "hooks",
-      name: "生命周期命令钩子 (hooks)",
-      description: "在会话轮次与工具执行前后触发用户自定义脚本",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: hooks,
-      config: config.hooks,
-    },
-    {
-      id: "sandbox",
-      name: "Windows 轻量沙箱 (sandbox)",
-      description: "为 bash 工具启用环境变量脱敏、Job Object 进程数限制与高危系统命令拦截",
-      enabled: config.sandbox.enabled,
-      hasHost: true,
-      hasClient: false,
-      plugin: bashSandboxPlugin,
-      inject: ["tools", "sessions"],
-    },
-    options.scheduler !== undefined && {
-      id: "schedule",
-      name: "本地定时任务 (schedule)",
-      description: "按周期调度后台无人值守会话并记录运行历史",
-      enabled: config.schedule.enabled,
-      hasHost: true,
-      hasClient: false,
-      plugin: Schedule,
-      inject: ["sessions", "agents", "ui"],
-      provides: ["schedule"],
-      config: {
-        tasksFile: join(dataDir, "schedules.json"),
-        runsFile: join(dataDir, "schedule-runs.jsonl"),
-        defaultModel: options.scheduler.defaultModel,
-      },
-    },
-  ];
-  return definitions.filter((entry): entry is BuiltinPluginDefinition => entry !== false);
-}
-
 /**
  * Complete isomorphic catalog of ALL built-in plugins managed by `PluginManager`.
  */
@@ -366,7 +109,6 @@ export function builtinPluginDefinitions(
   config: HarnessConfig,
   options: CoreOptions & FeatureOptions & { gateway?: GatewayOptions } = {},
 ): BuiltinPluginDefinition[] {
-  const providersFile = join(dataDir, "providers.json");
   const gateway = options.gateway;
   const baseDefinitions: Array<BuiltinPluginDefinition | false> = [
     gateway !== undefined && {
@@ -525,100 +267,19 @@ export function builtinPluginDefinitions(
     },
     ...builtinFeatureDefinitions(dataDir, config, {
       ...options,
-      ...(options.pluginManager === undefined && gateway?.manager !== undefined
-        ? { pluginManager: gateway.manager }
-        : {}),
+      ...(options.pluginManager === undefined && gateway?.manager !== undefined ? { pluginManager: gateway.manager } : {}),
       autoRegisterBuiltinProtocols: false,
     }),
+    ...gatewayRpcDefinitions(dataDir, gateway, options),
     gateway !== undefined && {
-      id: "sessions-rpc",
-      name: "会话与用量 RPC 服务 (sessions-rpc)",
-      description: "暴露 session.*、model.* 与 usage.summary 会话控制接口",
+      id: "swarm-rpc",
+      name: "多智能体蜂群 RPC 服务 (swarm-rpc)",
+      description: "暴露 swarm.* 控制接口并推送实时蜂群状态、看板与消息板通知",
       enabled: true,
       hasHost: true,
       hasClient: false,
-      plugin: sessionsRpc,
-      inject: ["rpc", "sessions", "agents", "llm"],
-      config: gateway.defaultModel === undefined ? {} : { defaultModel: gateway.defaultModel },
-    },
-    gateway !== undefined && {
-      id: "commands-rpc",
-      name: "斜杠命令 RPC 服务 (commands-rpc)",
-      description: "暴露 command.list 与 command.execute 斜杠命令接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: commandsRpc,
-      inject: ["rpc", "commands"],
-      config: gateway.manager === undefined ? {} : { manager: gateway.manager },
-    },
-    gateway !== undefined && {
-      id: "ui-rpc",
-      name: "交互审批 RPC 服务 (ui-rpc)",
-      description: "暴露 ui.pending 与 ui.respond 工具审批及询问回传接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: uiRpc,
-      inject: ["rpc", "ui"],
-    },
-    gateway !== undefined && {
-      id: "diagnostics",
-      name: "宿主诊断与日志服务 (diagnostics)",
-      description: "暴露 diagnostics.logs 与 diagnostics.export 宿主运行诊断接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: diagnostics,
-      inject: ["rpc", "hostInfo"],
-    },
-    gateway !== undefined && {
-      id: "llm-rpc",
-      name: "直连模型补全 RPC 服务 (llm-rpc)",
-      description: "暴露 llm.complete 轻量单轮补全接口（如会话自动命名与提交摘要）",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: llmRpc,
-      inject: ["rpc", "llm"],
-      config: gateway.defaultModel === undefined ? {} : { defaultModel: gateway.defaultModel },
-    },
-    gateway !== undefined && {
-      id: "provider-admin",
-      name: "模型服务商管理接口 (provider-admin)",
-      description: "暴露 provider.save、provider.delete 与在线连接测试管理接口",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: providerAdmin,
-      inject: ["rpc", "credentials"],
-      config: {
-        file: providersFile,
-        secretsFile: join(dataDir, "secrets.dat"),
-        ...(options.codec === undefined ? {} : { codec: options.codec }),
-        reload: gateway.reload ?? (async () => []),
-      },
-    },
-    gateway?.reload !== undefined && {
-      id: "config-rpc",
-      name: "配置热重载接口 (config-rpc)",
-      description: "暴露 config.reload 触发插件与配置同步",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: configRpcPlugin,
-      inject: ["rpc"],
-      config: { reload: gateway.reload },
-    },
-    gateway !== undefined && {
-      id: "workbench",
-      name: "原生工作台联动 (workbench)",
-      description: "提供 sidebar_open 工具与 workbench/open 工作台面板联动通知",
-      enabled: true,
-      hasHost: true,
-      hasClient: false,
-      plugin: workbenchRpc,
-      inject: ["rpc", "tools", "sessions"],
+      plugin: swarmRpcPlugin,
+      inject: ["rpc", "swarm"],
     },
   ];
   return baseDefinitions.filter((entry): entry is BuiltinPluginDefinition => entry !== false);
@@ -632,7 +293,10 @@ export function featureEntries(dataDir: string, config: HarnessConfig, options: 
 }
 
 /** Core spine and full built-in plugin set at once, for direct programmatic hosts/tests. */
-export function agentPlugins(dataDir: string, options: CoreOptions & FeatureOptions & { config: HarnessConfig }): PluginEntry[] {
+export function agentPlugins(
+  dataDir: string,
+  options: CoreOptions & FeatureOptions & { config: HarnessConfig; gateway?: GatewayOptions },
+): PluginEntry[] {
   const llm = options.llm ?? options.config.llm;
   return [
     ...corePlugins(dataDir, llm === undefined ? options : { ...options, llm }),

@@ -57,6 +57,17 @@ function describeSchedule(task: ScheduledTaskInfo): string {
   const pad2 = (n: number) => String(n).padStart(2, "0");
   const hhmm = `${pad2(task.hour)}:${pad2(task.minute)}`;
   switch (task.frequency) {
+    case "interval": {
+      const mins = Math.max(5, Math.min(1440, Math.round(task.intervalMinutes ?? 30)));
+      return `每 ${mins} 分钟`;
+    }
+    case "once": {
+      if (typeof task.runAt === "number" && Number.isFinite(task.runAt)) {
+        const d = new Date(task.runAt);
+        return `单次 · ${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      }
+      return `单次 · ${hhmm}`;
+    }
     case "hourly":
       return `每小时第 ${pad2(task.minute)} 分`;
     case "weekdays":

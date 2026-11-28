@@ -4,6 +4,10 @@ Notable user-facing changes are documented in this file.
 
 ## Unreleased
 
+## 0.4.0
+
+- Bot Companion Mode & Swarm: added dual `Agent ⇄ Bot` mode with independent `BotCompanionHarness`, Live2D 4K companion stage, isolated WSL2/SSH virtual server & Live View takeover, Muse-grade Discovery (`动态` / `点子` / `目标` / `空间`) & right-sidebar execution trace, native in-Bot model/provider settings, first-class Host + Client plugin-contributed Connectors (`qianji.connectors`, `ctx.connectors`, `bot.connector.sections`), and multi-agent Swarm orchestration (`@qianji/swarm`).
+- Frontend Microkernel (ADR 0023): extracted core UI into typed `@qianji/client-slots` (46 canonical core slots, managed `@qianji/client-store` seats, 17 `@qianji/client-primitives`, automatic abdication fallback, Emergency Safe Mode, and `@layer plugin-skin` global theming).
 - Rebrand: renamed **Pi Desktop** to **Qianji (千机)**, moving runtime data and settings to `~/.qianji` and `%APPDATA%/qianji` (with automatic migration from `~/.pid` and `%APPDATA%/pid-desktop`).
 - Fix: opening Qianji while it is already running (for example while it sits in the tray) started a second copy. It now brings the existing window to the front.
 - Fix: 设置 › 调试 › 打开日志目录 failed with `Not allowed to open path`; it now opens `~/.qianji/logs`.

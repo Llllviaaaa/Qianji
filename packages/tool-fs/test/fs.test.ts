@@ -11,7 +11,9 @@ import {
   globToRegExp,
   grep,
   grepWithNode,
+  grepWithNodeAsync,
   inspectFileBeforeRead,
+  isWindowsDeviceBaseName,
   lineHash,
   ls,
   matchesGlob,
@@ -335,5 +337,25 @@ describe("file hygiene guards and UTF-8 BOM preservation", () => {
     expect(txtRes.isError).toBe(true);
     expect(txtRes.text).toContain(`${overTextSize} bytes`);
     expect(txtRes.text).toContain("32 MB");
+  });
+
+  it("guards against Windows reserved DOS device names and bounds non-rg grep scans cleanly", async () => {
+    expect(isWindowsDeviceBaseName("CON", "win32")).toBe(true);
+    expect(isWindowsDeviceBaseName("nul.txt", "win32")).toBe(true);
+    expect(isWindowsDeviceBaseName("com1.log", "win32")).toBe(true);
+    expect(isWindowsDeviceBaseName("config.ts", "win32")).toBe(false);
+    expect(isWindowsDeviceBaseName("CON", "linux")).toBe(false);
+
+    mkdirSync(join(cwd, ".ccache"), { recursive: true });
+    writeFileSync(join(cwd, ".ccache", "blob.txt"), "needle\n");
+
+    const asyncRes = await grepWithNodeAsync({ pattern: "needle" }, env());
+    expect(asyncRes.matches).toEqual([
+      "src/a.ts:2: const hidden = 'needle';",
+      "src/deep/b.test.ts:1: test('needle', () => {});",
+    ]);
+
+    const cappedRes = await grepWithNodeAsync({ pattern: "nonexistent" }, env(), { maxFiles: 1 });
+    expect(cappedRes.capped).toBe(true);
   });
 });

@@ -226,6 +226,13 @@ export function recordClientRenderError(pluginId: string | undefined, slotId: st
   };
   notifyClientStateListeners();
 
+  void reportFrontendError(`plugin-render:${pluginId}:${slotId}`, error, {
+    level: "warn",
+    ...(stack === undefined ? {} : { extraStack: stack }),
+    ...(activeFrontendErrorSink === undefined ? {} : { sink: activeFrontendErrorSink }),
+    ...(activeFrontendErrorLimiter === undefined ? {} : { limiter: activeFrontendErrorLimiter }),
+  }).catch(() => undefined);
+
   void activeErrorReporter?.({
     id: pluginId,
     phase: "render",

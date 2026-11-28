@@ -1,0 +1,456 @@
+/*
+ * Qianji Bot Mode — Muse-Grade Slide-Out Left Sidebar & Rail Enhancements (`src/styles/bot-sidebar.css`)
+ *
+ * Strictly bound to authoritative `--qj-*` and `--muse-*` tokens in `src/styles/tokens.css`.
+ * Imported in `src/styles/index.css` under `@layer components`.
+ */
+
+/* ── 1. Drawer Streaming Pulse Keyframes ───────────────────────────────── */
+
+@keyframes qj-sidebar-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.22);
+    opacity: 0.65;
+  }
+}
+
+/* ── 2. Resizable Muse Slide-Out Drawer Shell (`240px..400px`) ─────────── */
+
+.qj-muse-side-drawer {
+  position: relative;
+  min-width: 240px;
+  max-width: 400px;
+  height: 100%;
+  padding: 12px 10px 12px 12px;
+  gap: 10px;
+  background: var(--qj-bg-app);
+  border-right: 1px solid var(--qj-border-default);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  user-select: none;
+  z-index: 25;
+}
+
+.qj-drawer-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 32;
+  outline: none;
+}
+
+.qj-drawer-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 9999px;
+  background: transparent;
+  transition: background-color 150ms ease;
+}
+
+.qj-drawer-resize-handle:hover::after,
+.qj-drawer-resize-handle:focus-visible::after,
+.qj-drawer-resize-handle:active::after {
+  background: color-mix(in srgb, var(--qj-brand-primary) 65%, transparent);
+}
+
+/* ── 3. Top Search Pill + Options Trigger ──────────────────────────────── */
+
+.qj-muse-drawer-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.qj-muse-drawer-search {
+  height: 36px;
+  padding: 0 10px 0 12px;
+  border-radius: 9999px;
+  background: var(--qj-bg-subtle);
+  border: 1px solid transparent;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.qj-muse-drawer-search:focus-within {
+  border-color: var(--qj-border-strong);
+  background: var(--qj-bg-surface);
+}
+
+.qj-muse-drawer-search input {
+  font-size: 13px;
+}
+
+.qj-drawer-search-clear {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.qj-drawer-search-clear:hover {
+  background: var(--qj-bg-hover);
+  color: var(--qj-text-primary);
+}
+
+.qj-muse-drawer-icon-btn.active {
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-primary);
+}
+
+.qj-drawer-options-anchor {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* ── 4. Floating Popover Menus (`旁聊选项` & `更多对话操作`) ───────────── */
+
+.qj-drawer-popover {
+  position: absolute;
+  z-index: 210;
+  min-width: 204px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--muse-dialog-bg);
+  border: 1px solid var(--qj-border-default);
+  box-shadow: var(--muse-elevation-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: qj-modal-pop 150ms var(--qj-morph-ease) both;
+}
+
+.qj-drawer-options-popover {
+  top: calc(100% + 6px);
+  right: -28px;
+}
+
+.qj-drawer-thread-popover {
+  top: calc(100% + 2px);
+  right: 4px;
+  min-width: 184px;
+}
+
+.qj-drawer-menu-item {
+  width: 100%;
+  min-height: 33px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--qj-text-primary);
+  font-size: 12.8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.qj-drawer-menu-item:hover {
+  background: var(--qj-bg-hover);
+}
+
+.qj-drawer-menu-item.danger {
+  color: var(--qj-status-danger);
+}
+
+.qj-drawer-menu-item.danger:hover,
+.qj-drawer-menu-item.danger.confirming {
+  background: color-mix(in srgb, var(--qj-status-danger) 13%, transparent);
+}
+
+.qj-drawer-menu-label-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qj-drawer-check-slot {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--qj-brand-primary);
+  flex-shrink: 0;
+}
+
+.qj-drawer-menu-sep {
+  margin: 4px 6px;
+  border-top: 1px solid var(--qj-border-default);
+}
+
+/* ── 5. Main Chat Anchor & Section Headers ─────────────────────────────── */
+
+.qj-muse-drawer-scroll {
+  padding-right: 2px;
+  gap: 6px;
+}
+
+.qj-drawer-main-chat {
+  min-height: 40px;
+  height: auto;
+  padding: 7px 12px;
+  gap: 9px;
+  border-radius: 11px;
+}
+
+.qj-drawer-main-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--qj-status-success);
+  flex-shrink: 0;
+}
+
+.qj-drawer-main-dot.streaming {
+  background: var(--qj-brand-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--qj-brand-primary) 22%, transparent);
+  animation: qj-sidebar-pulse 1.4s ease-in-out infinite;
+}
+
+.qj-drawer-main-texts {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.qj-drawer-main-sub {
+  font-size: 11.5px;
+  font-weight: 450;
+  color: var(--qj-brand-primary);
+}
+
+.qj-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.qj-drawer-group-caption {
+  margin-top: 6px;
+  padding: 2px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 540;
+  color: var(--qj-text-muted);
+}
+
+.qj-muse-drawer-head {
+  margin-top: 6px;
+  padding: 2px 4px 2px 6px;
+}
+
+.qj-drawer-section-toggle {
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--qj-text-muted);
+  font-size: 12px;
+  font-weight: 540;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.qj-drawer-section-toggle:hover {
+  color: var(--qj-text-primary);
+  background: var(--qj-bg-hover);
+}
+
+.qj-drawer-count-pill {
+  min-width: 18px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-secondary);
+  font-size: 11px;
+  font-weight: 540;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── 6. Side-Chat Thread Rows, Hover Date/Menu, & Inline Rename ────────── */
+
+.qj-drawer-thread-row {
+  position: relative;
+  min-height: 38px;
+  height: auto;
+  padding: 3px 6px 3px 0;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.qj-drawer-thread-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 6px 5px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.qj-drawer-thread-top {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qj-drawer-thread-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.2px;
+  line-height: 1.3;
+  color: var(--qj-text-primary);
+}
+
+.qj-drawer-thread-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 430;
+  line-height: 1.25;
+  color: var(--qj-text-muted);
+}
+
+.qj-drawer-status-dot {
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 9999px;
+  background: var(--qj-text-muted);
+  flex-shrink: 0;
+}
+
+.qj-drawer-status-dot.running {
+  background: var(--qj-brand-primary);
+  animation: qj-sidebar-pulse 1.4s ease-in-out infinite;
+}
+
+.qj-drawer-mini-tag {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--qj-brand-soft);
+  color: var(--qj-brand-primary);
+  font-size: 10.5px;
+  font-weight: 540;
+  flex-shrink: 0;
+}
+
+.qj-drawer-mini-tag.muted {
+  background: var(--qj-bg-subtle);
+  color: var(--qj-text-muted);
+}
+
+.qj-drawer-row-tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  opacity: 0;
+  transform: translateX(2px);
+  transition: opacity 130ms ease, transform 130ms ease;
+}
+
+.qj-drawer-thread-row:hover .qj-drawer-row-tail,
+.qj-drawer-thread-row:focus-within .qj-drawer-row-tail,
+.qj-drawer-thread-row.menu-open .qj-drawer-row-tail {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.qj-drawer-row-date {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--qj-text-muted);
+  white-space: nowrap;
+}
+
+.qj-drawer-more-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--qj-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.qj-drawer-more-btn:hover {
+  background: var(--qj-bg-active);
+  color: var(--qj-text-primary);
+}
+
+.qj-drawer-rename-wrap {
+  flex: 1 1 auto;
+  padding: 3px 6px 3px 8px;
+}
+
+.qj-drawer-rename-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--qj-brand-primary);
+  background: var(--qj-bg-surface);
+  color: var(--qj-text-primary);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.qj-drawer-empty-hint {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--qj-text-muted);
+}

@@ -14,6 +14,7 @@ import { pluginClient } from "../../lib/pluginClient";
 import type { AppSettings } from "../../types";
 import { PluginCardDrawer } from "./PluginCardDrawer";
 import { hasRenderableConfigSchema } from "./PluginConfigSchemaForm";
+import { PluginModeScopePills } from "./PluginModeScopePills";
 import {
   canCheckUpdate,
   cleanDisplayName,
@@ -106,6 +107,18 @@ export function PluginCard({
   if (isDiskPlugin && plugin.hasHost) extCapabilities.push("后端 Host");
   if (isDiskPlugin && plugin.hasClient) extCapabilities.push("前端 UI");
   if (isDiskPlugin && plugin.hasSkills) extCapabilities.push("Agent 技能");
+  if (plugin.connectors !== undefined && plugin.connectors.length > 0) {
+    extCapabilities.push(`连接器 (${plugin.connectors.map((c) => c.name).join(" / ")})`);
+  }
+  const targets = plugin.targets ?? ["agent", "bot"];
+  const supportsDual = isDiskPlugin && targets.includes("agent") && targets.includes("bot");
+  const modeScopeBadge = isDiskPlugin
+    ? supportsDual
+      ? "双端可用"
+      : targets.includes("bot")
+        ? "仅 Bot"
+        : "仅 Agent"
+    : null;
 
   return (
     <article
@@ -164,9 +177,20 @@ export function PluginCard({
           {shouldShowVersion(plugin.version, plugin.tier) && (
             <span className="plugin-version">v{plugin.version}</span>
           )}
+          {modeScopeBadge !== null && <span className="plugin-quiet-pill">{modeScopeBadge}</span>}
           {cannotDisable && <span className="plugin-quiet-pill">必需</span>}
           {plugin.overridesBuiltin && <span className="plugin-quiet-pill">覆盖内置</span>}
         </div>
+
+        {supportsDual && (
+          <PluginModeScopePills
+            plugin={plugin}
+            title={title}
+            busy={busy}
+            scopeWorkspace={scopeWorkspace}
+            onRunTask={onRunTask}
+          />
+        )}
 
         {plugin.description !== undefined && plugin.description !== "" && (
           <p className="plugin-card-desc">{plugin.description}</p>

@@ -66,6 +66,17 @@ When `scripts/prepare-harness-host.mjs` bundles the Harness Host for compilation
 - DOMPurify (`dompurify`) — Dual-licensed under MPL-2.0 OR Apache-2.0 (selected under Apache-2.0 / permissive compatibility for HTML sanitization)
 - Lucide (`lucide-react`) — ISC License (UI icon set)
 - `ws` — MIT License (WebSocket server/client transport in Harness Host)
+- PixiJS (`pixi.js`) — MIT License, Copyright 2013-2026 Mathew Groves, Chad Engler, and contributors (2D/2.5D WebGL rendering engine for Bot Mode Live2D stage)
+- pixi-live2d-display (`pixi-live2d-display-lipsyncpatch`) — MIT License, Copyright Guansss, RaSan147, and contributors (Live2D Cubism 4 PixiJS integration and lip-sync bridge)
+- JSZip (`jszip`) — MIT License, Copyright 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso (in-memory `.zip` Live2D package unpacking)
+
+## Live2D Cubism Core & Sample Character Models
+
+- Assets: `public/live2d/live2dcubismcore.min.js` and official Cubism 4 sample characters `Mao` (`public/live2d/Mao/`), `Hiyori` (`public/live2d/Hiyori/`), and `Rice` (`public/live2d/Rice/`)
+- Upstream: https://www.live2d.com/ and https://github.com/Live2D/CubismWebSamples
+- License: Live2D Proprietary Software License Agreement & Live2D Free Material License Agreement (https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html, https://www.live2d.com/eula/live2d-free-material-license-agreement_en.html)
+- Copyright: Live2D Inc. (`Hiyori Momose` character illustration by Kani Biimu)
+- Used for: Built-in Bot Mode 2.5D Live2D companion stage, expressions, motions, and Cubism 4 `.moc3` WebGL runtime evaluation.
 
 ## MIT License
 

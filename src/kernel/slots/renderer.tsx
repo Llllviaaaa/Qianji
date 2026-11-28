@@ -333,6 +333,10 @@ export function SlotHost({
         compact={compact}
         hasFallbackCandidate={nextCandidate !== undefined}
         onCrash={(error) => {
+          if (entry.tier === "builtin" && nextCandidate === undefined) {
+            registry.abdication.reportLastResortCrash(slotKey, entry.id, entry.pluginId, error);
+            return;
+          }
           registry.abdication.abdicate({
             slotKey,
             entryId: entry.id,

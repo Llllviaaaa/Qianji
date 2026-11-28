@@ -6,6 +6,7 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
+import type { Agents } from "@qianji/agent";
 import { AgentBusyError, NoModelError } from "@qianji/agent";
 import { BlockAssembler, type Effort, type LlmRequest, type UserContent } from "@qianji/llm";
 import "@qianji/pricing";
@@ -216,8 +217,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     return found;
   };
 
+  const runnerFor = (sessionId: string): Agents => {
+    const bot = ctx.get("botHarness") as (Agents & { ownsSession?: (id: string) => boolean }) | undefined;
+    if (bot?.ownsSession?.(sessionId) === true) return bot;
+    return ctx.agents;
+  };
+
   const idle = (target: Session) => {
-    if (ctx.agents.status(target.id).running) throw new RpcError(ErrorCode.SessionBusy, `Session ${target.id} is running`);
+    if (runnerFor(target.id).status(target.id).running) throw new RpcError(ErrorCode.SessionBusy, `Session ${target.id} is running`);
   };
 
   const model = (p: Params): ModelChoice => {
@@ -228,7 +235,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     return choice;
   };
 
-  const status = (id: string): AgentStatusInfo => ctx.agents.status(id);
+  const status = (id: string): AgentStatusInfo => runnerFor(id).status(id);
 
   const toSessionInfo = (summary: SessionSummary): SessionInfo => {
     const cost = ctx.get("pricing")?.estimateSessionCost(summary) ?? 0;
@@ -317,26 +324,26 @@ export function apply(ctx: Context, config: Config = {}): void {
     "session.prompt": async (p): Promise<SessionPromptResult> => {
       const target = await session(p);
       const content = toUserContent(p.content);
-      return { seq: (await guarded(() => ctx.agents.prompt(target, content))).seq };
+      return { seq: (await guarded(() => runnerFor(target.id).prompt(target, content))).seq };
     },
 
     "session.steer": async (p): Promise<SessionPromptResult> => {
       const target = await session(p);
       const content = toUserContent(p.content);
-      const event = await guarded(() => ctx.agents.steer(target, content));
+      const event = await guarded(() => runnerFor(target.id).steer(target, content));
       return event === undefined ? {} : { seq: event.seq };
     },
 
     "session.followUp": async (p): Promise<SessionPromptResult> => {
       const target = await session(p);
       const content = toUserContent(p.content);
-      const event = await guarded(() => ctx.agents.followUp(target, content));
+      const event = await guarded(() => runnerFor(target.id).followUp(target, content));
       return event === undefined ? {} : { seq: event.seq };
     },
 
     "session.abort": async (p) => {
       const target = await session(p);
-      await ctx.agents.abort(target.id);
+      await runnerFor(target.id).abort(target.id);
       return {};
     },
 
@@ -378,7 +385,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     "session.compact": async (p, call): Promise<Partial<AppendResult>> => {
       const target = await session(p);
-      const event = await guarded(() => ctx.agents.compact(target, call.signal));
+      const event = await guarded(() => runnerFor(target.id).compact(target, call.signal));
       return event === undefined ? {} : { seq: event.seq };
     },
 

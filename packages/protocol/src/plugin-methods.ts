@@ -3,6 +3,40 @@
 /** Which tier a plugin comes from. `workspace` overrides `user`, which overrides `builtin`. */
 export type PluginTier = "builtin" | "user" | "workspace";
 
+/** Runtime mode target (`agent` workbench vs `bot` companion). */
+export type PluginTargetMode = "agent" | "bot";
+
+/** Per-mode enablement state within a plugin's declared `targets` ceiling. */
+export interface PluginModeScopes {
+  agent: boolean;
+  bot: boolean;
+}
+
+/** Connector metadata contributed by a plugin (`qianji.connectors` or `ctx.connectors`). */
+export interface PluginConnectorManifest {
+  id: string;
+  name: string;
+  tagline: string;
+  description?: string;
+  category?: "office" | "dev" | "automation";
+  publisher?: string;
+  authLabel?: string;
+  authMode?: "plugin" | "browser" | "mcp-oauth" | "mcp-direct";
+  browserAuthUrl?: string;
+  mcpUrl?: string;
+  trustedReadOnly?: boolean;
+  icon?: string;
+  iconBg?: string;
+  featured?: boolean;
+  starterPrompts?: string[];
+  capabilities?: Array<{
+    id: string;
+    label: string;
+    kind: "read" | "write";
+    defaultPerm?: "allow" | "ask" | "deny";
+  }>;
+}
+
 /** Runtime lifecycle state of a plugin. `pending` means enabled, waiting on required `inject` services. */
 export type PluginStatus = "active" | "pending" | "disabled" | "errored" | "untrusted";
 
@@ -95,6 +129,19 @@ export interface PluginInfo {
   error?: string;
   /** Latest client-side load or render error reported by the renderer, if any. */
   clientError?: PluginClientError;
+  /** Declared compatible host modes (`agent`, `bot`, or both). */
+  targets?: PluginTargetMode[];
+  /** Effective per-mode enablement state within `targets`. */
+  scopes?: PluginModeScopes;
+  /** Connectors contributed by this plugin (`qianji.connectors` / `ctx.connectors`). */
+  connectors?: PluginConnectorManifest[];
+}
+
+export interface PluginSetScopeParams {
+  id: string;
+  mode: PluginTargetMode;
+  enabled: boolean;
+  workspace?: string;
 }
 
 export interface PluginListParams {

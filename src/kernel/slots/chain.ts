@@ -80,7 +80,16 @@ export function resolveChainItems(
         continue;
       }
     }
-    matchedStack.push({ entry, selected, fallback: eligible[i + 1] });
+    const nextMatchingFallback = eligible.slice(i + 1).find((cand) => {
+      if (cand.select === undefined) return true;
+      try {
+        const res = cand.select(ownerProps);
+        return res !== null && res !== undefined && res !== false;
+      } catch {
+        return false;
+      }
+    });
+    matchedStack.push({ entry, selected, fallback: nextMatchingFallback });
     if (!entry.overlay) {
       break;
     }

@@ -278,6 +278,10 @@ export class SlotKernelErrorBoundary extends Component<
     this.props.onCrash?.(error, info);
   }
 
+  private readonly handleRetry = (): void => {
+    this.setState({ error: null });
+  };
+
   override render(): ReactNode {
     if (this.state.error !== null) {
       if (this.props.hasFallbackCandidate === true) {
@@ -291,7 +295,8 @@ export class SlotKernelErrorBoundary extends Component<
           style={{
             display: this.props.compact ? "inline-flex" : "flex",
             alignItems: "center",
-            gap: "6px",
+            justifyContent: "space-between",
+            gap: "8px",
             padding: this.props.compact ? "2px 6px" : "8px 12px",
             borderRadius: "6px",
             fontSize: "12px",
@@ -303,6 +308,22 @@ export class SlotKernelErrorBoundary extends Component<
           <span>
             槽位异常 ({this.props.pluginId}): {this.state.error.message || "渲染失败"}
           </span>
+          <button
+            type="button"
+            onClick={this.handleRetry}
+            style={{
+              padding: "2px 8px",
+              borderRadius: "4px",
+              border: "1px solid currentColor",
+              background: "transparent",
+              color: "inherit",
+              fontSize: "11px",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            重试
+          </button>
         </div>
       );
     }

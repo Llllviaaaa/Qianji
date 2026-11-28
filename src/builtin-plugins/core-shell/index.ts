@@ -77,26 +77,53 @@ export const coreShellPlugin: Plugin.Object = {
       return reg.getKeyedCandidates("workbench.panes", paneId).length > 0;
     };
 
-    // Dynamically re-bind all 5 user-customizable shortcuts whenever themeService settings change.
+    const isBotStageActive = (): boolean => {
+      const reg = ctx.slots?.registry;
+      if (reg === undefined || reg.getFactoryCandidates("bot.stage").length === 0) return false;
+      return ctx.navigationService.getSnapshot().shellMode === "bot";
+    };
+
+    const isBotStageMounted = (): boolean => {
+      const reg = ctx.slots?.registry;
+      return reg !== undefined && reg.getFactoryCandidates("bot.stage").length > 0;
+    };
+
+    // Dynamically re-bind all 6 user-customizable shortcuts whenever themeService settings change.
     const registerDynamicShortcuts = (): {
       readonly keysSig: string;
       readonly dispose: () => void;
     } => {
       const snap = ctx.themeService.getSnapshot();
       const kToggleSidebar = snap.shortcutToggleSidebar || "Ctrl+B";
+      const kToggleShellMode = snap.shortcutToggleShellMode || "Ctrl+Shift+M";
       const kSettings = snap.shortcutSettings || "Ctrl+,";
       const kNewChat = snap.shortcutNewChat || "Ctrl+Shift+N";
       const kTerminal = snap.shortcutTerminal || "Ctrl+Shift+T";
       const kChanges = snap.shortcutChanges || "Ctrl+Shift+G";
-      const keysSig = [kToggleSidebar, kSettings, kNewChat, kTerminal, kChanges].join("|");
+      const keysSig = [kToggleSidebar, kToggleShellMode, kSettings, kNewChat, kTerminal, kChanges].join("|");
 
       const disposers = [
+        ctx.shortcutService.register({
+          id: `${CORE_SHELL_PLUGIN_ID}:toggle-shell-mode`,
+          pluginId: CORE_SHELL_PLUGIN_ID,
+          key: kToggleShellMode,
+          label: "切换 Agent / Bot 形态",
+          allowInEditable: true,
+          when: () => isBotStageMounted(),
+          run: () => {
+            ctx.navigationService.toggleShellMode();
+          },
+        }),
         ctx.shortcutService.register({
           id: `${CORE_SHELL_PLUGIN_ID}:toggle-sidebar`,
           pluginId: CORE_SHELL_PLUGIN_ID,
           key: kToggleSidebar,
           label: "切换左侧栏",
-          when: (sc) => !sc.inEditable && !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
+          when: (sc) =>
+            !isBotStageActive() &&
+            !sc.inEditable &&
+            !sc.inTerminal &&
+            !ctx.navigationService.getSnapshot().settingsOpen,
           run: () => {
             if (typeof window !== "undefined") {
               const ev = new CustomEvent("qianji:sidebar-toggle-request", { cancelable: true });
@@ -116,6 +143,11 @@ export const coreShellPlugin: Plugin.Object = {
           label: "打开设置",
           allowInEditable: true,
           run: () => {
+            if (isBotStageActive() && typeof window !== "undefined") {
+              const ev = new CustomEvent("qianji:bot-open-settings", { cancelable: true });
+              window.dispatchEvent(ev);
+              if (ev.defaultPrevented) return;
+            }
             ctx.navigationService.openSettings("general");
           },
         }),
@@ -168,6 +200,7 @@ export const coreShellPlugin: Plugin.Object = {
       const snap = ctx.themeService.getSnapshot();
       const nextSig = [
         snap.shortcutToggleSidebar || "Ctrl+B",
+        snap.shortcutToggleShellMode || "Ctrl+Shift+M",
         snap.shortcutSettings || "Ctrl+,",
         snap.shortcutNewChat || "Ctrl+Shift+N",
         snap.shortcutTerminal || "Ctrl+Shift+T",
@@ -188,7 +221,7 @@ export const coreShellPlugin: Plugin.Object = {
       key: "Ctrl+K",
       label: "搜索会话与项目",
       allowInEditable: true,
-      when: (sc) => !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
+      when: (sc) => !isBotStageActive() && !sc.inTerminal && !ctx.navigationService.getSnapshot().settingsOpen,
       run: () => {
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("qianji:sidebar-search-open"));
@@ -216,7 +249,7 @@ export const coreShellPlugin: Plugin.Object = {
       key: "Ctrl+J",
       label: "切换集成终端",
       allowInEditable: true,
-      when: (sc) => !sc.inTerminal,
+      when: (sc) => !isBotStageActive() && !sc.inTerminal,
       run: dispatchTerminalShortcut,
     });
 
@@ -275,6 +308,18 @@ export const coreShellPlugin: Plugin.Object = {
           await ctx.workspaceService.openInFileManager();
         }
       },
+    });
+
+    ctx.effect(() => {
+      if (typeof window === "undefined") return () => undefined;
+      const onSetMode = (event: Event) => {
+        const detail = (event as CustomEvent<string>).detail;
+        if (detail === "bot" || detail === "agent") {
+          ctx.navigationService.setShellMode(detail);
+        }
+      };
+      window.addEventListener("qianji:set-shell-mode", onSetMode);
+      return () => window.removeEventListener("qianji:set-shell-mode", onSetMode);
     });
 
     // Notify user non-blockingly when a slot override abdicates back to fallback (ADR 0023 §5.1).

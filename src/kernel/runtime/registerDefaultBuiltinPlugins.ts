@@ -7,6 +7,7 @@
  * strict ESLint no-sibling-import boundary on `src/builtin-plugins/**` stays
  * 100% intact without any exception.
  */
+import { BOT_MODE_PLUGIN_ID, botModePlugin } from "../../builtin-plugins/bot-mode";
 import { CODE_REVIEW_PLUGIN_ID, codeReviewPlugin } from "../../builtin-plugins/code-review";
 import { CORE_COMPOSER_PLUGIN_ID, coreComposerPlugin } from "../../builtin-plugins/core-composer";
 import { CORE_CONVERSATION_PLUGIN_ID, coreConversationPlugin } from "../../builtin-plugins/core-conversation";
@@ -19,6 +20,7 @@ import { CORE_WORKBENCH_PLUGIN_ID, coreWorkbenchPlugin } from "../../builtin-plu
 import { DIAGRAM_VIEWER_PLUGIN_ID, diagramViewerPlugin } from "../../builtin-plugins/diagram-viewer";
 import { INTELLIGENT_UI_PLUGIN_ID, intelligentUiPlugin } from "../../builtin-plugins/intelligent-ui";
 import { SIDE_CHAT_PLUGIN_ID, sideChatPlugin } from "../../builtin-plugins/side-chat";
+import { SWARM_PLUGIN_ID, swarmBuiltinPlugin } from "../../builtin-plugins/swarm";
 import { WEB_PREVIEW_PLUGIN_ID, webPreviewPlugin } from "../../builtin-plugins/web-preview";
 import type { BuiltinCorePluginDescriptor } from "./builtinCorePlugins";
 
@@ -47,6 +49,8 @@ export const DEFAULT_BUILTIN_FEATURE_PLUGINS: readonly BuiltinCorePluginDescript
     defaultConfig: { enableMermaid: true, enablePlantUml: true },
   },
   { id: INTELLIGENT_UI_PLUGIN_ID, plugin: intelligentUiPlugin, canDisable: true, defaultEnabled: true },
+  { id: BOT_MODE_PLUGIN_ID, plugin: botModePlugin, canDisable: true, defaultEnabled: true },
+  { id: SWARM_PLUGIN_ID, plugin: swarmBuiltinPlugin, canDisable: true, defaultEnabled: true },
 ];
 
 /** All 13 default Vite-bundled built-in client plugins mounted during microkernel boot. */

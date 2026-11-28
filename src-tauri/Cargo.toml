@@ -1,6 +1,6 @@
 [package]
 name = "qianji"
-version = "0.3.0"
+version = "0.4.0"
 description = "Qianji (千机) - a local-first desktop environment fusing Agent Workbench, autonomous Bot, and IDE"
 authors = ["Qianji"]
 license = "Apache-2.0"

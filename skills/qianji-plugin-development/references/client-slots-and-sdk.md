@@ -44,6 +44,8 @@ Qianji ships **46 canonical core slots** (`CoreSlotMap` & `CORE_SLOT_SPECS` in `
 | **Workbench (6)** | `workbench.topbarControls` (`list`/`session-maybe`), `workbench.tilingGrid` (`single`/`session-maybe`), `workbench.panes` (`keyed`/`session-maybe`), `workbench.fileViewer` (`keyed`/`session-maybe`), `workbench.inspector.sections` (`list`/`session-maybe`), `workbench.bottom.tabs` (`keyed`/`session-maybe`) |
 | **Settings & Hub (4)** | `settings.shell` (`single`/`root`), `settings.pages` (`keyed`/`root`), `settings.sections` (`list`/`root`), `hub.pages` (`keyed`/`root`) |
 
+In addition to the 46 canonical core slots, `bot-mode` exposes the keyed slot **`bot.connector.sections`** (`keyed`/`root`, props `{ connectorId, pluginId?, connected }`) so Connector plugins with a `client.tsx` bundle can render custom interactive cards inside their Connector's detail page in Bot Settings.
+
 ### 1.2 Four `SlotKind` Dispatch Semantics & Onion `wrap`
 
 - **`single`**: Exclusive slot. Elects one winner by `slotOverrides > workspace > user > builtin > priority > registrationOrder`.

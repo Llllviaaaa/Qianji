@@ -199,6 +199,16 @@ export class AbdicationTracker {
     return record;
   }
 
+  /**
+   * Record a render crash for telemetry/logging when no fallback candidate exists
+   * on a built-in core slot, without abdicating the slot into an empty white screen.
+   */
+  reportLastResortCrash(slotKey: string, entryId: string, pluginId: string, error: unknown): void {
+    this.ensureErrorSubscription();
+    const errObj = error instanceof Error ? error : new Error(String(error));
+    this.recordError(pluginId, `${slotKey}:${entryId}`, errObj);
+  }
+
   /** Stable string key for a plugin's active `(etag, configKey, reloadEpoch)` cycle. */
   getCycleKey(pluginId: string): string {
     const c = this.getCycle(pluginId);

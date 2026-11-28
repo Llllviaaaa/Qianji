@@ -230,7 +230,7 @@ export function SettingsModal({
           </LayoutGroup>
 
           <div className="settings-nav-footer">
-            <span className="settings-nav-app">千机 · v0.3.0</span>
+            <span className="settings-nav-app">千机 · v0.4.0</span>
             <kbd>{form.shortcutSettings || "Ctrl+,"}</kbd>
           </div>
         </aside>

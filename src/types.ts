@@ -13,13 +13,7 @@ export interface Usage {
   cacheRead: number;
   cacheWrite: number;
   totalTokens?: number;
-  cost?: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-  };
+  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 }
 
 export type ModelThinkingLevel =
@@ -268,7 +262,7 @@ export interface ProjectConfig {
   hidden: boolean;
 }
 
-export type ScheduledFrequency = "hourly" | "daily" | "weekdays" | "weekly";
+export type ScheduledFrequency = "interval" | "hourly" | "daily" | "weekdays" | "weekly" | "once";
 export type ScheduledPermissionMode = "read-only" | "ask" | "workspace-write";
 
 export interface ScheduledTask {
@@ -277,6 +271,9 @@ export interface ScheduledTask {
   prompt: string;
   cwd: string;
   frequency: ScheduledFrequency;
+  intervalMinutes?: number | null;
+  runAt?: number | null;
+  scope?: "agent" | "bot";
   hour: number;
   minute: number;
   weekday: number;

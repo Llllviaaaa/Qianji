@@ -37,6 +37,7 @@
     "@qianji/session-jsonl": "*",
     "@qianji/session-search-fts": "*",
     "@qianji/subagents": "*",
+    "@qianji/swarm": "*",
     "@qianji/system-prompt": "*",
     "@qianji/tool-bash": "*",
     "@qianji/tool-fs": "*",

@@ -20,6 +20,7 @@ import {
 } from "./rootContext";
 import type {
   AppearanceCatalog,
+  BotTaskHandoffPayload,
   ComposerService,
   ComposerSessionBucket,
   ComposerSnapshot,
@@ -63,6 +64,7 @@ import type {
   TranscriptDensity,
   TranslateFn,
   TranslateParams,
+  UiShellMode,
   WorkbenchService,
   WorkbenchServiceSnapshot,
   WorkbenchSplitDirection,
@@ -290,6 +292,7 @@ export { useSafeMode, useSlotOverrides };
 
 export type {
   AppearanceCatalog,
+  BotTaskHandoffPayload,
   ComposerService,
   ComposerSessionBucket,
   ComposerSnapshot,
@@ -335,6 +338,7 @@ export type {
   TranscriptDensity,
   TranslateFn,
   TranslateParams,
+  UiShellMode,
   WorkbenchService,
   WorkbenchServiceSnapshot,
   WorkbenchSplitDirection,

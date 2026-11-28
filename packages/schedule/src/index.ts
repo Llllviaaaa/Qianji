@@ -27,7 +27,8 @@ import { RpcError } from "@qianji/rpc";
 import type { Session } from "@qianji/session";
 import "@qianji/ui";
 import {
-  nextScheduledRun,
+  clampIntervalMinutes,
+  nextRunAfter,
   timeoutMinutes,
   truncateOutput,
   validateTask,
@@ -177,7 +178,13 @@ export class Schedule extends Service {
     const id = typeof input.id === "string" && input.id !== "" ? input.id : randomUUID();
     const previous = this.tasks.find((task) => task.id === id);
     const task = validateTask({ ...input, id }, previous);
-    if (task.enabled) task.nextRunAt = nextScheduledRun(task, this.now());
+    if (task.enabled) {
+      const next = nextRunAfter(task, this.now());
+      if (next !== undefined) task.nextRunAt = next;
+      else delete task.nextRunAt;
+    } else {
+      delete task.nextRunAt;
+    }
     this.tasks = previous === undefined ? [...this.tasks, task] : this.tasks.map((item) => (item.id === id ? task : item));
     this.persist();
     this.ctx.emit("schedule/task", id, { ...task });
@@ -246,18 +253,51 @@ export class Schedule extends Service {
     this.running.set(id, handle);
 
     const startedAt = this.now();
-    const run: ScheduledRun = { id: randomUUID(), taskId: id, taskName: task.name, trigger, status: "running", startedAt, output: "" };
+    const fallback = this.config.defaultModel;
+    const resolvedModel = task.model ?? (typeof fallback === "function" ? fallback() : fallback);
+    const preCreatedSession =
+      resolvedModel !== undefined && existsSync(task.cwd)
+        ? this.ctx.sessions.create({ cwd: task.cwd })
+        : undefined;
+    if (preCreatedSession !== undefined) handle.sessionId = preCreatedSession.id;
+
+    const run: ScheduledRun = {
+      id: randomUUID(),
+      taskId: id,
+      taskName: task.name,
+      cwd: task.cwd,
+      ...(task.scope ? { scope: task.scope } : {}),
+      ...(preCreatedSession !== undefined ? { sessionId: preCreatedSession.id } : {}),
+      trigger,
+      status: "running",
+      startedAt,
+      output: "",
+    };
     this.updateTask(id, (entry) => {
       entry.lastRunAt = startedAt;
-      if (trigger === "scheduled") entry.nextRunAt = entry.enabled ? nextScheduledRun(entry, startedAt + 1_000) : undefined;
-      else if (entry.enabled && entry.nextRunAt === undefined) entry.nextRunAt = nextScheduledRun(entry, startedAt);
+      if (entry.frequency === "once") {
+        if (trigger === "scheduled") {
+          delete entry.nextRunAt;
+        } else if (entry.enabled && entry.nextRunAt === undefined) {
+          const next = nextRunAfter(entry, startedAt);
+          if (next !== undefined) entry.nextRunAt = next;
+        }
+      } else if (trigger === "scheduled") {
+        const afterMs = entry.frequency === "interval" ? startedAt : startedAt + 1_000;
+        const next = entry.enabled ? nextRunAfter(entry, afterMs) : undefined;
+        if (next !== undefined) entry.nextRunAt = next;
+        else delete entry.nextRunAt;
+      } else if (entry.enabled && entry.nextRunAt === undefined) {
+        const next = nextRunAfter(entry, startedAt);
+        if (next !== undefined) entry.nextRunAt = next;
+      }
       entry.lastStatus = "running";
       entry.lastMessage = "";
     });
     this.recordRun(run);
 
     try {
-      const { status, output, sessionId } = await this.execute(task, handle);
+      const { status, output, sessionId } = await this.execute(task, handle, resolvedModel, preCreatedSession);
       run.status = status;
       run.output = truncateOutput(output, 100_000);
       if (sessionId !== undefined) run.sessionId = sessionId;
@@ -273,16 +313,23 @@ export class Schedule extends Service {
     this.updateTask(id, (entry) => {
       entry.lastStatus = run.status;
       entry.lastMessage = truncateOutput(run.output, 2_000);
+      if (entry.frequency === "once" && trigger === "scheduled") {
+        entry.enabled = false;
+        delete entry.nextRunAt;
+      }
     });
     return { ...run };
   }
 
-  private async execute(task: ScheduledTask, handle: { cancelled: boolean; sessionId?: string }): Promise<{ status: RunStatus; output: string; sessionId?: string }> {
-    const fallback = this.config.defaultModel;
-    const model = task.model ?? (typeof fallback === "function" ? fallback() : fallback);
+  private async execute(
+    task: ScheduledTask,
+    handle: { cancelled: boolean; sessionId?: string },
+    model: { provider: string; model: string } | undefined,
+    existingSession?: Session,
+  ): Promise<{ status: RunStatus; output: string; sessionId?: string }> {
     if (model === undefined) return { status: "error", output: "No model: set the task's model or defaultModel in providers.json" };
     if (!existsSync(task.cwd)) return { status: "error", output: `The task's directory does not exist: ${task.cwd}` };
-    const session = this.ctx.sessions.create({ cwd: task.cwd });
+    const session = existingSession ?? this.ctx.sessions.create({ cwd: task.cwd });
     handle.sessionId = session.id;
     session.append("model", model);
     session.append("label", { title: `${task.name}（定时）` });
@@ -328,12 +375,31 @@ export class Schedule extends Service {
     }
     const now = this.now();
     for (const task of this.tasks) {
+      if (task.frequency === "interval") {
+        task.intervalMinutes = clampIntervalMinutes(task.intervalMinutes);
+      }
       if (task.lastStatus === "running") {
         task.lastStatus = "interrupted";
         task.lastMessage = "Qianji exited before this run completed.";
       }
-      if (!task.enabled) delete task.nextRunAt;
-      else if (task.nextRunAt === undefined) task.nextRunAt = nextScheduledRun(task, now);
+      if (!task.enabled) {
+        delete task.nextRunAt;
+      } else if (task.frequency === "once") {
+        if (task.lastRunAt !== undefined && (task.runAt === undefined || task.lastRunAt >= task.runAt)) {
+          task.enabled = false;
+          delete task.nextRunAt;
+        } else if (task.nextRunAt === undefined) {
+          const next = nextRunAfter(task, now);
+          if (next !== undefined) task.nextRunAt = next;
+          else {
+            task.enabled = false;
+            delete task.nextRunAt;
+          }
+        }
+      } else if (task.nextRunAt === undefined) {
+        const next = nextRunAfter(task, now);
+        if (next !== undefined) task.nextRunAt = next;
+      }
     }
     // Runs that were running when the host stopped.
     const recent = this.runs(undefined, RUN_HISTORY_LIMIT);

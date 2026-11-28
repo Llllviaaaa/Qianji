@@ -415,12 +415,17 @@ export interface LlmCompleteResult {
 
 // Scheduled tasks (ADR 0011).
 
+export type Frequency = "interval" | "hourly" | "daily" | "weekdays" | "weekly" | "once";
+
 export interface ScheduledTaskInfo {
   id: string;
   name: string;
   prompt: string;
   cwd: string;
-  frequency: "hourly" | "daily" | "weekdays" | "weekly";
+  frequency: Frequency;
+  intervalMinutes?: number;
+  runAt?: number;
+  scope?: "agent" | "bot";
   hour: number;
   minute: number;
   /** 0 = Sunday … 6 = Saturday. */
@@ -440,6 +445,8 @@ export interface ScheduledRunInfo {
   id: string;
   taskId: string;
   taskName: string;
+  cwd?: string;
+  scope?: "agent" | "bot";
   trigger: "scheduled" | "manual";
   status: "running" | "success" | "error" | "cancelled" | "timed-out" | "interrupted";
   startedAt: number;
