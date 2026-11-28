@@ -1,8 +1,9 @@
 /**
- * Streaming state machine that extracts leading `<think>...</think>` blocks
- * (case-insensitive, with optional `\r?\n` immediately after `<think>`) from
- * `delta.content` across arbitrary SSE chunk boundaries while immediately
- * flushing non-`<think>` tags (e.g. `<div>`, `<table`, `<thinking>`) as prose.
+ * Streaming state machine that extracts leading `<think>...</think>` and
+ * `<thinking>...</thinking>` blocks (case-insensitive, with optional `\r?\n`
+ * immediately after the opening tag) from `delta.content` across arbitrary SSE
+ * chunk boundaries while immediately flushing non-thinking tags (e.g. `<div>`,
+ * `<table`, `<thinkpad>`, `<section>`) as prose on the diverging character.
  */
 
 export interface ThinkSegment {
@@ -10,11 +11,14 @@ export interface ThinkSegment {
   text: string;
 }
 
-const OPEN_THINK_TAG = "<think>";
+const OPEN_THINK_STEM_LEN = "<think".length;
+const OPEN_THINKING_TAG = "<thinking>";
 const CLOSE_THINK_TAG = "</think>";
+const CLOSE_THINKING_TAG = "</thinking>";
 
 export class InlineThinkParser {
   private state: "leading" | "in-think" | "text" = "leading";
+  private activeCloseTag = CLOSE_THINK_TAG;
   private wsBuf = "";
   private tagBuf = "";
   private closeBuf = "";
@@ -22,6 +26,16 @@ export class InlineThinkParser {
   private pendingOpenCr = false;
   sawInput = false;
   sawThinkBlock = false;
+
+  private enterInThink(closeTag: string): void {
+    this.wsBuf = "";
+    this.tagBuf = "";
+    this.sawThinkBlock = true;
+    this.state = "in-think";
+    this.activeCloseTag = closeTag;
+    this.stripOpenNewline = true;
+    this.pendingOpenCr = false;
+  }
 
   push(chunk: string): ThinkSegment[] {
     if (chunk === "") return [];
@@ -50,10 +64,10 @@ export class InlineThinkParser {
         }
         return;
       }
-      const expected = CLOSE_THINK_TAG[this.closeBuf.length];
+      const expected = this.activeCloseTag[this.closeBuf.length];
       if (expected !== undefined && c.toLowerCase() === expected) {
         this.closeBuf += c;
-        if (this.closeBuf.length === CLOSE_THINK_TAG.length) {
+        if (this.closeBuf.length === this.activeCloseTag.length) {
           this.closeBuf = "";
           this.state = "leading";
           this.wsBuf = "";
@@ -88,16 +102,14 @@ export class InlineThinkParser {
             break;
           }
         } else {
-          const expected = OPEN_THINK_TAG[this.tagBuf.length];
-          if (expected !== undefined && ch.toLowerCase() === expected) {
+          const pos = this.tagBuf.length;
+          const lower = ch.toLowerCase();
+          if (pos === OPEN_THINK_STEM_LEN && ch === ">") {
+            this.enterInThink(CLOSE_THINK_TAG);
+          } else if (OPEN_THINKING_TAG[pos] !== undefined && lower === OPEN_THINKING_TAG[pos]) {
             this.tagBuf += ch;
-            if (this.tagBuf.length === OPEN_THINK_TAG.length) {
-              this.wsBuf = "";
-              this.tagBuf = "";
-              this.sawThinkBlock = true;
-              this.state = "in-think";
-              this.stripOpenNewline = true;
-              this.pendingOpenCr = false;
+            if (this.tagBuf.length === OPEN_THINKING_TAG.length) {
+              this.enterInThink(CLOSE_THINKING_TAG);
             }
           } else {
             const prefix = (this.sawThinkBlock ? "" : this.wsBuf) + this.tagBuf;

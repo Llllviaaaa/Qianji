@@ -180,6 +180,9 @@ export function builtinFeatureDefinitions(dataDir: string, config: HarnessConfig
           dataDir,
           ...(options.scheduler === undefined ? {} : { defaultModel: options.scheduler.defaultModel }),
           ...(options.pluginManager === undefined ? {} : { pluginManager: options.pluginManager }),
+          ...((config.computer.helper ?? options.computerHelper) === undefined
+            ? {}
+            : { computerHelperPath: config.computer.helper ?? options.computerHelper }),
         },
         Object.fromEntries(
           (["displayName", "avatarPreset", "serverMode", "localCpuCores", "localMemoryGb", "localDiskGb", "autoSleepIdle", "remoteHost", "remotePort", "remoteUser", "remoteWorkDir", "workspaceDir", "storageDir"] as const)

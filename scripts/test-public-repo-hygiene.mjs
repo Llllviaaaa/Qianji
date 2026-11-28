@@ -64,6 +64,16 @@ assert.equal(
   true,
   "the Harness Host resource directory must exist in a clean checkout",
 );
+assert.equal(
+  tauriConfig.bundle?.windows?.nsis?.installerHooks,
+  "windows/hooks.nsh",
+  "Windows NSIS bundle must register hooks.nsh to pre-enable Child Sessions on supported editions",
+);
+assert.equal(
+  existsSync("src-tauri/windows/hooks.nsh"),
+  true,
+  "the NSIS installer hook file must exist",
+);
 assert.match(thirdPartyNotices, /Bun runtime/, "bundled Bun runtime must have redistribution notices");
 const mcpVersions = [...mcpClient.matchAll(/clientInfo: \{ name: "Qianji", version: "([^"]+)" \}/g)].map((match) => match[1]);
 assert.ok(mcpVersions.length > 0, "the MCP client must declare a version");

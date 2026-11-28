@@ -91,9 +91,10 @@ test("fork the conversation from its latest checkpoint", async ({ app, harness }
   await send(app, "second");
   await expect(answer(app, "Second answer.")).toBeVisible();
   await settled(app);
+  const sessionsBeforeFork = (await harness.host.host.ctx.sessions.list()).length;
   await app.getByTitle("线程操作").click();
   await app.getByRole("button", { name: "从最新检查点分叉" }).click();
-  await expect.poll(async () => (await harness.host.host.ctx.sessions.list()).length).toBe(2);
+  await expect.poll(async () => (await harness.host.host.ctx.sessions.list()).length).toBe(sessionsBeforeFork + 1);
   await expect(answer(app, "First answer.")).toBeVisible();
   await expect(answer(app, "Second answer.")).toHaveCount(0);
   await send(app, "continue on the fork");

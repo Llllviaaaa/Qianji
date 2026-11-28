@@ -30,7 +30,7 @@ export const BOT_BROWSER_TOOLS = new Set([
   "browser_tabs",
 ]);
 
-const WELCOME_HTML_DATA_URL = `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html>
+export const WELCOME_HTML_DATA_URL = `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f7f8fa;color:#111214}
 .card{max-width:560px;padding:32px 36px;border-radius:20px;background:#fff;border:1px solid #e5e7eb;box-shadow:0 8px 24px rgba(0,0,0,.06)}
@@ -50,11 +50,16 @@ export class BotLiveViewController {
       wsl: WslContainerRuntime;
       ssh: SshRemoteRuntime;
       getRemotePassword: () => Promise<string | undefined>;
+      browserFactory?: (opts: { workspace: string; profileDir: string }) => BrowserSession;
     },
   ) {
     this.profileDir = join(options.botDir, "browser-profile");
     this.botWorkspaceDir = options.botWorkspaceDir;
     mkdirSync(this.profileDir, { recursive: true });
+  }
+
+  getBrowserSessionForInput(): BrowserSession {
+    return this.ensureBrowser();
   }
 
   async setPaths(next: { storageDir: string; botWorkspaceDir: string }): Promise<void> {
@@ -69,10 +74,12 @@ export class BotLiveViewController {
 
   private ensureBrowser(): BrowserSession {
     if (this.browser === null) {
-      this.browser = new BrowserSession({
-        workspace: this.botWorkspaceDir,
-        profileDir: this.profileDir,
-      });
+      this.browser = this.options.browserFactory
+        ? this.options.browserFactory({ workspace: this.botWorkspaceDir, profileDir: this.profileDir })
+        : new BrowserSession({
+            workspace: this.botWorkspaceDir,
+            profileDir: this.profileDir,
+          });
     }
     return this.browser;
   }
@@ -130,7 +137,8 @@ export class BotLiveViewController {
     const browser = this.ensureBrowser();
     await browser.ensureStarted(true);
     this.initializedBlank = true;
-    await browser.navigate(url);
+    const targetUrl = url.trim() === "about:qianji-live-view" ? WELCOME_HTML_DATA_URL : url;
+    await browser.navigate(targetUrl);
     return this.getSnapshot(vs);
   }
 

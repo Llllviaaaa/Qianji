@@ -15,7 +15,12 @@ const text = (output: ToolOutput) => output.content.map((block) => (block.type =
 describe("driver helpers", () => {
   it("normalizes URLs, refs, keys and workspace paths", () => {
     expect(normalizeUrl("example.com/a")).toBe("https://example.com/a");
+    expect(normalizeUrl("about:blank")).toBe("about:blank");
+    expect(normalizeUrl('data:text/html,<h1>Hello Qianji</h1><input id="q" />')).toBe(
+      'data:text/html,<h1>Hello Qianji</h1><input id="q" />',
+    );
     expect(() => normalizeUrl("file:///C:/x")).toThrow("Only http and https");
+    expect(() => normalizeUrl("javascript:alert(1)")).toThrow("Only http and https");
     expect([parseElementRef("e12"), parseElementRef(3), parseElementRef("x")]).toEqual([12, 3, undefined]);
     expect(keyEvent("Ctrl+Shift+a")).toMatchObject({ key: "a", code: "KeyA", modifiers: 10 });
     const root = join(tmpdir(), "ws");

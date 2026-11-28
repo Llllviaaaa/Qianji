@@ -733,14 +733,19 @@ describe("inline <think> visibility and intra-turn tool-result continuations", (
     expect(stripLeadingInlineThink("  \n<THINK>\nstep 1\n</THINK>\n <think>step 2</think>  ")).toBe("");
     expect(stripLeadingInlineThink("<think>unclosed reasoning at stream end")).toBe("");
     expect(stripLeadingInlineThink("<think>step 1</think>\nFinal visible answer.")).toBe("Final visible answer.");
-    expect(stripLeadingInlineThink("<thinking>not an inline think tag</thinking>")).toBe("<thinking>not an inline think tag</thinking>");
+    expect(stripLeadingInlineThink("<thinking>step 1</thinking>\nFinal visible answer.")).toBe("Final visible answer.");
+    expect(stripLeadingInlineThink("<thinkpad>not an inline think tag</thinkpad>")).toBe("<thinkpad>not an inline think tag</thinkpad>");
     expect(stripLeadingInlineThink("<div>hello</div>")).toBe("<div>hello</div>");
 
     expect(hasVisibleProse("<think>only thoughts</think>")).toBe(false);
+    expect(hasVisibleProse("<thinking>only thoughts</thinking>")).toBe(false);
     expect(hasVisibleProse("<think>unclosed thoughts")).toBe(false);
+    expect(hasVisibleProse("<thinking>unclosed thoughts")).toBe(false);
     expect(hasVisibleProse("<think></think>   ")).toBe(false);
+    expect(hasVisibleProse("<thinking></thinking>   ")).toBe(false);
     expect(hasVisibleProse("<think>thought</think>Visible summary")).toBe(true);
-    expect(hasVisibleProse("<thinking>xml</thinking>")).toBe(true);
+    expect(hasVisibleProse("<thinking>thought</thinking>Visible summary")).toBe(true);
+    expect(hasVisibleProse("<custom>xml</custom>")).toBe(true);
     expect(hasVisibleProse("a < b")).toBe(true);
   });
 
@@ -748,7 +753,8 @@ describe("inline <think> visibility and intra-turn tool-result continuations", (
     const events = log(() => [
       ev("user", { content: text("explain") }),
       assistant(text("<think>closed inline thought only</think>")),
-      assistant(text("  <think>first</think>\n<think>unclosed second thought")),
+      assistant(text("<thinking>closed inline thinking only</thinking>")),
+      assistant(text("  <think>first</think>\n<thinking>unclosed second thought")),
       assistant([
         { type: "text", text: "<think>planning tool</think>" },
         { type: "tool-call", id: "c1", name: "read", arguments: { path: "a.ts" } },

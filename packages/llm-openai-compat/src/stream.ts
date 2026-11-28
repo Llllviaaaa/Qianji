@@ -1,7 +1,7 @@
 /**
  * SSE stream translation for OpenAI-compatible Chat Completions endpoints,
- * including streaming `<think>...</think>` extraction, structured `delta.content`
- * parts, `choice.message` fallback, and multi-chunk `tool_calls` assembly.
+ * including streaming `<think>...</think>` / `<thinking>...</thinking>` extraction,
+ * structured `delta.content` parts, `choice.message` fallback, and multi-chunk `tool_calls` assembly.
  */
 import { errorFromPayload, LlmError, type FinishReason, type StreamChunk } from "@qianji/llm";
 import { InlineThinkParser, type ThinkSegment } from "./inline-think.ts";

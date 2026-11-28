@@ -27,6 +27,6 @@ ctx.plugin(openaiCompat, {
   - 拒绝 `reasoning_content` 时记忆该模型并移除后续回放；
   - 拒绝特定 `reasoning_effort` 取值时钳制重试（`minimal` → `low`，`xhigh`/`max` → `high`，其余 → `medium`）；
   - 拒绝自动推断的 `reasoning_effort`（`reasoningEffort === undefined`）时记忆该模型并去掉该字段重试。
-- 流式解析支持 `delta.reasoning_content` / `delta.reasoning`、结构化 `delta.content` 分片、`choice.message` 兜底与多分片 `tool_calls` 组装，并通过 `InlineThinkParser` 从 `delta.content` 开头跨分片实时提取 `<think>...</think>` 思考块。
+- 流式解析支持 `delta.reasoning_content` / `delta.reasoning`、结构化 `delta.content` 分片、`choice.message` 兜底与多分片 `tool_calls` 组装，并通过 `InlineThinkParser` 从 `delta.content` 开头跨分片实时提取 `<think>...</think>` 与 `<thinking>...</thinking>` 思考块。
 
 测试夹具（`test/fixtures`）是按 OpenAI 和 DeepSeek 的公开流式格式手工编写的。

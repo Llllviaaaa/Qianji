@@ -208,7 +208,7 @@ describe("Bot Sidebar, Natural-Language Scheduled Tasks & Step Execution Trace",
       isError: false,
     });
     sideSession.append("assistant", {
-      content: [{ type: "text", text: "<think>先核对重连退避计时器是否泄漏</think>\n已定位到重连心跳未清理旧定时器，建议统一收敛至单实例保活。" }],
+      content: [{ type: "text", text: "<thinking>先核对重连退避计时器是否泄漏</thinking>\n已定位到重连心跳未清理旧定时器，建议统一收敛至单实例保活。" }],
       model: { provider: "qianji", model: "bot-test" },
       usage: { inputTokens: 12, outputTokens: 24, cacheReadTokens: 0, cacheWriteTokens: 0 },
       stop: "stop",
@@ -218,7 +218,7 @@ describe("Bot Sidebar, Natural-Language Scheduled Tasks & Step Execution Trace",
     const afterSettle = await store.snapshot();
     const autoTitled = afterSettle.sideThreads.find((t) => t.id === untitled.id);
     expect(autoTitled?.title).toBe("排查 WebSocket 断线重连根因");
-    expect(autoTitled?.snippet).not.toContain("<think>");
+    expect(autoTitled?.snippet).not.toContain("<thinking>");
     expect(autoTitled?.snippet).toContain("已定位到重连心跳未清理旧定时器");
 
     const pinned = await store.updateSideChat({ id: untitled.id, title: "WS 保活专项排查", pinned: true });
@@ -232,7 +232,7 @@ describe("Bot Sidebar, Natural-Language Scheduled Tasks & Step Execution Trace",
       cwd: store.botWorkspaceDir, scope: "bot", sessionId: schedSession.id,
       trigger: "scheduled", status: "success", startedAt: FIXED_WED_MORNING,
       finishedAt: FIXED_WED_MORNING + 1_800, durationMs: 1_800,
-      output: "<think>内部过滤低优先级通知</think>共有 2 个核心 PR 通过全部门禁。",
+      output: "<THINKING>内部过滤低优先级通知</THINKING>共有 2 个核心 PR 通过全部门禁。",
     });
     expect(bridged).toBe(true);
     const bridgedSnap = await store.snapshot();
@@ -247,7 +247,7 @@ describe("Bot Sidebar, Natural-Language Scheduled Tasks & Step Execution Trace",
     expect(trace.steps[1]).toMatchObject({
       kind: "tool", toolName: "bash", commandOrInput: "git status -sb", exitCode: 0, status: "completed",
     });
-    expect(trace.summary).not.toContain("<think>");
+    expect(trace.summary).not.toContain("<thinking>");
     expect(trace.summary).toContain("已定位到重连心跳未清理旧定时器");
   });
 

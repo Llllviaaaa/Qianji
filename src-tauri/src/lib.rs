@@ -12,6 +12,7 @@ mod platform;
 mod secret_store;
 mod terminal;
 mod webview_guard;
+pub mod win_virtual_desktop;
 mod workspace_files;
 
 pub use desktop_log::install_panic_hook;
@@ -473,8 +474,7 @@ pub fn run_computer_helper() -> i32 {
     }
     #[cfg(not(windows))]
     {
-        println!(r#"{{"ok":false,"error":"Computer Use currently supports Windows only"}}"#);
-        1
+        win_virtual_desktop::run_non_windows_helper_fallback()
     }
 }
 

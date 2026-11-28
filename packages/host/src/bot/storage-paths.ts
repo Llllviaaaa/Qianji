@@ -13,7 +13,7 @@ import type { Session, SessionEvent, Sessions } from "@qianji/session";
 import type { PersistedBotState } from "./defaults.ts";
 
 const WORKSPACE_SKIP_DIRS = new Set(["tmp", "cache", ".temp", "node_modules"]);
-const RELOCATABLE_STORAGE_SUBDIRS = ["vm-cache", "shared-copies", "browser-profile"] as const;
+const RELOCATABLE_STORAGE_SUBDIRS = ["vm-cache", "shared-copies", "browser-profile", "win-pip-browser-profile"] as const;
 
 function normCmp(p: string): string {
   const resolved = resolve(p);

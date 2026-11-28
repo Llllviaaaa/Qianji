@@ -37,7 +37,7 @@ writeFileSync(join(dataDir, "providers.json"), JSON.stringify({
 // The key, encrypted for this user the way the desktop's Rust secret_store
 // writes it (CryptProtectData, no entropy).
 const protect = `Add-Type -AssemblyName System.Security; $bytes = [Text.Encoding]::UTF8.GetBytes('{"provider/smoke":"sk-smoke"}'); [IO.File]::WriteAllBytes('${join(dataDir, "secrets.dat")}', [Security.Cryptography.ProtectedData]::Protect($bytes, $null, 'CurrentUser'))`;
-const protectedKey = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(protect, "utf16le").toString("base64")], { encoding: "utf8", windowsHide: true });
+const protectedKey = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(protect, "utf16le").toString("base64")], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
 assert.equal(protectedKey.status, 0, `could not write the DPAPI fixture
 ${protectedKey.stderr}`);
 
@@ -75,8 +75,22 @@ try {
     const message = JSON.parse(data.toString());
     replies.get(message.id)?.(message);
   });
-  const call = (id, method, params) => new Promise((done) => {
-    replies.set(id, done);
+  const call = (id, method, params) => new Promise((done, fail) => {
+    const timer = setTimeout(() => {
+      replies.delete(id);
+      fail(new Error(`RPC ${method} (#${id}) timed out after 20s\n${stderr}`));
+    }, 20_000);
+    const onClosed = () => {
+      clearTimeout(timer);
+      replies.delete(id);
+      fail(new Error(`WebSocket closed before RPC ${method} (#${id}) replied\n${stderr}`));
+    };
+    socket.once("close", onClosed);
+    replies.set(id, (msg) => {
+      clearTimeout(timer);
+      socket.removeListener("close", onClosed);
+      done(msg);
+    });
     socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
   });
   const init = await call(1, "initialize", { protocolVersion: "1.0", client: { name: "smoke", version: "1" } });
@@ -171,14 +185,20 @@ ${stderr}`);
   const [code] = await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error("host did not exit after stdin closed")), 10_000))]);
   assert.equal(code, 0, `host must exit cleanly when stdin closes\n${stderr}`);
 
-  const headless = spawnSync(executable, ["run", "--data-dir", dataDir, "--cwd", dataDir, "hello"], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+  const headless = spawnSync(executable, ["run", "--data-dir", dataDir, "--cwd", dataDir, "hello"], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 });
   assert.equal(headless.status, 2, `a headless run without a model must exit 2
 ${headless.stderr}`);
   assert.match(headless.stderr, /no model/);
 } finally {
   provider.close();
-  if (child.exitCode === null) child.kill();
-  rmSync(dataDir, { recursive: true, force: true });
+  try { child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); } catch { /* Ignore */ }
+  if (child.exitCode === null) {
+    child.kill();
+    if (process.platform === "win32" && child.pid !== undefined) {
+      spawnSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
+    }
+  }
+  rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 console.log(`harness-host: qianji-harness ${appVersion} RPC, DPAPI secrets, providers, sessions, desktop settings reload, log file and diagnostics, workbench RPC, stdin shutdown and headless run passed`);

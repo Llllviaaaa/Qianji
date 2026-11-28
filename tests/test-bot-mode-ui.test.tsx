@@ -24,6 +24,7 @@ import {
   patchBotUi,
 } from "../src/builtin-plugins/bot-mode/botStore";
 import { triggerCharacterPoke } from "../src/builtin-plugins/bot-mode/botCharacterState";
+import { BotChatMessageStream } from "../src/builtin-plugins/bot-mode/BotChatMessageStream";
 import { filterVisibleBotMessages, stripBotThinking } from "../src/builtin-plugins/bot-mode/BotChatThreadWidgets";
 import { CORE_SHELL_PLUGIN_ID, coreShellPlugin } from "../src/builtin-plugins/core-shell";
 import { registerFrontendServices } from "../src/kernel/services";
@@ -132,15 +133,26 @@ describe("Bot Mode Frontend Microkernel & 1:1 Muse Integration", () => {
     triggerCharacterPoke(2);
     expect(harness.renderHtml()).toContain('data-action="celebrate"');
 
-    // Strip <think> blocks
+    // Strip <think>, <thinking>, <thought>, orphan prefill closing tags, and partial streaming tags at EOF
     expect(stripBotThinking("<think>先想一下</think>\n今晚没有安排。")).toBe("今晚没有安排。");
+    expect(stripBotThinking("<thinking>The bash tool is running in PowerShell...</thinking>\n查好了，一切正常。")).toBe("查好了，一切正常。");
+    expect(stripBotThinking("<THINKING>\n大写多行思考\n</THINKING>\n最终结论。")).toBe("最终结论。");
+    expect(stripBotThinking("<thought>推理步骤</thought>简短答复")).toBe("简短答复");
     expect(stripBotThinking("<think>正在推演中")).toBe("");
+    expect(stripBotThinking("<thinking>The bash tool is running in PowerShell without close")).toBe("");
+    expect(stripBotThinking("先说结论前缀。<thinking>中间夹杂内部独白</thinking>再补一句。")).toBe("先说结论前缀。再补一句。");
+    expect(stripBotThinking("Prefill orphan reasoning before close</thinking>\n真正的对外回复。")).toBe("真正的对外回复。");
+    expect(stripBotThinking("<thinking>内部思考</thinking>带杂散闭合标签</thinking>正文</think>")).toBe("带杂散闭合标签正文");
+    expect(stripBotThinking("<thinking>未闭合思考里出现 </think> 也不能泄漏后续内容")).toBe("");
+    expect(stripBotThinking("<thinkin")).toBe("");
+    expect(stripBotThinking("流式正文末尾半截标签</thinki")).toBe("流式正文末尾半截标签");
+    expect(stripBotThinking("1 < 2 且 a < b")).toBe("1 < 2 且 a < b");
 
     const filteredIdle = filterVisibleBotMessages(
       [
         { role: "user", content: "你好" },
         { role: "assistant", content: "" },
-        { role: "assistant", content: "<think>内部判断</think>" },
+        { role: "assistant", content: "<thinking>内部判断</thinking>" },
         { role: "assistant", content: "在的，今晚日程空着。" },
       ],
       false,
@@ -156,6 +168,123 @@ describe("Bot Mode Frontend Microkernel & 1:1 Muse Integration", () => {
       true,
     );
     expect(filteredStreaming).toHaveLength(2);
+
+    // Multi-step tool-loop collapsing in Bot chat (streaming vs settled + aborted fallback)
+    const renderStreamMarkup = (
+      rawMessages: ReadonlyArray<{ id: string; role: string; content: string; model?: string; toolCalls?: readonly unknown[] }>,
+      streaming: boolean,
+    ) => {
+      const visible = filterVisibleBotMessages(rawMessages, streaming);
+      const lastVis = visible[visible.length - 1];
+      const showTrailingThinking = streaming && (lastVis === undefined || lastVis.role === "user");
+      return renderToStaticMarkup(
+        createElement(BotChatMessageStream, {
+          isMain: true,
+          topTitle: "聊天",
+          isHydratingHistory: false,
+          isEmptyChat: visible.length === 0 && !streaming,
+          isStreaming: streaming,
+          showTrailingThinking,
+          visibleMessages: visible,
+          embeddedTasks: [],
+          runtimeError: null,
+          reactedIds: {},
+          moreMsgId: null,
+          onToggleReaction: () => undefined,
+          onQuote: () => undefined,
+          onToggleMore: () => undefined,
+          onCloseMore: () => undefined,
+          onCopy: () => undefined,
+          onBranchSideChat: () => undefined,
+          onOpenInWorkbench: () => undefined,
+          onSelectQuickOption: () => undefined,
+          onTriggerHandoff: () => undefined,
+          onOpenModels: () => undefined,
+        }),
+      );
+    };
+
+    // Before first assistant sub-message arrives while streaming -> exactly 1 typing indicator
+    const userOnlyStreamHtml = renderStreamMarkup([{ id: "u1", role: "user", content: "检查工作区状态" }], true);
+    expect(userOnlyStreamHtml.split('data-testid="bot-live-thinking"').length - 1).toBe(1);
+
+    // During multi-step tool execution + <thinking> -> pre-tool narration & <thinking> suppressed, exactly 1 typing indicator
+    const midToolMessages = [
+      { id: "u1", role: "user", content: "检查工作区状态" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "我先调用 PowerShell 检查一下目录…",
+        toolCalls: [{ id: "tc-1", name: "bash" }],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "<thinking>The bash tool is running in PowerShell...</thinking>\n再检查一下进程…",
+        toolCalls: [{ id: "tc-2", name: "bash" }],
+      },
+      {
+        id: "a3",
+        role: "assistant",
+        content: "<thinking>正在汇总最终答复",
+      },
+    ];
+    const midToolStreamHtml = renderStreamMarkup(midToolMessages, true);
+    expect(midToolStreamHtml.split('data-testid="bot-live-thinking"').length - 1).toBe(1);
+    expect(midToolStreamHtml.split('class="qj-sanctuary-bubble-bot"').length - 1).toBe(0);
+    expect(midToolStreamHtml).not.toContain("我先调用 PowerShell");
+    expect(midToolStreamHtml).not.toContain("The bash tool is running");
+    expect(midToolStreamHtml).not.toContain("再检查一下进程");
+
+    // Once final post-tool prose arrives & settles -> 1 clean final bubble, 0 typing indicators, 0 intermediate leaks
+    const settledToolMessages = [
+      ...midToolMessages.slice(0, 3),
+      {
+        id: "a3",
+        role: "assistant",
+        model: "grok-4.7",
+        content: "<thinking>汇总完毕</thinking>\n工作区目录与后台进程均正常。",
+      },
+    ];
+    const settledToolHtml = renderStreamMarkup(settledToolMessages, false);
+    expect(settledToolHtml.split('data-testid="bot-live-thinking"').length - 1).toBe(0);
+    expect(settledToolHtml.split('class="qj-sanctuary-bubble-bot"').length - 1).toBe(1);
+    expect(settledToolHtml).toContain("工作区目录与后台进程均正常。");
+    expect(settledToolHtml).toContain("grok-4.7");
+    expect(settledToolHtml).not.toContain("我先调用 PowerShell");
+    expect(settledToolHtml).not.toContain("The bash tool is running");
+    expect(settledToolHtml).not.toContain("汇总完毕");
+
+    // Settled turn aborted/max-turns after tool narration with no post-tool message preserves latest non-empty prose
+    const abortedAfterTool = filterVisibleBotMessages(
+      [
+        { id: "u1", role: "user", content: "执行两步任务" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "<thinking>第一步</thinking>\n已完成第一步备份，后续执行已中止。",
+          toolCalls: [{ id: "tc-1", name: "bash" }],
+        },
+      ],
+      false,
+    );
+    expect(abortedAfterTool).toHaveLength(2);
+    expect(abortedAfterTool[1]?.content).toBe("已完成第一步备份，后续执行已中止。");
+
+    // Subsequent proactive/handoff assistant messages without an intervening user message keep both settled bubbles
+    const withHandoffReturn = filterVisibleBotMessages(
+      [
+        { id: "u1", role: "user", content: "在顶部发消息也必须立即滚到底部看到最新消息" },
+        { id: "a1", role: "assistant", content: "收到，已自动定位到最新消息底部。" },
+        { id: "a2", role: "assistant", content: "Agent 工作台已完成接力回传：空间巡检完成" },
+      ],
+      false,
+    );
+    expect(withHandoffReturn.map((m) => m.content)).toEqual([
+      "在顶部发消息也必须立即滚到底部看到最新消息",
+      "收到，已自动定位到最新消息底部。",
+      "Agent 工作台已完成接力回传：空间巡检完成",
+    ]);
   });
 
   it("renders all 1:1 Muse views, Companion tabs, and 9-tab Settings / Virtual Server console", async () => {

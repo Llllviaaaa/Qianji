@@ -55,7 +55,15 @@ export function runWslSubprocess(
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      child.kill();
+      try { child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); } catch { /* Ignore */ }
+      try { child.kill(); } catch { /* Ignore */ }
+      if (process.platform === "win32" && child.pid !== undefined) {
+        try {
+          spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" }).unref();
+        } catch {
+          // Ignore best-effort tree termination.
+        }
+      }
       resolve({
         stdout,
         stderr: `${stderr}\nProcess timed out after ${timeoutMs}ms`.trim(),

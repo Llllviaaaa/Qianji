@@ -5,10 +5,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  BotActivityEntry,
+  BotComputerStudioSnapshot,
   BotConnectorItem,
   BotConnectorsConfig,
   BotFeedItem,
   BotGoalItem,
+  BotHandoffCompleteParams,
   BotSideThreadInfo,
   BotSnapshotResult,
   PendingBotApproval,
@@ -239,11 +242,13 @@ export function buildBotSnapshotResult(params: {
   memoryFile: string;
   soulContent: string;
   memoryUpdatedAt: string;
+  computerStudio?: BotComputerStudioSnapshot;
 }): BotSnapshotResult {
-  const { st, botWorkspaceDir, memoryFile, soulContent, memoryUpdatedAt } = params;
+  const { st, botWorkspaceDir, memoryFile, soulContent, memoryUpdatedAt, computerStudio } = params;
   const scanned = scanBotWorkspaceArtifacts(botWorkspaceDir);
   const memPrefs = extractLearnedPreferencesFromMemory(memoryFile);
   const normalizedCfg = ensureBotWorkspaceDefaults(st.connectorConfigs ?? buildDefaultConnectorsConfig());
+  const virtualServer = computerStudio ? { ...st.virtualServer, computerStudio } : st.virtualServer;
   return {
     mainSessionId: st.mainSessionId,
     mainSessionFile: `harness:${st.mainSessionId}`,
@@ -277,7 +282,8 @@ export function buildBotSnapshotResult(params: {
     pacing: st.pacing ?? buildDefaultPacingConfig(),
     connectorConfigs: normalizedCfg,
     awareness: st.awareness ?? buildDefaultAwareness(),
-    virtualServer: st.virtualServer,
+    virtualServer,
+    ...(computerStudio ? { computerStudio } : {}),
     embeddedTasks: st.embeddedTasks,
   };
 }
@@ -344,4 +350,43 @@ export async function resolveBotApprovalRecord(params: {
     description: summary,
   });
   return resolved;
+}
+
+const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+const SYNTHETIC_BOT_MODEL = { provider: "qianji", model: "bot-companion" };
+
+export async function syncBotSessionsModel(
+  sessions: Sessions,
+  st: PersistedBotState,
+  targetModel: { provider: string; model: string } | undefined,
+  includeSideThreads: boolean,
+): Promise<void> {
+  if (!targetModel?.provider || !targetModel.model) return;
+  const mainSess = await sessions.get(st.mainSessionId).catch(() => undefined);
+  mainSess?.setModel(targetModel);
+  if (includeSideThreads) {
+    for (const side of st.sideThreads) {
+      if (side.status === "running") continue;
+      const sideSess = await sessions.get(side.sessionId).catch(() => undefined);
+      sideSess?.setModel(targetModel);
+    }
+  }
+}
+
+export async function completeBotHandoffRecord(
+  sessions: Sessions,
+  st: PersistedBotState,
+  params: BotHandoffCompleteParams,
+): Promise<BotActivityEntry> {
+  const mainSession = await sessions.get(st.mainSessionId);
+  mainSession?.append("assistant", {
+    content: [{ type: "text", text: `Agent 工作台已完成接力回传：${params.summary}` }],
+    model: SYNTHETIC_BOT_MODEL,
+    usage: ZERO_USAGE,
+    stop: "stop",
+  });
+  return appendActivityRecord(st, {
+    title: params.title?.trim() || "完成 Agent 工作台接力回传",
+    description: params.summary,
+  });
 }

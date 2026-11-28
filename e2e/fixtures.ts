@@ -50,8 +50,13 @@ export const test = base.extend<{ harness: Harness; app: Page }>({
     Object.assign(harness, { token });
     await use(harness);
     await current.stop();
-    rmSync(dataDir, { recursive: true, force: true });
-    rmSync(workspace, { recursive: true, force: true });
+    for (const dir of [dataDir, workspace]) {
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } catch {
+        // Ignore transient Windows file-lock lag on temp fixture cleanup.
+      }
+    }
   },
 
   app: async ({ page, harness }, use) => {

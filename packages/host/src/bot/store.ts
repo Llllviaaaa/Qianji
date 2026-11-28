@@ -18,15 +18,17 @@ import type { Schedule, ScheduledRun } from "@qianji/schedule";
 import type { ModelRef, Session, Sessions } from "@qianji/session";
 import type { ToolCall, ToolEnv, ToolOutput } from "@qianji/tools";
 import { ConnectorHub, type ConnectorDelta, type ConnectorSecrets } from "./connectors/connector-hub.ts";
+import { VirtualComputerManager } from "./computer/manager.ts";
+import { ensureComputerStudioState } from "./computer/timeline-and-takeover.ts";
 import { buildDefaultAwareness, buildDefaultConnectorsConfig, normalizeAvatarPreset, type PersistedBotState } from "./defaults.ts";
 import { generateFeedEditionForState } from "./harness/bot-feed-edition.ts";
-import { BOT_BROWSER_TOOLS, BotLiveViewController } from "./live-view.ts";
+import { BotLiveViewController } from "./live-view.ts";
 import { SshRemoteRuntime } from "./ssh-runtime.ts";
 import { resolveBotStorageDir, resolveBotWorkspaceDir, syncBotRuntimePaths } from "./storage-paths.ts";
 import {
-  appendActivityRecord, buildBotSnapshotResult, createSideChatRecord, createSpaceRecord,
-  deleteSideChatRecord, deleteSpaceRecord, ensureBotFullAccessPermission, ensureMainBotSession,
-  loadOrCreatePersistedBotState, resolveBotApprovalRecord,
+  appendActivityRecord, buildBotSnapshotResult, completeBotHandoffRecord, createSideChatRecord,
+  createSpaceRecord, deleteSideChatRecord, deleteSpaceRecord, ensureBotFullAccessPermission,
+  ensureMainBotSession, loadOrCreatePersistedBotState, resolveBotApprovalRecord, syncBotSessionsModel,
 } from "./store-actions.ts";
 import {
   createRichFeedRecord, createRichGoalRecord, deleteFeedRecord, saveFeedInstructionsRecord,
@@ -45,14 +47,11 @@ import {
   recordSettledBotTurn, recordTurnProgressInState, updateSideChatRecord, type TurnRecordOptions,
 } from "./store-threads.ts";
 import { applyVirtualServerPatch, refreshLiveLocalMetrics, runVirtualServerAction, type ServerRuntimeDeps, type VirtualServerPatch } from "./virtual-server.ts";
-import { executeBotToolInVm, VM_BRIDGED_TOOLS } from "./vm-tool-bridge.ts";
 import { applyBotConfigOverlay, readBotMemoryFile, readBotSoulFile, readFileMtimeShortDate, writeBotSoulFile, writeFileAtomic, type BotStoreConfig } from "./workspace-scanner.ts";
 import { WslContainerRuntime } from "./wsl-runtime.ts";
 
 export type { BotStoreConfig };
 
-const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-const SYNTHETIC_BOT_MODEL = { provider: "qianji", model: "bot-companion" };
 const REMOTE_SECRET_ID = "bot/remote-ssh-password";
 const AUTO_SLEEP_IDLE_MS = 15 * 60_000;
 
@@ -64,6 +63,7 @@ export class BotStateStore {
   readonly wsl: WslContainerRuntime;
   readonly ssh: SshRemoteRuntime;
   readonly liveView: BotLiveViewController;
+  readonly computer: VirtualComputerManager;
   readonly connectorsHub: ConnectorHub;
   readonly vault: BotSecretVault;
 
@@ -89,11 +89,19 @@ export class BotStateStore {
 
     this.vault = new BotSecretVault(credentials);
     this.connectorsHub = new ConnectorHub(config.processProbe);
-    this.wsl = new WslContainerRuntime({ dataDir: config.dataDir, botDir: this.botStorageDir, botWorkspaceDir: this.botWorkspaceDir, distroName: config.distroName });
+    this.wsl = new WslContainerRuntime({ dataDir: config.dataDir, botDir: this.botStorageDir, botWorkspaceDir: this.botWorkspaceDir, distroName: config.distroName, wslSupported: config.wslSupported });
     this.ssh = new SshRemoteRuntime();
     this.liveView = new BotLiveViewController({
       botDir: this.botStorageDir, botWorkspaceDir: this.botWorkspaceDir,
       wsl: this.wsl, ssh: this.ssh, getRemotePassword: () => this.getRemotePassword(),
+      browserFactory: config.browserFactory,
+    });
+    this.computer = new VirtualComputerManager({
+      ensureLoaded: () => this.ensureLoaded(), persist: () => this.persistState(),
+      getBotStorageDir: () => this.botStorageDir, getBotWorkspaceDir: () => this.botWorkspaceDir,
+      getComputerHelperPath: () => this.config.computerHelperPath ?? process.env.QIANJI_COMPUTER_HELPER ?? process.env.PID_COMPUTER_HELPER,
+      customHelperInvoker: config.computerHelperInvoker, wsl: this.wsl, ssh: this.ssh, liveView: this.liveView,
+      vault: this.vault, getSoul: () => this.readSoul(), getMemory: () => this.readMemory(),
     });
   }
 
@@ -217,6 +225,9 @@ export class BotStateStore {
   async snapshot(): Promise<BotSnapshotResult> {
     const st = await this.ensureLoaded();
     await refreshLiveLocalMetrics(st, this.getServerDeps());
+    const cs = ensureComputerStudioState(st);
+    cs.remoteNodes = await this.computer.remoteNodes.syncLegacyRemoteWithNodes(st.virtualServer, cs.remoteNodes);
+    const computerStudio = this.computer.buildEmbeddedSnapshot(st);
     this.connectorsHub.ensureConfig(st);
     const cfg = st.connectorConfigs ?? buildDefaultConnectorsConfig();
     await populateConnectorSecretFlags(this.vault, cfg);
@@ -224,6 +235,7 @@ export class BotStateStore {
     return buildBotSnapshotResult({
       st, botWorkspaceDir: this.botWorkspaceDir, memoryFile: this.memoryFile,
       soulContent: this.readSoul(), memoryUpdatedAt: readFileMtimeShortDate(this.memoryFile),
+      computerStudio,
     });
   }
 
@@ -237,19 +249,7 @@ export class BotStateStore {
     }
     applyBotProactivePatch(st, patch);
     await this.syncRuntimePaths(st, prevWs, prevStorage);
-    const effectivePrimary = st.modelConfig?.primary ?? this.config.defaultModel?.();
-    if (effectivePrimary?.provider && effectivePrimary?.model) {
-      const targetModel = { provider: effectivePrimary.provider, model: effectivePrimary.model };
-      const mainSess = await this.sessions.get(st.mainSessionId).catch(() => undefined);
-      mainSess?.setModel(targetModel);
-      if (patch.modelConfig !== undefined) {
-        for (const side of st.sideThreads) {
-          if (side.status === "running") continue;
-          const sideSess = await this.sessions.get(side.sessionId).catch(() => undefined);
-          sideSess?.setModel(targetModel);
-        }
-      }
-    }
+    await syncBotSessionsModel(this.sessions, st, this.resolvePrimaryModel(st), patch.modelConfig !== undefined);
     this.persistState();
     return this.snapshot();
   }
@@ -270,20 +270,18 @@ export class BotStateStore {
     if (!this.isBotSession(env.sessionId)) return undefined;
     const st = await this.ensureLoaded();
     this.lastVmActivityAt = Date.now();
-    if (BOT_BROWSER_TOOLS.has(call.name)) return this.liveView.executeBrowserTool(call);
-    if (!VM_BRIDGED_TOOLS.has(call.name)) return undefined;
-    if (st.virtualServer.mode === "local" && !this.wsl.isSupported()) return undefined;
-
     this.activeVmExecCount += 1;
     try {
-      return await executeBotToolInVm(call, env, {
-        status: st.virtualServer, hostWorkspaceDir: this.botWorkspaceDir,
-        wsl: this.wsl, ssh: this.ssh, getRemotePassword: () => this.getRemotePassword(),
-      });
+      return await this.computer.executeBotTool(call, env, st);
     } finally {
       this.activeVmExecCount = Math.max(0, this.activeVmExecCount - 1);
       this.lastVmActivityAt = Date.now();
     }
+  }
+
+  async recordFallbackBotTool(call: ToolCall, out: ToolOutput): Promise<void> {
+    const st = await this.ensureLoaded();
+    if (this.computer.tracker.recordToolCall(st, call, out)) this.persistState();
   }
 
   async checkIdleAutoSleep(): Promise<boolean> {
@@ -462,17 +460,24 @@ export class BotStateStore {
     applyVirtualServerPatch(st, patch, this.botWorkspaceDir);
     await this.syncRuntimePaths(st, prevWs, prevStorage);
     await refreshLiveLocalMetrics(st, this.getServerDeps(), true);
+    const cs = ensureComputerStudioState(st);
+    cs.remoteNodes = await this.computer.remoteNodes.syncLegacyRemoteWithNodes(st.virtualServer, cs.remoteNodes);
+    st.virtualServer.computerStudio = this.computer.buildEmbeddedSnapshot(st);
     this.persistState();
     return st.virtualServer;
   }
   async performServerAction(action: BotServerActionKind): Promise<BotServerActionResult> {
     const st = await this.ensureLoaded();
     const res = await runVirtualServerAction(st, action, this.getServerDeps(), (act) => appendActivityRecord(st, act));
+    const cs = ensureComputerStudioState(st);
+    cs.remoteNodes = await this.computer.remoteNodes.syncLegacyRemoteWithNodes(st.virtualServer, cs.remoteNodes);
+    st.virtualServer.computerStudio = this.computer.buildEmbeddedSnapshot(st);
     this.persistState();
     return res;
   }
   async resetAllBotData(): Promise<BotSnapshotResult> {
     const prev = await this.ensureLoaded();
+    await this.computer.dispose();
     await this.sessions.delete(prev.mainSessionId).catch(() => false);
     for (const side of prev.sideThreads) await this.sessions.delete(side.sessionId).catch(() => false);
     this.botSessionIds.clear();
@@ -481,10 +486,7 @@ export class BotStateStore {
     return this.snapshot();
   }
   async completeHandoff(params: BotHandoffCompleteParams): Promise<BotActivityEntry> {
-    const st = await this.ensureLoaded();
-    const mainSession = await this.sessions.get(st.mainSessionId);
-    mainSession?.append("assistant", { content: [{ type: "text", text: `Agent 工作台已完成接力回传：${params.summary}` }], model: SYNTHETIC_BOT_MODEL, usage: ZERO_USAGE, stop: "stop" });
-    const activity = appendActivityRecord(st, { title: params.title?.trim() || "完成 Agent 工作台接力回传", description: params.summary });
+    const activity = await completeBotHandoffRecord(this.sessions, await this.ensureLoaded(), params);
     this.persistState();
     return activity;
   }

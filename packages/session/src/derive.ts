@@ -29,11 +29,11 @@ export const UNKNOWN_OUTCOME_TOOL_RESULT =
   "[TOOL_OUTCOME_UNKNOWN] The tool call was interrupted before it returned a result; retry read-only calls directly, and verify workspace/external state before re-running mutating calls.";
 export const INTERRUPTED_TOOL_RESULT = UNKNOWN_OUTCOME_TOOL_RESULT;
 
-const LEADING_INLINE_THINK_RE = /^\s*<think>(?:\r?\n)?[\s\S]*?(?:<\/think>\s*|$)/i;
+const LEADING_INLINE_THINK_RE = /^\s*<(think(?:ing)?)>(?:\r?\n)?[\s\S]*?(?:<\/\1>\s*|$)/i;
 
 /**
- * Strip leading `<think>...</think>` blocks (including consecutive leading blocks
- * and an unclosed trailing `<think>...` at end of string).
+ * Strip leading `<think>...</think>` and `<thinking>...</thinking>` blocks
+ * (including consecutive leading blocks and an unclosed trailing block at EOF).
  */
 export function stripLeadingInlineThink(raw: string): string {
   let remaining = raw;
@@ -45,7 +45,7 @@ export function stripLeadingInlineThink(raw: string): string {
   return remaining;
 }
 
-/** Whether `text` contains visible prose outside leading `<think>...</think>` blocks. */
+/** Whether `text` contains visible prose outside leading `<think>` / `<thinking>` blocks. */
 export function hasVisibleProse(text: string): boolean {
   return stripLeadingInlineThink(text).trim() !== "";
 }

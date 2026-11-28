@@ -25,6 +25,7 @@ import {
 import { runMcpOAuthFlow } from "./connectors/mcp-oauth.ts";
 import { registerBotDiscoveryRpc } from "./bot-discovery-rpc.ts";
 import { registerBotThreadsRpc } from "./bot-threads-rpc.ts";
+import { registerBotComputerRpc } from "./computer/bot-computer-rpc.ts";
 import type { ProactivePulseEngine } from "./harness/bot-proactive-pulse.ts";
 import { listConnectorsForPlugin, registerBotPluginConnectorRpc } from "./plugin-connector-rpc.ts";
 import type { BotProactivePatch } from "./store-proactive.ts";
@@ -81,6 +82,7 @@ export function registerBotRpcMethods(
   registerBotPluginConnectorRpc(rpcCtx, store, getPluginManager, notifyUpdated);
   registerBotThreadsRpc(rpcCtx, store, notifyUpdated);
   registerBotDiscoveryRpc(rpcCtx, store, pulse, notifyUpdated);
+  registerBotComputerRpc(rpcCtx, store, notifyUpdated);
 
   const resolveCustomBrowserSpec = async (connectorId: string): Promise<BrowserAuthSpec | undefined> => {
     if (getBrowserAuthSpec(connectorId)) return undefined;

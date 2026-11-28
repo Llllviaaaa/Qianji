@@ -193,7 +193,7 @@ describe("anthropic adapter", () => {
     expect(tail?.[1]?.cache_control).toBeUndefined();
   });
 
-  it("downgrades foreign thinking blocks, strips foreign signatures, normalizes tool IDs, and drops orphans", () => {
+  it("drops foreign thinking blocks, preserves native signed thinking, normalizes tool IDs, and drops orphans", () => {
     const longCallId = "call/gemini.sub:" + "q".repeat(70);
     const body = adapter.buildRequestBody({
       ...request,
@@ -215,10 +215,11 @@ describe("anthropic adapter", () => {
     });
     const messages = body.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
     expect(messages).toHaveLength(3);
+    expect(JSON.stringify(messages)).not.toContain("Gemini thought");
+    expect(JSON.stringify(messages)).not.toContain("<thinking>");
     const assistantContent = messages[1]?.content ?? [];
-    expect(assistantContent[0]).toEqual({ type: "text", text: "<thinking>\nGemini thought\n</thinking>" });
-    expect(assistantContent[1]).toEqual({ type: "thinking", thinking: "Claude thought", signature: "ant-sig" });
-    const toolUse = assistantContent[2];
+    expect(assistantContent[0]).toEqual({ type: "thinking", thinking: "Claude thought", signature: "ant-sig" });
+    const toolUse = assistantContent[1];
     expect(toolUse?.type).toBe("tool_use");
     expect(typeof toolUse?.id).toBe("string");
     expect((toolUse?.id as string).length).toBeLessThanOrEqual(64);

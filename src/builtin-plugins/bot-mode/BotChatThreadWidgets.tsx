@@ -11,6 +11,7 @@ import {
   GitBranch,
   LoaderCircle,
   Menu,
+  Monitor,
   MoreHorizontal,
   PanelRight,
   Phone,
@@ -21,48 +22,15 @@ import {
 } from "lucide-react";
 import type { SessionServiceSnapshot } from "@qianji/client";
 import { Markdown } from "@qianji/client-primitives";
+import {
+  extractBotQuickOptions,
+  filterVisibleBotMessages,
+  stripBotThinking,
+} from "./botChatMessageFilter";
+
+export { extractBotQuickOptions, filterVisibleBotMessages, stripBotThinking };
 
 type BotCatalogModel = SessionServiceSnapshot["availableModels"][number];
-
-export function stripBotThinking(raw: string): string {
-  if (!raw.includes("<think>")) return raw;
-  return raw
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/<think>[\s\S]*$/i, "")
-    .trimStart();
-}
-
-export function extractBotQuickOptions(text: string): {
-  readonly cleanBody: string;
-  readonly options: readonly string[];
-} {
-  const closedMatch = /\[\[\s*options\s*:\s*([\s\S]*?)\]\]\s*$/i.exec(text);
-  if (closedMatch !== null) {
-    const rawList = closedMatch[1] ?? "";
-    const options = rawList
-      .split(/\||｜/)
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0);
-    const cleanBody = text.slice(0, closedMatch.index).trimEnd();
-    return { cleanBody, options };
-  }
-  const openIdx = text.search(/\[\[\s*options\s*:/i);
-  if (openIdx >= 0) {
-    return { cleanBody: text.slice(0, openIdx).trimEnd(), options: [] };
-  }
-  return { cleanBody: text, options: [] };
-}
-
-export function filterVisibleBotMessages<
-  T extends { readonly role: string; readonly content: string },
->(messages: readonly T[], isStreaming: boolean): readonly T[] {
-  const lastRawIdx = messages.length - 1;
-  return messages.filter((msg, idx) => {
-    if (msg.role === "user") return true;
-    if (stripBotThinking(msg.content).trim() !== "") return true;
-    return isStreaming && idx === lastRawIdx;
-  });
-}
 
 export function BotLiveThinkingRow(): ReactElement {
   return (
@@ -94,6 +62,8 @@ export function BotChatFloatingTopbar(props: {
   readonly drawerVisible: boolean;
   readonly compactSplit: boolean;
   readonly rightPanelOpen: boolean;
+  readonly computerOpen?: boolean;
+  readonly computerTakeoverAlert?: boolean;
   readonly voiceCallActive: boolean;
   readonly pendingApprovalsCount: number;
   readonly modelLabel?: string;
@@ -105,6 +75,7 @@ export function BotChatFloatingTopbar(props: {
   readonly onOpenModels?: () => void;
   readonly onOpenApprovals: () => void;
   readonly onToggleVoice: () => void;
+  readonly onToggleComputer?: () => void;
   readonly onOpenRightPanel: () => void;
 }): ReactElement {
   const {
@@ -113,6 +84,8 @@ export function BotChatFloatingTopbar(props: {
     drawerVisible,
     compactSplit,
     rightPanelOpen,
+    computerOpen = false,
+    computerTakeoverAlert = false,
     voiceCallActive,
     pendingApprovalsCount,
     modelLabel,
@@ -124,6 +97,7 @@ export function BotChatFloatingTopbar(props: {
     onOpenModels,
     onOpenApprovals,
     onToggleVoice,
+    onToggleComputer,
     onOpenRightPanel,
   } = props;
 
@@ -213,9 +187,7 @@ export function BotChatFloatingTopbar(props: {
                   >
                     <div className="qj-bot-model-opt-copy">
                       <span className="qj-bot-model-opt-name">跟随默认模型</span>
-                      {defaultModelLabel && (
-                        <span className="qj-bot-model-opt-sub">{defaultModelLabel}</span>
-                      )}
+                      {defaultModelLabel && <span className="qj-bot-model-opt-sub">{defaultModelLabel}</span>}
                     </div>
                     {selectedPrimaryKey === "" && <Check size={14} strokeWidth={2.1} />}
                   </button>
@@ -283,7 +255,22 @@ export function BotChatFloatingTopbar(props: {
           <span>{voiceCallActive ? "通话中" : "通话"}</span>
         </button>
 
-        {!compactSplit && !rightPanelOpen && (
+        {!compactSplit && onToggleComputer !== undefined && (
+          <button
+            type="button"
+            data-testid="bot-header-computer-btn"
+            aria-pressed={computerOpen}
+            title={computerOpen ? "收起千机的电脑面板" : "打开千机的电脑面板"}
+            aria-label={computerOpen ? "收起千机的电脑面板" : "打开千机的电脑面板"}
+            className={`qj-muse-pill-icon-btn qj-cs-header-monitor-btn${computerOpen ? " active" : ""}${computerTakeoverAlert ? " is-alert" : ""}`}
+            onClick={onToggleComputer}
+          >
+            <Monitor size={15.5} strokeWidth={1.85} aria-hidden="true" />
+            {computerTakeoverAlert && <span className="qj-cs-header-monitor-dot" aria-hidden="true" />}
+          </button>
+        )}
+
+        {!compactSplit && !rightPanelOpen && !computerOpen && (
           <button
             id="btn-toggle-right-panel"
             type="button"
@@ -317,19 +304,9 @@ export function BotAssistantBubbleRow(props: {
   readonly onSelectQuickOption: (option: string) => void;
 }): ReactElement {
   const {
-    cleanContent,
-    replyModel,
-    isStreaming,
-    reacted,
-    moreOpen,
-    onToggleReaction,
-    onQuote,
-    onToggleMore,
-    onCloseMore,
-    onCopy,
-    onBranchSideChat,
-    onOpenInWorkbench,
-    onSelectQuickOption,
+    cleanContent, replyModel, isStreaming, reacted, moreOpen,
+    onToggleReaction, onQuote, onToggleMore, onCloseMore,
+    onCopy, onBranchSideChat, onOpenInWorkbench, onSelectQuickOption,
   } = props;
 
   const { cleanBody, options } = extractBotQuickOptions(cleanContent);
@@ -362,28 +339,13 @@ export function BotAssistantBubbleRow(props: {
             {replyModel}
           </span>
         )}
-        <button
-          type="button"
-          className={`qj-msg-action-btn${reacted ? " active" : ""}`}
-          title="留下心情"
-          onClick={onToggleReaction}
-        >
+        <button type="button" className={`qj-msg-action-btn${reacted ? " active" : ""}`} title="留下心情" onClick={onToggleReaction}>
           <Smile size={14.5} />
         </button>
-        <button
-          type="button"
-          className="qj-msg-action-btn"
-          title="引用回复"
-          onClick={() => onQuote(copyTarget.slice(0, 100))}
-        >
+        <button type="button" className="qj-msg-action-btn" title="引用回复" onClick={() => onQuote(copyTarget.slice(0, 100))}>
           <Reply size={14.5} />
         </button>
-        <button
-          type="button"
-          className="qj-msg-action-btn"
-          title="更多操作"
-          onClick={onToggleMore}
-        >
+        <button type="button" className="qj-msg-action-btn" title="更多操作" onClick={onToggleMore}>
           <MoreHorizontal size={14.5} />
         </button>
 
@@ -392,11 +354,7 @@ export function BotAssistantBubbleRow(props: {
             <button type="button" onClick={() => onCopy(copyTarget)}>
               <span>复制文本</span>
             </button>
-            <button
-              type="button"
-              data-testid="msg-branch-sidechat-btn"
-              onClick={() => onBranchSideChat(copyTarget)}
-            >
+            <button type="button" data-testid="msg-branch-sidechat-btn" onClick={() => onBranchSideChat(copyTarget)}>
               <span>以此消息开启旁聊</span>
               <GitBranch size={13.5} />
             </button>

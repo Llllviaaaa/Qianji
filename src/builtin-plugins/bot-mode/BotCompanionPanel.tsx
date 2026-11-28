@@ -3,19 +3,21 @@
  *
  * Frameless Live2D companion portrait, companion name + consolidated single
  * live status line (`bot-vserver-pill`: `已连接` at idle, morphing seamlessly to
- * active tool/approval/hover status during tasks), `9999px` 4-icon pill switcher
+ * active tool/approval/hover status during tasks) paired with a clean borderless
+ * `OpenMausBot`-style Computer open trigger, `9999px` 4-icon pill switcher
  * (`动态 · 批准 · 身份 · 邮箱`), and collapsible scheduled-task + activity groups.
  */
 import { useState, type ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import {
   Activity, AlertCircle, ArrowUpRight, CalendarClock, CheckCircle2, ChevronDown,
-  Clock, Fingerprint, Globe, Heart, Layers, Loader2, Mail, Play, Plus, ShieldCheck, Target, X,
+  Clock, Fingerprint, Globe, Heart, Layers, Loader2, Mail, Monitor, Play, Plus, ShieldCheck, Target, X,
 } from "lucide-react";
 import type { BotActivityKind, BotActivityStatus } from "@qianji/protocol";
 import { BotCharacterStage, useCompanionTaskRuntime } from "./BotCharacterStage";
 import { BotCompanionApprovalsTab } from "./BotCompanionApprovalsTab";
 import { BotCompanionIdentityTab, BotCompanionInboxTab } from "./BotCompanionIdentityAndInbox";
+import { openComputerStudio, useComputerStudioSnapshot } from "./computer-studio/computerStudioStore";
 import { formatBotScheduleCadence, formatRelativeNextRun, useBotScheduleManager } from "./botScheduleStore";
 import {
   formatVirtualServerStatus, openBotActivityDetail, openBotModal, openBotScheduledModal,
@@ -74,6 +76,7 @@ function renderActivityStatusIcon(
 
 export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactElement {
   const ui = useBotUiState();
+  const studioSnap = useComputerStudioSnapshot();
   const snapshot = useBotSnapshot();
   const ctrl = useBotController(ctx);
   const sched = useBotScheduleManager(ctx);
@@ -84,6 +87,7 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
   const pendingCount = snapshot.pendingApprovals.length;
   const serverStatus = formatVirtualServerStatus(snapshot.virtualServer);
   const isPanelVisible = ui.rightPanelOpen && ui.activeView === "chat";
+  const takeoverAlert = studioSnap.takeover.status !== "idle";
 
   const customTasks = ui.scheduledTasks.filter((t) => t.id !== "heartbeat" && !t.isHeartbeat);
   const totalScheduledCount = 1 + customTasks.length;
@@ -142,18 +146,31 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
 
         <div className="qj-sheet-hero-meta">
           <div className="qj-sheet-companion-name">{snapshot.profile.displayName}</div>
-          <button
-            type="button"
-            data-testid="bot-vserver-pill"
-            data-task-phase={taskPresence.phase}
-            data-tone={isIdlePhase ? "neutral" : taskPresence.statusTone}
-            className="qj-sheet-vserver-pill"
-            title={statusTitle}
-            onClick={handleStatusPillClick}
-          >
-            <span className="qj-sheet-vserver-dot" style={{ background: statusDotColor }} />
-            <span className="qj-sheet-vserver-label">{statusLabel}</span>
-          </button>
+          <div className="qj-sheet-status-row">
+            <button
+              type="button"
+              data-testid="bot-vserver-pill"
+              data-task-phase={taskPresence.phase}
+              data-tone={isIdlePhase ? "neutral" : taskPresence.statusTone}
+              className="qj-sheet-vserver-pill"
+              title={statusTitle}
+              onClick={handleStatusPillClick}
+            >
+              <span className="qj-sheet-vserver-dot" style={{ background: statusDotColor }} />
+              <span className="qj-sheet-vserver-label">{statusLabel}</span>
+            </button>
+            <span className="qj-cs-companion-sep" aria-hidden="true">·</span>
+            <button
+              type="button"
+              data-testid="bot-open-computer-studio-btn"
+              className={`qj-cs-companion-trigger${takeoverAlert ? " is-alert" : ""}`}
+              title="查看千机的电脑"
+              onClick={() => openComputerStudio()}
+            >
+              <Monitor size={12.5} strokeWidth={1.85} aria-hidden="true" />
+              <span>{takeoverAlert ? "千机的电脑 · 待协助" : "千机的电脑"}</span>
+            </button>
+          </div>
         </div>
 
         <div
@@ -307,35 +324,35 @@ export function BotCompanionPanel({ ctx }: { readonly ctx?: Context }): ReactEle
                             const handoff = it.handoff;
                             return (
                               <div key={it.id} className="qj-sheet-activity-item-wrap">
-                                  <button
-                                    type="button"
-                                    className="qj-sheet-activity-row interactive"
-                                    data-testid="bot-activity-row"
-                                    data-status={it.status ?? "completed"}
-                                    data-kind={it.kind ?? "chat"}
-                                    onClick={() => openBotActivityDetail(it)}
+                                <button
+                                  type="button"
+                                  className="qj-sheet-activity-row interactive"
+                                  data-testid="bot-activity-row"
+                                  data-status={it.status ?? "completed"}
+                                  data-kind={it.kind ?? "chat"}
+                                  onClick={() => openBotActivityDetail(it)}
+                                >
+                                  <span
+                                    className="qj-sheet-activity-icon"
+                                    data-activity-status={it.status ?? "completed"}
+                                    data-activity-kind={it.kind ?? "chat"}
                                   >
-                                    <span
-                                      className="qj-sheet-activity-icon"
-                                      data-activity-status={it.status ?? "completed"}
-                                      data-activity-kind={it.kind ?? "chat"}
-                                    >
-                                      {renderActivityStatusIcon(it.status, it.kind, it.statusTitle)}
-                                    </span>
-                                    <div className="qj-sheet-activity-copy">
-                                      <div className="qj-sheet-activity-title">{it.title}</div>
-                                      <div className="qj-sheet-activity-desc">
-                                        {normalizeActivityDesc(it.subtitle ?? it.description)}
-                                      </div>
-                                      <div className="qj-sheet-activity-time qj-tabular">
-                                        {it.status === "running"
-                                          ? `执行中 · ${it.timeLabel}`
-                                          : it.statusTitle
-                                            ? `${it.statusTitle} · ${it.timeLabel}`
-                                            : it.timeLabel}
-                                      </div>
+                                    {renderActivityStatusIcon(it.status, it.kind, it.statusTitle)}
+                                  </span>
+                                  <div className="qj-sheet-activity-copy">
+                                    <div className="qj-sheet-activity-title">{it.title}</div>
+                                    <div className="qj-sheet-activity-desc">
+                                      {normalizeActivityDesc(it.subtitle ?? it.description)}
                                     </div>
-                                  </button>
+                                    <div className="qj-sheet-activity-time qj-tabular">
+                                      {it.status === "running"
+                                        ? `执行中 · ${it.timeLabel}`
+                                        : it.statusTitle
+                                          ? `${it.statusTitle} · ${it.timeLabel}`
+                                          : it.timeLabel}
+                                    </div>
+                                  </div>
+                                </button>
                                 {handoff && (
                                   <button
                                     type="button"

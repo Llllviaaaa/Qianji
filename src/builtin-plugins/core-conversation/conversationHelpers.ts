@@ -30,8 +30,9 @@ export type MarkdownSegment =
   | { readonly kind: "prose"; readonly text: string }
   | { readonly kind: "code"; readonly language: string; readonly code: string; readonly rawFence: string };
 
-const LEADING_THINK_OPEN = /^\s*<think>(?:\r?\n)?/i;
+const LEADING_THINK_OPEN = /^\s*<(think(?:ing)?)>(?:\r?\n)?/i;
 const THINK_CLOSE = /<\/think>\s*/i;
+const THINKING_CLOSE = /<\/thinking>\s*/i;
 const DRAFT_OPENER = /(?:^|\n)(?:好的[，, ]*)?(?:我来(?:给你)?(?:整理|总结|说明|回答)|下面是|以下是)/;
 const INCOMPLETE_TAIL = /\n+(?:#{1,6}\s*)?(?:\d+\.|[-*])\s*$/;
 const CODE_FENCE_RE = /```([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)```/g;
@@ -51,9 +52,12 @@ export function extractInlineThinking(
   let remaining = content;
   const extracted: string[] = [];
 
-  while (LEADING_THINK_OPEN.test(remaining)) {
-    remaining = remaining.replace(LEADING_THINK_OPEN, "");
-    const closeMatch = THINK_CLOSE.exec(remaining);
+  for (;;) {
+    const openMatch = LEADING_THINK_OPEN.exec(remaining);
+    if (openMatch === null) break;
+    const closeRe = (openMatch[1] ?? "").toLowerCase() === "thinking" ? THINKING_CLOSE : THINK_CLOSE;
+    remaining = remaining.slice(openMatch[0].length);
+    const closeMatch = closeRe.exec(remaining);
     if (closeMatch === null) {
       const partial = remaining.trim();
       if (partial !== "") extracted.push(partial);

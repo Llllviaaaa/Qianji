@@ -260,6 +260,8 @@ export function createIsolatedPoolEntry(
           sessionId: stateInfo?.sessionId ?? snapshot.sessionId,
           sessionName: stateInfo?.sessionName ?? snapshot.sessionName,
           messages: snapshot.messages.length === 0 ? initialHistory : snapshot.messages,
+          isStreaming: stateInfo?.isStreaming === true || snapshot.isStreaming,
+          isCompacting: stateInfo?.isCompacting === true || snapshot.isCompacting,
           model: resolvedModel,
           thinkingLevel: stateInfo?.thinkingLevel ?? snapshot.thinkingLevel,
           availableModels: models,

@@ -43,8 +43,11 @@ export function isUntitledSideChatTitle(title: string): boolean {
   return UNTITLED_SIDE_CHAT_RE.test(title.trim());
 }
 
+const CLOSED_INLINE_THINK_RE = /<(think(?:ing)?|thought)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/gi;
+const UNCLOSED_INLINE_THINK_RE = /<(?:think(?:ing)?|thought)(?:\s[^>]*)?>[\s\S]*$/i;
+
 export function stripThinkAndConnectorNoise(raw: string, stripConnector = false): string {
-  let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<think>[\s\S]*$/i, "");
+  let cleaned = raw.replace(CLOSED_INLINE_THINK_RE, "").replace(UNCLOSED_INLINE_THINK_RE, "");
   if (stripConnector) cleaned = cleaned.replace(CONNECTOR_PREFIX_RE, "");
   return cleaned.trim();
 }

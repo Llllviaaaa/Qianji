@@ -5,7 +5,7 @@
 import type { ToolSchema } from "@qianji/llm";
 import { textOutput, type ToolEnv, type ToolOutput } from "@qianji/tools";
 import type {
-  BotFeedActionKind, BotFeedAttachment, BotFeedCreateParams, BotFeedEditionKind,
+  BotComputerEngineId, BotFeedActionKind, BotFeedAttachment, BotFeedCreateParams, BotFeedEditionKind,
   BotFeedMetricRow, BotFeedMetricsCard, BotFeedOrigin, BotFeedSourceLink,
   BotGoalMomentumStatus, BotGoalSource, BotIdeaCapabilityItem, BotIdeaCapabilityKind, PendingBotApproval,
 } from "@qianji/protocol";
@@ -45,6 +45,12 @@ export interface BotNativeToolsHost {
   rememberPreference(preference: string): Promise<boolean>;
   watchProcess(processName: string, remove?: boolean): Promise<string[]>;
   manageSchedule(input: BotManageScheduleInput): Promise<string>;
+  requestTakeover(input: {
+    reason: string;
+    targetUrlOrApp: string;
+    engine?: BotComputerEngineId;
+    sessionId?: string;
+  }): Promise<string>;
 }
 
 export const BOT_NATIVE_TOOL_SCHEMAS: readonly ToolSchema[] = [
@@ -187,6 +193,19 @@ export const BOT_NATIVE_TOOL_SCHEMAS: readonly ToolSchema[] = [
     name: "bot_watch_process",
     description: "Start or stop watching a long-running OS process (e.g. 'cargo', 'python', 'ffmpeg', 'tar') so you can proactively notify the user when it finishes.",
     parameters: { type: "object", properties: { processName: { type: "string" }, remove: { type: "boolean" } }, required: ["processName"] },
+  },
+  {
+    name: "bot_request_takeover",
+    description: "Pause automated execution on login, 2FA, QR scan, or CAPTCHA walls and invite the user to seamlessly take over inside Qianji's Virtual Computer Studio without exposing credentials to the LLM.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: { type: "string" },
+        targetUrlOrApp: { type: "string" },
+        engine: { type: "string", enum: ["local-linux", "local-win-pip", "remote-vm", "remote-pc"] },
+      },
+      required: ["reason", "targetUrlOrApp"],
+    },
   },
 ];
 
@@ -389,6 +408,22 @@ export async function executeBotNativeTool(
   if (name === "bot_watch_process") {
     const list = await host.watchProcess(String(args.processName ?? ""), args.remove === true);
     return textOutput(`Currently watched OS processes: ${list.length > 0 ? list.join(", ") : "(none)"}`);
+  }
+
+  if (name === "bot_request_takeover") {
+    const rawEng = args.engine;
+    const engine: BotComputerEngineId | undefined =
+      rawEng === "local-linux" || rawEng === "local-win-pip" || rawEng === "remote-vm" || rawEng === "remote-pc"
+        ? rawEng
+        : undefined;
+    return textOutput(
+      await host.requestTakeover({
+        reason: String(args.reason ?? "需要人工完成安全验证或登录"),
+        targetUrlOrApp: String(args.targetUrlOrApp ?? ""),
+        ...(engine ? { engine } : {}),
+        sessionId: env.sessionId,
+      }),
+    );
   }
 
   return textOutput(`Unknown Bot tool: ${name}`, true);

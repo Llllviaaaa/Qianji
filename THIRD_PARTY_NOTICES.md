@@ -49,6 +49,21 @@ This product includes software developed at Vetta (https://www.openvetta.com).
 - Copyright: 2017-present Jon Schlinkert
 - Used for: build/test/lint glob matching via `vite`, `vitest`, `fdir`, and `tinyglobby` (vendored locally with the `CVE-2026-112366` / `GHSA-fc5q-39xc-vjpf` single-branch repeated extglob ReDoS fix while upstream `picomatch <= 4.0.7` remains unpatched on npm).
 
+## Ray-Desktop
+
+- Upstream: https://github.com/raydoomed/Ray-Desktop
+- License: MIT
+- Copyright: 2026 raydoomed
+- Used for: Windows Child Session isolated desktop viewer and setup helper (`src-tauri/win-child-desktop/`), including `MsRdpClient` `ConnectToChildSession` loopback hosting, `WTSEnableChildSessions` administrator setup flow, letterbox and dynamic session resolution scaling, and the collapsible floating desktop toolbar.
+
+## noVNC
+
+- Package: `@novnc/novnc`
+- Upstream: https://github.com/novnc/noVNC
+- License: MPL-2.0
+- Copyright: The noVNC authors (Joel Martin, Samuel Mannehed, Pierre Ossman, Cendio AB, and contributors)
+- Used for: HTML5 RFB VNC desktop streaming canvas, clipboard forwarding, and Unicode X11 keysym input in Bot Mode Virtual Computer Studio (`src/builtin-plugins/bot-mode/computer-studio/BotVncCanvas.tsx`, `src/builtin-plugins/bot-mode/computer-studio/vncConnection.ts`). Unmodified MPL-2.0 source code is available at https://github.com/novnc/noVNC.
+
 ## Fonts
 
 - Inter (`@fontsource-variable/inter`) — SIL Open Font License 1.1, Copyright The Inter Project Authors
@@ -62,6 +77,7 @@ When `scripts/prepare-harness-host.mjs` bundles the Harness Host for compilation
 - `@deepseek-ai/cordis` & `@deepseek-ai/schemastery` — MIT License (microkernel IoC runtime and schema validation)
 - CodeMirror 6 (`@codemirror/*`) — MIT License (code editor surface and language modes)
 - xterm.js (`@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`) — MIT License (integrated terminal emulator)
+- noVNC (`@novnc/novnc`) — MPL-2.0 License (HTML5 RFB VNC desktop client; unmodified source at https://github.com/novnc/noVNC)
 - Mermaid (`mermaid`) & PlantUML (`@plantuml/core`) — MIT License (diagram rendering)
 - DOMPurify (`dompurify`) — Dual-licensed under MPL-2.0 OR Apache-2.0 (selected under Apache-2.0 / permissive compatibility for HTML sanitization)
 - Lucide (`lucide-react`) — ISC License (UI icon set)

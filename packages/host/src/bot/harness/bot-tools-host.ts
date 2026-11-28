@@ -408,5 +408,17 @@ export function createBotHarnessHost(
       notifyUpdated("watch-process-updated");
       return updated;
     },
+
+    async requestTakeover(input) {
+      const res = await store.computer.takeover({
+        action: "request",
+        reason: input.reason,
+        targetUrlOrApp: input.targetUrlOrApp,
+        ...(input.engine ? { engine: input.engine } : {}),
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      });
+      notifyUpdated("computer-takeover", { status: res.takeover.status });
+      return `Requested human takeover (${res.takeover.status}) on ${res.takeover.engine ?? res.snapshot.activeEngine} for "${input.targetUrlOrApp}": ${input.reason}`;
+    },
   };
 }

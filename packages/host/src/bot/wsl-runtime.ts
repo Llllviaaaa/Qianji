@@ -2,9 +2,10 @@
  * Dedicated WSL2 Linux container runtime (`qianji-bot-vm`) for Qianji Local Virtual Server.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BotLocalEngineKind, BotLocalEngineState, BotSharedFolderRule } from "@qianji/protocol";
+import { syncIsolatedCopyWithWorktree } from "./computer/local-linux-engine.ts";
 import { migrateStorageSubdirs } from "./storage-paths.ts";
 import {
   buildMountedExecScript,
@@ -15,10 +16,19 @@ import {
   type WslExecResult,
 } from "./wsl-exec-helpers.ts";
 
-export { sharedFolderSlug, stripWslStderrNoise, winPathToWslMount, type WslExecResult };
+export { runWslSubprocess, sharedFolderSlug, stripWslStderrNoise, winPathToWslMount, type WslExecResult };
 
 const ALPINE_VERSION = "3.21.3";
 const CACHE_TTL_MS = 3_000;
+let hostWslSupportedCache: boolean | undefined;
+
+export function isWslStatusProbeOk(probe: {
+  readonly error?: Error | undefined;
+  readonly status: number | null;
+  readonly signal: NodeJS.Signals | null;
+}): boolean {
+  return probe.error === undefined && probe.status === 0 && probe.signal === null;
+}
 
 export interface WslInspectSnapshot {
   engine: BotLocalEngineKind;
@@ -37,6 +47,7 @@ export interface WslRuntimeOptions {
   botDir: string;
   botWorkspaceDir: string;
   distroName?: string;
+  wslSupported?: boolean;
 }
 
 export class WslContainerRuntime {
@@ -54,6 +65,7 @@ export class WslContainerRuntime {
     this.distroName = opts.distroName ?? "qianji-bot-vm";
     this.storageDir = resolve(opts.botDir);
     this.botWorkspaceDir = resolve(opts.botWorkspaceDir);
+    this.supportedCache = opts.wslSupported;
   }
 
   get instanceDir(): string {
@@ -174,23 +186,32 @@ export class WslContainerRuntime {
 
   isSupported(): boolean {
     if (this.supportedCache !== undefined) return this.supportedCache;
+    if (hostWslSupportedCache !== undefined) {
+      this.supportedCache = hostWslSupportedCache;
+      return this.supportedCache;
+    }
     if (process.platform !== "win32") {
       this.supportedCache = false;
+      hostWslSupportedCache = false;
       return false;
     }
     const probe = spawnSync("wsl.exe", ["--status"], {
       windowsHide: true,
-      timeout: 4_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 3_000,
       env: { ...process.env, WSL_UTF8: "1" },
     });
-    this.supportedCache = probe.error === undefined;
-    return this.supportedCache;
+    const supported = isWslStatusProbeOk(probe);
+    this.supportedCache = supported;
+    hostWslSupportedCache = supported;
+    return supported;
   }
 
   private async listDistros(): Promise<Array<{ name: string; state: string; version: string }>> {
     const res = await runWslSubprocess("wsl.exe", ["--list", "--verbose"], { timeoutMs: 8_000 });
-    if (res.exitCode !== 0 && res.stdout.trim() === "") return [];
-    const lines = res.stdout.split(/\r?\n/).slice(1);
+    const cleanStdout = res.stdout.replace(/\0/g, "").replace(/^\ufeff/, "");
+    if (res.exitCode !== 0 && cleanStdout.trim() === "") return [];
+    const lines = cleanStdout.split(/\r?\n/).slice(1);
     const out: Array<{ name: string; state: string; version: string }> = [];
     for (const raw of lines) {
       const cleaned = raw.replace(/^\s*\*?\s*/, "").trim();
@@ -377,16 +398,7 @@ export class WslContainerRuntime {
   }
 
   syncIsolatedSharedCopy(rule: BotSharedFolderRule, slug: string): string {
-    const copyDir = join(this.sharedCopiesDir, slug);
-    if (rule.access !== "isolated-copy" || !existsSync(rule.path)) return copyDir;
-    if (!existsSync(copyDir)) {
-      mkdirSync(copyDir, { recursive: true });
-      cpSync(rule.path, copyDir, {
-        recursive: true,
-        filter: (src) => !src.includes(`${join("node_modules")}`) && !src.includes("target"),
-      });
-    }
-    return copyDir;
+    return syncIsolatedCopyWithWorktree(rule, join(this.sharedCopiesDir, slug));
   }
 
   async exec(
