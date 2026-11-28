@@ -7,4 +7,5 @@ export * from "./self-guard.ts";
 export * from "./app-settings.ts";
 export * from "./plugin-catalog.ts";
 export * from "./bot-methods.ts";
+export * from "./bot-computer.ts";
 export * from "./swarm-methods.ts";

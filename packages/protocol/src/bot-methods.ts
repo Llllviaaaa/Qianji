@@ -5,6 +5,7 @@
  * feed/ideas/goals/spaces/library/inbox, Local & Remote Virtual Server management,
  * and cross-mode Agent Workbench handoff.
  */
+import type { BotComputerStudioSnapshot } from "./bot-computer.ts";
 import type { BotConnectorItem, BotConnectorsConfig } from "./bot-connectors.ts";
 import type {
   BotFeedItem,
@@ -12,6 +13,7 @@ import type {
   BotGoalViewPrefs,
   BotIdeaSection,
 } from "./bot-discovery.ts";
+export * from "./bot-computer.ts";
 export * from "./bot-connectors.ts";
 export * from "./bot-discovery.ts";
 
@@ -242,6 +244,7 @@ export interface BotVirtualServerStatus {
   liveViewUrl?: string;
   liveViewTaskTitle?: string;
   takeoverRequired?: boolean;
+  computerStudio?: BotComputerStudioSnapshot;
 }
 
 export interface BotModelRef {
@@ -324,6 +327,7 @@ export interface BotSnapshotResult {
   connectorConfigs: BotConnectorsConfig;
   awareness: BotLiveAwarenessSummary;
   virtualServer: BotVirtualServerStatus;
+  computerStudio?: BotComputerStudioSnapshot;
   embeddedTasks: BotTaskHandoffPayload[];
 }
 
